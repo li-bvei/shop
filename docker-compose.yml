@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: ./store-admin-backend
+    restart: unless-stopped
+    env_file:
+      - ./store-admin-backend/.env
+    # Lets the container reach MySQL running on the host via 宝塔 (Docker
+    # Desktop already provides host.docker.internal; on Linux — what 宝塔
+    # runs on — this extra_hosts entry is what makes the same name resolve
+    # to the host). Set DB_HOST=host.docker.internal in .env to use it.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "8000"
+
+  frontend:
+    build: ./store-admin-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      # Host-side port that 宝塔's own Nginx (handling the real domain +
+      # SSL) reverse-proxies to. Change the left-hand side if 8080 is
+      # already taken on the host.
+      - "8080:80"

@@ -12,6 +12,8 @@ services:
       - "host.docker.internal:host-gateway"
     expose:
       - "8000"
+    volumes:
+      - static_volume:/app/staticfiles:ro
 
   frontend:
     build: ./store-admin-frontend
@@ -23,3 +25,11 @@ services:
       # SSL) reverse-proxies to. Change the left-hand side if 8080 is
       # already taken on the host.
       - "8080:80"
+    volumes:
+      # Django admin's own CSS/JS (collected at backend image build time) —
+      # this container's nginx serves them directly under /static/ instead
+      # of proxying every asset request through gunicorn.
+      - static_volume:/usr/share/nginx/html/static:ro
+
+volumes:
+  static_volume:

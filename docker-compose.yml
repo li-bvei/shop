@@ -21,10 +21,11 @@ services:
     depends_on:
       - backend
     ports:
-      # Host-side port that 宝塔's own Nginx (handling the real domain +
-      # SSL) reverse-proxies to. Change the left-hand side if 8080 is
-      # already taken on the host.
-      - "8080:80"
+      # Host-side port. Either point 宝塔's own Nginx (domain + SSL) at this
+      # as a reverse proxy target, or hit it directly at
+      # http://<server-ip>:<this-port> if there's no domain yet. Change the
+      # left-hand side if this port is already taken on the host.
+      - "8082:80"
     volumes:
       # Django admin's own CSS/JS (collected at backend image build time) —
       # this container's nginx serves them directly under /static/ instead

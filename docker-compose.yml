@@ -1,15 +1,36 @@
 services:
+  # Dedicated MySQL 8.0 container rather than a host-managed instance —
+  # 宝塔's own bundled MySQL was found to be 5.5 in practice, which Django
+  # 4.2 refuses to run against (requires 8.0+). Fully isolated from
+  # whatever else the host's MySQL serves.
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      TZ: Asia/Tokyo
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   backend:
     build: ./store-admin-backend
     restart: unless-stopped
     env_file:
       - ./store-admin-backend/.env
-    # Lets the container reach MySQL running on the host via 宝塔 (Docker
-    # Desktop already provides host.docker.internal; on Linux — what 宝塔
-    # runs on — this extra_hosts entry is what makes the same name resolve
-    # to the host). Set DB_HOST=host.docker.internal in .env to use it.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      db:
+        condition: service_healthy
     expose:
       - "8000"
     volumes:
@@ -34,3 +55,4 @@ services:
 
 volumes:
   static_volume:
+  mysql_data:

@@ -28,7 +28,12 @@ class Command(BaseCommand):
         suppliers_by_name = {}
         created_suppliers = 0
         for name in supplier_names:
-            supplier, created = Supplier.objects.get_or_create(name=name)
+            # organization is a required FK since the multi-tenant migration
+            # — must be passed via defaults= or get_or_create() raises
+            # IntegrityError on any name not already seeded.
+            supplier, created = Supplier.objects.get_or_create(
+                name=name, defaults={'organization': branch.organization},
+            )
             suppliers_by_name[name] = supplier
             if created:
                 created_suppliers += 1

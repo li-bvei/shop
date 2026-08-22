@@ -1,0 +1,39 @@
+# Real database dumps — contain live business data (purchase records,
+# supplier bank accounts, etc.), never belong in the repo regardless of
+# visibility. Matches both ./db_backups/ and store-admin-backend/db_backups/.
+db_backups/
+
+# Real imported purchase/supplier data used as one-off import fixtures
+# (real supplier names, real transaction history) — same sensitivity as
+# db_backups/, just JSON instead of SQL.
+store-admin-backend/branches/management/commands/seed_data/
+store-admin-backend/purchasing/management/commands/import_data/
+
+# OS cruft
+.DS_Store
+
+# Claude Code local tool config (personal permission settings, not project config)
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+staticfiles/
+db.sqlite3
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+*.tsbuildinfo
+.eslintcache
+
+# Env files — real secrets/DB credentials; keep only the .env.example /
+# .env.production.example templates tracked.
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.production.example

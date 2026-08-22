@@ -1,0 +1,58 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  transition:
+    background-color 0.25s ease,
+    color 0.25s ease;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.section-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin: 0 0 14px;
+}
+
+/* Print isolation: mark anything that should never appear in printed output
+   with class="no-print" (nav chrome, filter bars, action buttons, dialogs).
+   Deliberately NOT `visibility: hidden` on a blanket "hide everything, then
+   reveal one subtree" selector — hidden elements still occupy their layout
+   height under visibility, which forced blank pages before real content. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  /* Element Plus dialogs/dropdowns/tooltips are teleported to <body>, so a
+     per-page .no-print class can't reach them — hide the whole family here
+     regardless of which page triggered the print. */
+  .el-overlay,
+  .el-message-box,
+  .el-drawer,
+  .el-popper,
+  .el-loading-mask {
+    display: none !important;
+  }
+}

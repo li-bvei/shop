@@ -1,0 +1,61 @@
+:root {
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface-alt: #fbfbfd;
+  --sidebar-bg: #fbfbfc;
+  --track-bg: #efeff1;
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #98989d;
+  --border: rgba(0, 0, 0, 0.07);
+  --accent: #0071e3;
+  --accent-light: #eaf2fe;
+  --success: #1ea672;
+  --success-light: #e7f7f0;
+  --danger: #e0393e;
+  --danger-light: #fdeded;
+  --warning: #c77800;
+  --warning-light: #fff4e5;
+  --avatar-bg: #d9d9de;
+  --avatar-text: #57575c;
+
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+
+  --shadow-card:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 10px 28px rgba(0, 0, 0, 0.045);
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.05);
+
+  --font:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'PingFang SC', 'Hiragino Sans',
+    'Hiragino Kaku Gothic ProN', 'Yu Gothic', sans-serif;
+}
+
+html[data-theme='dark'] {
+  --bg: #000000;
+  --surface: #1c1c1e;
+  --surface-alt: #2c2c2e;
+  --sidebar-bg: #131314;
+  --track-bg: #3a3a3c;
+  --text-primary: #f5f5f7;
+  --text-secondary: #98989d;
+  --text-tertiary: #6e6e73;
+  --border: rgba(255, 255, 255, 0.1);
+  --accent: #0a84ff;
+  --accent-light: rgba(10, 132, 255, 0.18);
+  --success: #30d158;
+  --success-light: rgba(48, 209, 88, 0.15);
+  --danger: #ff453a;
+  --danger-light: rgba(255, 69, 58, 0.15);
+  --warning: #ff9f0a;
+  --warning-light: rgba(255, 159, 10, 0.15);
+  --avatar-bg: #3a3a3c;
+  --avatar-text: #e5e5e7;
+
+  --shadow-card:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 12px 28px rgba(0, 0, 0, 0.5);
+  --shadow-soft: 0 1px 3px rgba(0, 0, 0, 0.4);
+}

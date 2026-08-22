@@ -12,8 +12,9 @@ store-admin-backend/purchasing/management/commands/import_data/
 # OS cruft
 .DS_Store
 
-# Claude Code local tool config (personal permission settings, not project config)
+# Claude Code local tool/session state (not project config)
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # Python
 __pycache__/

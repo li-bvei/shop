@@ -9,6 +9,7 @@ from dailyreports.models import DailyReport
 from organizations.models import Organization
 from paymentmethods.models import PaymentMethodDef, seed_default_payment_methods
 from purchasing.models import PurchaseRecord, Supplier
+from scheduling.services import seed_default_schedule_setting
 from staff.models import StaffMember
 
 DATA_DIR = Path(__file__).parent / 'seed_data'
@@ -66,9 +67,14 @@ class Command(BaseCommand):
             ('namba', '难波店', '難波店'),
             ('umeda', '梅田店', '梅田店'),
         ]:
-            Branch.objects.update_or_create(
+            branch, _ = Branch.objects.update_or_create(
                 id=code, defaults={'organization': self.org, 'code': code, 'name_zh': name_zh, 'name_ja': name_ja},
             )
+            # Branches created through the real BranchViewSet API get this
+            # automatically (BranchViewSet.perform_create); this command
+            # bypasses that, so it has to seed it explicitly, or the
+            # scheduling grid's /branch-schedule-settings/<id>/ fetch 404s.
+            seed_default_schedule_setting(branch)
         self.stdout.write(self.style.SUCCESS('Seeded 3 branches.'))
 
     def seed_payment_methods(self):

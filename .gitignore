@@ -8,6 +8,7 @@ db_backups/
 # db_backups/, just JSON instead of SQL.
 store-admin-backend/branches/management/commands/seed_data/
 store-admin-backend/purchasing/management/commands/import_data/
+store-admin-backend/dailyreports/management/commands/import_data/
 
 # OS cruft
 .DS_Store

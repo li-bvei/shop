@@ -15,7 +15,7 @@ import { fetchAllPurchases, type PurchaseRecord } from '@/api/purchasing'
 import { useBranchStore } from '@/stores/branches'
 import { formatCurrency, currentMonthJst, todayJst } from '@/utils/format'
 import { useDelayedLoading } from '@/composables/useDelayedLoading'
-import { downloadTableExcel } from '@/utils/excelExport'
+import { renderOffscreenToPdf } from '@/utils/pdfExport'
 
 const { t } = useI18n()
 const branchStore = useBranchStore()
@@ -93,29 +93,83 @@ async function refreshSilently() {
   await fetchData()
 }
 
+const downloading = ref(false)
+
+// A4 at 96dpi is ~794px wide; rendering the offscreen node at that width
+// (scaled up 2x by html2canvas itself for crispness) keeps 1px in this
+// layout roughly equal to 1px on the printed page, so font/row sizing
+// below can be reasoned about directly in page terms.
+const PDF_PAGE_WIDTH_PX = 794
+
+function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  styles: Partial<CSSStyleDeclaration>,
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag)
+  Object.assign(node.style, styles)
+  if (text !== undefined) node.textContent = text
+  return node
+}
+
 async function handleDownload() {
-  await downloadTableExcel(
-    `供应商-${todayJst()}`,
-    t('suppliers.pageTitle'),
-    [
-      { header: t('suppliers.name'), key: 'name', width: 22 },
-      { header: t('suppliers.category'), key: 'category', width: 14 },
-      { header: t('suppliers.contact'), key: 'contact', width: 14 },
-      { header: t('suppliers.phone'), key: 'phone', width: 16 },
-      { header: t('suppliers.bankAccount'), key: 'bank', width: 30 },
-      { header: t('suppliers.accountHolderFurigana'), key: 'holderFurigana', width: 22 },
-      { header: t('suppliers.monthlyPayable'), key: 'payable', width: 16, numFmt: '#,##0' },
-    ],
-    suppliers.value.map((s) => ({
-      name: s.name,
-      category: s.category,
-      contact: s.contact,
-      phone: s.phone,
-      bank: bankSummary(s),
-      holderFurigana: s.accountHolderFurigana,
-      payable: payableFor(s),
-    })),
-  )
+  downloading.value = true
+  try {
+    await renderOffscreenToPdf(`供应商-${todayJst()}`, PDF_PAGE_WIDTH_PX, (root) => {
+      root.style.padding = '28px 32px'
+      root.style.fontFamily = '"Hiragino Sans", "Microsoft YaHei", sans-serif'
+      root.style.color = '#1a1a1a'
+
+      const header = el('div', { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' })
+      header.appendChild(el('div', { fontSize: '18px', fontWeight: '700' }, t('suppliers.pageTitle')))
+      header.appendChild(el('div', { fontSize: '11px', color: '#666' }, todayJst()))
+      root.appendChild(header)
+
+      const table = el('table', { width: '100%', borderCollapse: 'collapse', fontSize: '10px' })
+      const columns: [string, string][] = [
+        [t('suppliers.name'), '26%'],
+        [t('suppliers.category'), '9%'],
+        [t('suppliers.contact'), '9%'],
+        [t('suppliers.phone'), '11%'],
+        [t('suppliers.bankAccount'), '24%'],
+        [t('suppliers.accountHolderFurigana'), '13%'],
+        [t('suppliers.monthlyPayable'), '8%'],
+      ]
+
+      const thead = document.createElement('thead')
+      const headRow = document.createElement('tr')
+      for (const [label, width] of columns) {
+        const isAmount = label === t('suppliers.monthlyPayable')
+        headRow.appendChild(el('th', {
+          width, textAlign: isAmount ? 'right' : 'left', padding: '5px 6px',
+          borderBottom: '1.5px solid #333', fontWeight: '700', whiteSpace: 'nowrap',
+        }, label))
+      }
+      thead.appendChild(headRow)
+      table.appendChild(thead)
+
+      const tbody = document.createElement('tbody')
+      suppliers.value.forEach((s, index) => {
+        const row = document.createElement('tr')
+        if (index % 2 === 1) row.style.backgroundColor = '#f7f7f7'
+        const cellStyle: Partial<CSSStyleDeclaration> = {
+          padding: '4px 6px', borderBottom: '0.5px solid #ddd', verticalAlign: 'top', wordBreak: 'break-word',
+        }
+        row.appendChild(el('td', cellStyle, s.name))
+        row.appendChild(el('td', cellStyle, s.category))
+        row.appendChild(el('td', cellStyle, s.contact))
+        row.appendChild(el('td', cellStyle, s.phone))
+        row.appendChild(el('td', cellStyle, bankSummary(s)))
+        row.appendChild(el('td', cellStyle, s.accountHolderFurigana))
+        row.appendChild(el('td', { ...cellStyle, textAlign: 'right', whiteSpace: 'nowrap' }, formatCurrency(payableFor(s))))
+        tbody.appendChild(row)
+      })
+      table.appendChild(tbody)
+      root.appendChild(table)
+    })
+  } finally {
+    downloading.value = false
+  }
 }
 
 onMounted(load)
@@ -219,7 +273,7 @@ async function handleEditPayable(row: Supplier) {
       <div class="page-header">
         <h3>{{ t('suppliers.pageTitle') }}</h3>
         <div class="header-actions">
-          <el-button :icon="Download" @click="handleDownload">{{ t('common.downloadExcel') }}</el-button>
+          <el-button :icon="Download" :loading="downloading" @click="handleDownload">{{ t('common.downloadPdf') }}</el-button>
           <el-button type="primary" :icon="Plus" @click="openCreate">{{ t('suppliers.add') }}</el-button>
         </div>
       </div>
@@ -342,6 +396,13 @@ async function handleEditPayable(row: Supplier) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 12px;
+}
+
+@media (max-width: 480px) {
+  .field-pair {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
 }
 
 .payable-amount {

@@ -32,7 +32,7 @@ STAFF_SEED = [
 ACCOUNT_SEED = [
     ('admin', 'admin123', '管理员', User.Role.ADMIN, None),
     ('shinsaibashi01', 'shinsaibashi123', '心斋桥店', User.Role.BRANCH, 'shinsaibashi'),
-    ('namba01', 'namba123', '难波店', User.Role.BRANCH, 'namba'),
+    ('ichiraku01', 'ichiraku123', '一楽ホテル', User.Role.BRANCH, 'namba'),
     ('umeda01', 'umeda123', '梅田店', User.Role.BRANCH, 'umeda'),
 ]
 
@@ -62,13 +62,18 @@ class Command(BaseCommand):
         return org
 
     def seed_branches(self):
-        for code, name_zh, name_ja in [
-            ('shinsaibashi', '心斋桥店', '心斎橋店'),
-            ('namba', '难波店', '難波店'),
-            ('umeda', '梅田店', '梅田店'),
+        # `id` (first element) is the stable PK and never changes once
+        # deployed — see Branch.id's own docstring. `code` is the
+        # user-facing slug, free to diverge from `id` (e.g. the 'namba'
+        # branch was rebranded to 一楽ホテル/'ichiraku' without touching
+        # every foreign key that still points at branch_id='namba').
+        for id_, code, name_zh, name_ja in [
+            ('shinsaibashi', 'shinsaibashi', '心斋桥店', '心斎橋店'),
+            ('namba', 'ichiraku', '一楽ホテル', '一楽ホテル'),
+            ('umeda', 'umeda', '梅田店', '梅田店'),
         ]:
             branch, _ = Branch.objects.update_or_create(
-                id=code, defaults={'organization': self.org, 'code': code, 'name_zh': name_zh, 'name_ja': name_ja},
+                id=id_, defaults={'organization': self.org, 'code': code, 'name_zh': name_zh, 'name_ja': name_ja},
             )
             # Branches created through the real BranchViewSet API get this
             # automatically (BranchViewSet.perform_create); this command

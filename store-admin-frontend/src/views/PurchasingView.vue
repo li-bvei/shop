@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ElMessage, ElMessageBox, type InputInstance } from 'element-plus'
+import { ElMessage, ElMessageBox, type AutocompleteInstance } from 'element-plus'
 import { Edit, Delete, Close, MoreFilled, TrendCharts, Refresh, CircleCheckFilled } from '@element-plus/icons-vue'
 import { fetchSuppliers, type Supplier } from '@/api/suppliers'
 import {
@@ -36,7 +36,7 @@ const monthTotal = ref(0)
 const { loading, run } = useDelayedLoading()
 const editingId = ref<string | null>(null)
 
-const itemNameInput = ref<InputInstance>()
+const itemNameInput = ref<AutocompleteInstance>()
 const savedPulse = ref(false)
 let savedPulseTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -147,6 +147,22 @@ function focusItemName() {
   nextTick(() => itemNameInput.value?.focus())
 }
 
+// Used only right after a row is submitted, when the field auto-refocuses
+// empty for rapid successive entry. A plain focus() here would trigger
+// el-autocomplete's own trigger-on-focus behavior and pop the full recent-
+// items list open the instant the row is submitted — not something the
+// user asked for, just a side effect of the field regaining focus. Forcing
+// `activated` back off right after cancels that specific auto-open without
+// touching trigger-on-focus itself, so a genuine click into the field
+// afterward still opens the browse dropdown normally (that click's own
+// focus event sets `activated` true again on its own).
+function focusItemNameSilently() {
+  nextTick(() => {
+    itemNameInput.value?.focus()
+    if (itemNameInput.value) itemNameInput.value.activated = false
+  })
+}
+
 function resetRow() {
   // Date, branch and supplier stay put — a single delivery usually adds
   // several lines for the same branch/supplier, so re-picking them every
@@ -155,7 +171,7 @@ function resetRow() {
   row.quantity = 1
   row.unitPrice = 0
   row.note = ''
-  focusItemName()
+  focusItemNameSilently()
 }
 
 function cancelEdit() {
@@ -339,14 +355,23 @@ async function openPriceHistory(record: PurchaseRecord) {
               </template>
             </el-autocomplete>
           </div>
-          <el-input v-model.number="row.quantity" type="number" class="c-qty" @keydown.enter="handleRowEnter" />
-          <el-input v-model.number="row.unitPrice" type="number" class="c-price" @keydown.enter="handleRowEnter">
+          <el-input
+            v-model.number="row.quantity" type="number" class="c-qty"
+            :placeholder="t('purchasing.quantity')" @keydown.enter="handleRowEnter"
+          />
+          <el-input
+            v-model.number="row.unitPrice" type="number" class="c-price"
+            :placeholder="t('purchasing.unitPrice')" @keydown.enter="handleRowEnter"
+          >
             <template #prefix>¥</template>
           </el-input>
           <el-input :model-value="amountPreview" disabled class="c-amount">
             <template #prefix>¥</template>
           </el-input>
-          <el-input v-model="row.note" class="c-note" @keydown.enter="handleRowEnter" />
+          <el-input
+            v-model="row.note" class="c-note"
+            :placeholder="t('purchasing.note')" @keydown.enter="handleRowEnter"
+          />
         </div>
         <div class="entry-hint">
           {{ t('purchasing.enterHint') }}
@@ -659,6 +684,32 @@ async function openPriceHistory(record: PurchaseRecord) {
 .c-date :deep(.el-date-editor),
 .c-item :deep(.el-autocomplete) {
   width: 100%;
+}
+
+/* The entry row is a spreadsheet-style single line by design (fast
+ * keyboard-driven data entry) — 7 columns of that on a phone-width screen
+ * squeezes every field down to an unusable sliver. Below this width it
+ * becomes a 2-up grid instead: item name and note (the two free-text,
+ * variable-length fields) get their own full-width row, everything else
+ * pairs up two per row in DOM order (date+supplier, qty+price, amount is
+ * left to pair with note). The column labels above the row are dropped
+ * here since they no longer line up with a wrapped grid — each field's
+ * own placeholder/label carries that context instead. */
+@media (max-width: 640px) {
+  .entry-head {
+    display: none;
+  }
+
+  .entry-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .c-item,
+  .c-note {
+    grid-column: 1 / -1;
+  }
 }
 
 .suggestion-item {

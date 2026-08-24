@@ -12,9 +12,15 @@ import {
   Calendar,
   Money,
   Lock,
+  Goods,
+  Files,
+  Close,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
+
+defineProps<{ open?: boolean }>()
+defineEmits<{ close: [] }>()
 
 const route = useRoute()
 const auth = useAuthStore()
@@ -27,6 +33,8 @@ const adminBranchNavItems = [
   { path: '/daily-report', icon: Document, labelKey: 'nav.dailyReport' },
   { path: '/purchasing', icon: Box, labelKey: 'nav.purchasing' },
   { path: '/suppliers', icon: OfficeBuilding, labelKey: 'nav.suppliers' },
+  { path: '/products', icon: Goods, labelKey: 'nav.products' },
+  { path: '/inventory', icon: Files, labelKey: 'nav.inventory' },
   { path: '/staff', icon: User, labelKey: 'nav.staff' },
   { path: '/scheduling', icon: Calendar, labelKey: 'nav.scheduling' },
   { path: '/wages', icon: Money, labelKey: 'nav.wages' },
@@ -47,13 +55,16 @@ const systemItems = computed(() =>
 </script>
 
 <template>
-  <aside class="app-sidebar">
+  <aside class="app-sidebar" :class="{ 'is-open': open }">
     <div class="brand">
       <span class="dot" />
       <div class="brand-text">
         <span class="brand-name">{{ $t('nav.brandName') }}</span>
         <small class="brand-sub">{{ $t('nav.brandSub', { count: branchStore.list.length }) }}</small>
       </div>
+      <button type="button" class="close-btn" :aria-label="$t('common.cancel')" @click="$emit('close')">
+        <el-icon><Close /></el-icon>
+      </button>
     </div>
 
     <el-menu :default-active="route.path" router class="sidebar-menu">
@@ -123,5 +134,40 @@ const systemItems = computed(() =>
   padding: 14px 10px 6px;
   font-weight: 600;
   letter-spacing: 0.03em;
+}
+
+.close-btn {
+  display: none;
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 6px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+@media (max-width: 768px) {
+  .app-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 260px;
+    z-index: 100;
+    overflow-y: auto;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .app-sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  .close-btn {
+    display: inline-flex;
+  }
 }
 </style>

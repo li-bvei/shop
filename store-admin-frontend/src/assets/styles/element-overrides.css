@@ -161,3 +161,24 @@
   box-shadow: var(--shadow-soft);
   font-weight: 600;
 }
+
+/* Every el-dialog/el-message-box/el-drawer in the app is opened with a
+ * fixed pixel width or size (480px, 420px...) sized for desktop — below
+ * that width they'd overflow the viewport horizontally. This is the one
+ * place to fix all of them at once rather than touching each dialog's own
+ * `width` prop individually. */
+@media (max-width: 768px) {
+  .el-dialog {
+    width: calc(100vw - 32px) !important;
+    max-width: 480px;
+    margin-top: 8vh !important;
+  }
+
+  .el-message-box {
+    width: calc(100vw - 48px) !important;
+  }
+
+  .el-drawer {
+    width: min(85vw, 420px) !important;
+  }
+}

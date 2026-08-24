@@ -2,7 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { ArrowDown } from '@element-plus/icons-vue'
+import { ArrowDown, Menu } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
 import { branchDisplayName } from '@/utils/format'
@@ -10,6 +10,7 @@ import LangSwitch from './LangSwitch.vue'
 import ThemeSwitch from './ThemeSwitch.vue'
 
 defineProps<{ title: string }>()
+defineEmits<{ 'toggle-sidebar': [] }>()
 
 const { t, locale } = useI18n()
 const auth = useAuthStore()
@@ -33,7 +34,12 @@ function handleLogout() {
 
 <template>
   <header class="app-topbar">
-    <h2>{{ title }}</h2>
+    <div class="topbar-left">
+      <button type="button" class="menu-btn" :aria-label="$t('nav.system')" @click="$emit('toggle-sidebar')">
+        <el-icon><Menu /></el-icon>
+      </button>
+      <h2>{{ title }}</h2>
+    </div>
     <div class="topbar-right">
       <el-tag round class="branch-pill">{{ branchPillLabel }}</el-tag>
       <LangSwitch />
@@ -58,8 +64,16 @@ function handleLogout() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 18px 28px;
   border-bottom: 1px solid var(--border);
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .app-topbar h2 {
@@ -67,12 +81,29 @@ function handleLogout() {
   font-weight: 600;
   margin: 0;
   color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menu-btn {
+  display: none;
+  background: none;
+  border: none;
+  padding: 6px;
+  margin-left: -6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 .branch-pill {
@@ -82,6 +113,26 @@ function handleLogout() {
   color: var(--text-secondary);
   padding: 6px 12px;
   height: auto;
+}
+
+@media (max-width: 768px) {
+  .app-topbar {
+    padding: 14px 16px;
+  }
+
+  .menu-btn {
+    display: inline-flex;
+  }
+
+  .branch-pill {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-topbar h2 {
+    font-size: 15px;
+  }
 }
 
 .avatar-trigger {

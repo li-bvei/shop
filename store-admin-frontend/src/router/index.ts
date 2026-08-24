@@ -50,6 +50,18 @@ const router = createRouter({
           meta: { roles: ['admin', 'branch'] },
         },
         {
+          path: 'products',
+          name: 'products',
+          component: () => import('@/views/ProductsView.vue'),
+          meta: { roles: ['admin', 'branch'] },
+        },
+        {
+          path: 'inventory',
+          name: 'inventory',
+          component: () => import('@/views/InventoryView.vue'),
+          meta: { roles: ['admin', 'branch'] },
+        },
+        {
           path: 'staff',
           name: 'staff',
           component: () => import('@/views/StaffView.vue'),

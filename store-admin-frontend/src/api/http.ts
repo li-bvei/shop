@@ -2,7 +2,7 @@ const configuredApiBase = (import.meta.env.VITE_API_BASE_URL as string | undefin
 // Localhost fallback exists only in Vite development mode. Production uses
 // the deployment-provided value, or a same-origin /api path as the safe
 // default; a production bundle can therefore never silently call a laptop.
-const API_BASE = configuredApiBase || (import.meta.env.DEV ? 'http://localhost:8000/api' : '/api')
+export const API_BASE = configuredApiBase || (import.meta.env.DEV ? 'http://localhost:8000/api' : '/api')
 
 const ACCESS_KEY = 'sa_access_token'
 const REFRESH_KEY = 'sa_refresh_token'

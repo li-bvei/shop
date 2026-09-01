@@ -9,6 +9,8 @@ const route = useRoute()
 const { t } = useI18n()
 
 const routeTitleKeys: Record<string, string> = {
+  lottery: 'lottery.pageTitle',
+  promotions: 'promotions.pageTitle',
   'daily-report': 'dailyReport.pageTitle',
   purchasing: 'purchasing.pageTitle',
   suppliers: 'suppliers.pageTitle',

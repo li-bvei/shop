@@ -15,6 +15,8 @@ import {
   Goods,
   Files,
   Close,
+  Present,
+  Postcard,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
@@ -38,12 +40,15 @@ const adminBranchNavItems = [
   { path: '/staff', icon: User, labelKey: 'nav.staff' },
   { path: '/scheduling', icon: Calendar, labelKey: 'nav.scheduling' },
   { path: '/wages', icon: Money, labelKey: 'nav.wages' },
+  { path: '/promotions', icon: Present, labelKey: 'nav.promotions' },
+  { path: '/kiosk/verify', icon: Postcard, labelKey: 'nav.promoVerify' },
 ]
 
 const staffNavItems = [
   { path: '/my-availability', icon: Calendar, labelKey: 'nav.myAvailability' },
   { path: '/my-shifts', icon: Document, labelKey: 'nav.myShifts' },
   { path: '/my-wages', icon: Money, labelKey: 'nav.myWages' },
+  { path: '/kiosk/verify', icon: Postcard, labelKey: 'nav.promoVerify' },
 ]
 
 const navItems = computed(() => (auth.role === 'staff' ? staffNavItems : adminBranchNavItems))

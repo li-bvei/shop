@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import environ
+from corsheaders.defaults import default_headers as cors_default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -45,6 +46,8 @@ INSTALLED_APPS = [
     'scheduling',
     'wages',
     'inventory',
+    'lottery',
+    'promotions',
 ]
 
 MIDDLEWARE = [
@@ -100,6 +103,21 @@ DATABASES = {
 AUTH_USER_MODEL = 'accounts.User'
 
 
+# Cache — a database-backed shared cache (no extra container). The
+# promotions app's phase-3 rate limiting needs a cache that's shared
+# across gunicorn workers, which the default LocMemCache is not. The
+# `promotions_cache_table` is created by promotions migration 0002
+# (RunPython -> createcachetable), so a fresh `migrate` sets it up with
+# no extra deploy step.
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'promotions_cache_table',
+    }
+}
+
+
 # Password validation
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -143,7 +161,26 @@ REST_FRAMEWORK = {
     # client-side (matching how the mock layer it's replacing behaved).
     # Revisit if any list grows large enough to make that impractical.
     'DEFAULT_PAGINATION_CLASS': None,
+    # No DEFAULT_THROTTLE_CLASSES — throttling applies only where a view
+    # opts in (currently the promotions public guest endpoints). Rates are
+    # counted in the shared DB cache (see CACHES). See
+    # promotions/throttling.py.
+    'DEFAULT_THROTTLE_RATES': {
+        'promo_guest_read': '120/min',
+        'promo_guest_write': '20/min',
+        'promo_staff_verify': '40/min',
+    },
 }
+
+# promotions APPI retention — customers with no activity for this many
+# months are erased by `manage.py purge_stale_promotion_customers`.
+PROMOTIONS_CUSTOMER_RETENTION_MONTHS = env.int('PROMOTIONS_CUSTOMER_RETENTION_MONTHS', default=24)
+
+# How many reverse proxies sit in front of Django, for promotions.utils.
+# client_ip (guest-endpoint throttling + risk trail). 1 = just our nginx;
+# set 0 if Django is exposed directly so a spoofed X-Forwarded-For can't
+# mint throttle buckets.
+PROMOTIONS_TRUSTED_PROXY_COUNT = env.int('PROMOTIONS_TRUSTED_PROXY_COUNT', default=1)
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=8),
@@ -165,6 +202,11 @@ CORS_ALLOWED_ORIGINS = env.list(
 )
 CORS_ALLOW_CREDENTIALS = True
 
+# The public guest card client sends its card_token in this header when the
+# dev frontend and API are on different ports (no shared cookie). Same-origin
+# production uses the pc_guest cookie and never needs this.
+CORS_ALLOW_HEADERS = (*cors_default_headers, 'x-guest-token')
+
 
 # Deploy-time security settings — every one of these defaults to the
 # insecure/off value that plain HTTP local development needs, and every one
@@ -177,3 +219,10 @@ SECURE_SSL_REDIRECT = env.bool('SECURE_SSL_REDIRECT', default=False)
 SESSION_COOKIE_SECURE = env.bool('SESSION_COOKIE_SECURE', default=False)
 CSRF_COOKIE_SECURE = env.bool('CSRF_COOKIE_SECURE', default=False)
 SECURE_HSTS_SECONDS = env.int('SECURE_HSTS_SECONDS', default=0)
+
+# The public guest card cookie (promotions app) — Secure in production so
+# it only travels over HTTPS. Defaults to `not DEBUG`: local cross-port
+# dev (Vite on 5173/5175, API on 8071) can't share the cookie anyway and
+# uses the X-Guest-Token header instead, so a non-Secure cookie there is
+# harmless.
+GUEST_COOKIE_SECURE = env.bool('GUEST_COOKIE_SECURE', default=not DEBUG)

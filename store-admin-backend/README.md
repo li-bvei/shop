@@ -67,6 +67,7 @@ create one, from Settings → 账号管理, linked one-to-one to an existing
 | `dashboard` | (no models — pure aggregation views) | `DashboardSummaryView`, `MonthlyAnalysisView`, both Organization-scoped |
 | `scheduling` | `BranchScheduleSetting`, `SchedulePeriod`, `AvailabilityRequest`, `Shift`, `ActualWorkRecord` | monthly auto-period shift planning + attendance confirmation, **not** a time-clock system |
 | `wages` | `WageRule`, `WageMonthlyClosing`, `WageEmployeeResult`, `WageDailyDetail` | `v2_simple` hourly/temporary wage calculation engine |
+| `promotions` | `Campaign`, `Customer`, `PointsLedger`, `CheckInRecord`, `SpendVerification`, `Prize`, `Milestone`, `LotteryDraw`, `Voucher`, `MilestoneClaim`, `RiskEvent`, `StaffPermission` | customer loyalty card + lottery from 打卡与抽奖实施方案.md — check-in, points, weighted server-side draw, next-visit vouchers, milestones, points spending/expiry, rate limiting, risk flags, monthly report. See below |
 
 ### Organization (multi-tenant) scoping
 
@@ -389,6 +390,214 @@ rules are not overwritten. Monthly result edits use
 still be read. The current v2_simple UI and calculation path neither exposes
 nor computes those premiums/adjustments.
 
+## Promotions module (`promotions/`) — loyalty card + lottery
+
+The customer-facing loyalty card from `打卡与抽奖实施方案.md`. **Phases 1,
+2, 2.5 and 3 are built**: registration, per-visit check-in, staff
+spend-confirmation, points earning (phase 1); weighted prize pool,
+server-side lottery draw, next-visit vouchers, staff voucher redemption
+(phase 2); spending points on a draw or a voucher, cumulative-points
+milestones, points expiry (phase 2.5); IP rate limiting, a rule-based
+risk-flag engine, per-account staff switches, an APPI retention cleanup,
+and a monthly operational report (phase 3). New-device recovery is a
+phone+PIN flow (see **Card identity & recovery**) — no SMS, no external
+service.
+
+### Three hard rules (do not weaken)
+
+1. **The only trusted event is a signed-in staff member confirming a spend
+   with the customer present.** The public guest API never accepts
+   `amount_yen` / `table_number` / `consumed_at` / `points_granted` /
+   `prize_id` or a direct balance write. Points are granted only by
+   `promotions.services.verify_spend`, called from the authenticated
+   staff endpoint. The **lottery draw is always server-side** —
+   `services.draw_lottery` picks the prize with `secrets.SystemRandom`
+   under a `select_for_update()` lock on the prize pool; the frontend only
+   plays the reveal.
+2. **All value is "next visit".** Nothing in this feature touches the
+   current bill — no discount, no refund at the register. Lottery prizes,
+   milestone rewards and points-redeemed vouchers are all `Voucher` rows
+   redeemed by staff on a *later* visit.
+3. **No phone verification.** `Customer.phone` is an unverified key, unique
+   per Organization (`normalize_phone` folds surface variation to one
+   local-format digit string). A fake or borrowed number is accepted by
+   design.
+
+### Model / scoping
+
+- `Campaign` is branch-owned (org traced through `branch`, like
+  `PurchaseRecord`), managed via `BranchScopedQuerysetMixin`. One `active`
+  campaign per branch is the normal case.
+- `Customer` is **Organization-scoped, not branch-scoped** — a card works at
+  every branch in the chain. `CustomerViewSet` filters on
+  `organization_id` directly.
+- `PointsLedger` is the append-only points ledger (same rule as
+  `inventory.StockTransaction`): every earn/spend/adjust is one immutable
+  row, `Customer.points_balance` is their running sum, corrections are new
+  offsetting rows. `verify_spend` / `adjust_points` / `void` all write the
+  balance and the ledger row in one `transaction.atomic()` under a
+  `select_for_update()` lock on the `Customer`.
+- `SpendVerification` is append-only — the ViewSet routes no `PUT`/`PATCH`/
+  `DELETE`; the only correction path is `POST
+  /api/promotions/spend-verifications/{id}/void/` (admin only), which marks
+  it voided and writes an offsetting ledger row.
+- Points formula: `amount_yen // 1000 * campaign.points_per_1000yen` — the
+  sub-¥1,000 remainder never earns.
+- `CheckInRecord` has `UniqueConstraint(customer, campaign, local_date)`;
+  `local_date` is the **business day** per `Campaign.business_day_cutover`
+  (default 05:00 — a 02:00 sale counts as the previous day,
+  `promotions.utils.business_local_date`). A second spend on the same
+  business day still earns points, it just doesn't log a second check-in.
+  `verify_spend` refuses a `consumed_at` in the future or more than 24h
+  old; anything in between is filed against its own business day.
+
+### Card identity & recovery
+
+`Customer.card_token` (`secrets.token_urlsafe(16)`, unique, non-rotating)
+is the card's **bearer credential** — the QR the counter scans, and what
+the `pc_guest` cookie / `X-Guest-Token` header carry. It is only ever
+returned to a caller that has already proved possession of it, or passed
+the PIN check below. Phone numbers are not secret (`§14` — "a stranger who
+knows your number can view, never take"), so:
+
+| path | factor | grants |
+| --- | --- | --- |
+| `GET /guest/card/` | the token itself (cookie / header) | full card, echoes the token back |
+| `POST /guest/login/` | phone + birthday `MM-DD` | **read-only** snapshot — never the token; birthday is a weak check, not a boundary |
+| `POST /guest/recover/` | phone + 6-digit PIN | full card + re-issues the token (cookie) |
+| in person | staff lookup by phone | `customers/lookup/` returns masked phone + balance, never the token |
+
+The optional recovery **PIN** (`Customer.pin_hash`, Django password hash,
+never plaintext) is set at registration or later via `POST /guest/set-pin/`
+(needs the token — you can only PIN a card you hold). It is the only
+self-service way back to a *spendable* card on a new device. Guards:
+`normalize_pin` rejects a malformed or obvious PIN; `recover_card` is
+per-phone rate-limited in the shared cache (5 wrong tries → 1h lock, 15/day
+→ 24h lock) on top of the IP `GuestWriteThrottle`, and a lockout raises a
+`RiskEvent`. There is **no self-service PIN reset** — a forgotten PIN goes
+to staff in person (any reset keyed on phone+birthday would just re-open
+the takeover hole). `PROMOTIONS_TRUSTED_PROXY_COUNT` (env, default 1) tells
+`client_ip` how many proxies to trust in `X-Forwarded-For` so the throttle
+key can't be spoofed.
+
+### Lottery / vouchers / milestones (phase 2 / 2.5)
+
+- `Prize` is the weighted pool (one row per tier). Probability =
+  `weight / Σ(active weights)`, computed live; the drawn weight is
+  snapshotted onto `LotteryDraw` so re-tuning never rewrites history.
+  `reward_config` shape is validated per `reward_type`
+  (`serializers.validate_reward_config`, 开发任务书 §4.8).
+  `total_stock` caps lifetime wins, `daily_stock` caps per-branch-per-
+  business-day (the ¥5,000 voucher is 1/day/branch). `reward_type ==
+  points_refund` hands points back instead of a voucher ("谢谢参与");
+  every other type issues a `Voucher`.
+- `services.draw_lottery` is **idempotent on `request_id`** (unique
+  column). It spends `campaign.points_per_draw` for `source='points'`, or
+  one `Customer.draw_chances` for `source='direct'` (granted by the
+  optional `direct_draw_threshold_yen` dual track at spend time).
+- `Voucher` — `redemption_code` is an 8-char code from an unambiguous
+  alphabet (no `0/O/1/I/L`). Staff redeem via
+  `POST /api/promotions/vouchers/{verify,redeem}/`: the service checks
+  Organization scope (a card works chain-wide), status, expiry, min-spend,
+  and — for `requires_manual_approval` prizes (the ¥5,000 voucher) —
+  refuses a `staff`-role account, requiring a `branch`/`admin` operator
+  whose id is recorded as `approved_by`.
+- `Milestone` + `MilestoneClaim`: `verify_spend` bumps
+  `Customer.lifetime_points_earned` (monotonic — spending/expiry never
+  lower it) and `services._apply_milestones` issues one voucher per newly
+  crossed threshold, guarded by `UniqueConstraint(customer, milestone)`.
+- `POST /api/guest/redeem/` `{type: draw|voucher, request_id}` and
+  `POST /api/guest/draw/` `{request_id}` (spends a free draw chance).
+- Points expiry: `python manage.py expire_promotions_points` (daily cron)
+  zeroes the balance of any customer inactive for their campaign's
+  `points_expire_months` (default 12) and logs an `expire` ledger row.
+- Admin: `CRUD /api/promotions/{prizes,milestones}/?campaign=<id>`;
+  `GET /api/promotions/campaigns/{id}/{draws,vouchers}/` (paginated).
+
+### Anti-fraud & reports (phase 3)
+
+- **Rate limiting** — `promotions/throttling.py` opts the public guest
+  endpoints into IP-scoped DRF throttles (`GuestReadThrottle` 120/min,
+  `GuestWriteThrottle` 20/min on register/login/redeem/draw), plus a
+  per-account `StaffVerifyThrottle` (40/min) on spend-verification create.
+  Counts live in the shared DB cache; no `DEFAULT_THROTTLE_CLASSES` is set,
+  so nothing else in the project is throttled.
+- **`RiskEvent`** — `promotions/risk.py` evaluates the §13 rules *after*
+  `verify_spend` / `draw_lottery` / `register_customer` /
+  `void_spend_verification` (each rule wrapped so a bug can never break a
+  checkout). A flag is a signal, never a block — the hard rejections stay
+  in the services. Rules: off-hours confirmation, staff rapid
+  confirmations, amount == a voucher threshold, one customer across many
+  branches, one IP registering many phones, rapid draws, concentrated
+  high-value wins, spend voided after its value was already used.
+  `dedupe_key` (unique) stops a re-evaluation piling up duplicates.
+  `GET /api/promotions/risk-events/` (branch: own branch + branchless
+  flags; admin: whole org), `POST {id}/review/` `{status, note}`.
+- **`StaffPermission`** — per-account `can_verify_spend` /
+  `can_redeem_voucher`. Absent row = both on (the phase-1 default). Checked
+  in the staff endpoints; `GET/PATCH /api/promotions/staff-permissions/`
+  (admin only) lists every staff account with its effective switches.
+- **Retention** — `python manage.py purge_stale_promotion_customers`
+  (`--dry-run`, `--months`) erases customers with no activity for
+  `PROMOTIONS_CUSTOMER_RETENTION_MONTHS` (env, default 24), same
+  de-identification as an explicit deletion request.
+- **Report** — `GET /api/promotions/campaigns/{id}/report/?month=YYYY-MM`:
+  spend / per-staff stats / points flow / draw & voucher shipment / risk
+  counts for the month. Aggregation only, no `float`.
+
+### Endpoints
+
+| method | path | who | notes |
+| --- | --- | --- | --- |
+| POST | `/api/guest/register/` | public | `{store_token, phone, name?, birthday_md?, pin?, consent:true}` → `card_token` + `Set-Cookie: pc_guest`. `consent` must be `true`; `pin` (6 digits, optional) sets the recovery PIN. `store_token` is a `django.core.signing` token from `CampaignSerializer.store_token`. An already-registered phone returns `{existing:true}` (200, no token) |
+| POST | `/api/guest/login/` | public | `{phone, birthday_md}` → **read-only** card snapshot. Never returns `card_token`. Birthday is a weak second factor, not a boundary |
+| POST | `/api/guest/recover/` | public | `{phone, pin}` → full card + `Set-Cookie: pc_guest` (regain a spendable card on a new device). Per-phone rate limit; generic errors; lockout raises a `RiskEvent` |
+| POST | `/api/guest/set-pin/` | public | guest cookie / `X-Guest-Token` required → `{pin}` sets/replaces the recovery PIN on the held card |
+| GET | `/api/guest/card/` | public | guest cookie **or** `X-Guest-Token` header (cross-port dev) → balance / lifetime / stamps / draw chances / `has_pin` / recent ledger / active vouchers / milestone progress |
+| POST | `/api/guest/redeem/` | public | `{type: draw\|voucher, request_id}` → spend points; returns the draw result or the issued voucher |
+| POST | `/api/guest/draw/` | public | `{request_id}` → spend one free draw chance |
+| POST | `/api/promotions/spend-verifications/` | staff/branch/admin | `{card_token\|phone, amount_yen, table_number?, consumed_at?}` → `verify_spend` |
+| POST | `/api/promotions/vouchers/verify/` | staff/branch/admin | `{redemption_code\|card_token\|phone}` → voucher(s) + `redeemable`/`expired` flags |
+| POST | `/api/promotions/vouchers/redeem/` | staff/branch/admin | `{redemption_code, spend_amount_yen?}` — `staff` refused for approval-required prizes |
+| CRUD | `/api/promotions/{prizes,milestones}/` | branch (own) / admin | `?campaign=<id>` scoped |
+| GET | `/api/promotions/spend-verifications/mine/` | staff/branch/admin | own confirmations since local midnight |
+| GET | `/api/promotions/spend-verifications/` | branch/admin | paginated, filterable (`branch`, `campaign`, `status`, `date_from/to`) |
+| POST | `/api/promotions/spend-verifications/{id}/void/` | admin | `{reason}` (required) — reverses points |
+| POST | `/api/promotions/customers/lookup/` | staff/branch/admin | `{card_token\|phone}` → name + masked phone + balance (never the full number or token) |
+| CRUD | `/api/promotions/campaigns/` | branch (own) / admin | `GET {id}/{checkins,verifications,draws,vouchers}/` (paginated) |
+| GET | `/api/promotions/customers/` | branch/admin | `?search=` (name/phone), paginated; detail includes recent ledger |
+| POST | `/api/promotions/customers/{id}/points-adjust/` | admin | `{delta:int, note:str}` (note required) |
+| DELETE | `/api/promotions/customers/{id}/` | admin | APPI erasure — removes the `Customer`, detaches + de-identifies its check-ins/verifications/ledger (kept for branch stats + audit) |
+
+All lists here use `promotions.views.PromotionsPagination` (50/page, up to
+200) — a local override of the project-wide "no pagination" default,
+because these tables grow far faster than the daily report. The public
+guest endpoints opt into IP throttles (`promotions/throttling.py`,
+`promo_guest_read` / `promo_guest_write`); `spend-verifications` `create`
+adds a per-staff `promo_staff_verify` ceiling.
+
+### Shared cache
+
+`settings.CACHES` now defines a `DatabaseCache` on `promotions_cache_table`
+(the default `LocMemCache` isn't shared across gunicorn workers, which
+phase-3 rate limiting needs). The table is created by
+`promotions/migrations/0002_create_cache_table.py` (`RunPython` →
+`createcachetable`), so a plain `migrate` sets it up — no extra deploy
+step. `GUEST_COOKIE_SECURE` (env, default `not DEBUG`) controls the
+`Secure` flag on the `pc_guest` cookie.
+
+### Demo seed (DEBUG only, idempotent)
+
+```bash
+python manage.py seed_promotions_demo   # active campaign + §6 prize pool + §5 milestones + a demo customer
+```
+
+Prints the store-QR token, the `/pc/register?t=…` URL, and the demo
+customer's `card_token` for frontend integration. The seeded pool is the
+`打卡与抽奖实施方案.md` §6 table (weights sum 500) and the campaign has the
+dual-track (`direct_draw_threshold_yen = 3000`) enabled so a single seeded
+spend produces a usable draw chance.
+
 ## Production configuration
 
 Development defaults intentionally remain non-production. Deployment must
@@ -397,7 +606,9 @@ set `DEBUG=False`, a long random `SECRET_KEY`, correct `ALLOWED_HOSTS` and
 set `SECURE_SSL_REDIRECT=True`, `SESSION_COOKIE_SECURE=True`,
 `CSRF_COOKIE_SECURE=True`, and a reviewed `SECURE_HSTS_SECONDS` (plus include
 subdomains/preload only when operationally safe). Do not enable HSTS merely to
-silence local `check --deploy` warnings.
+silence local `check --deploy` warnings. `GUEST_COOKIE_SECURE` (promotions
+guest card cookie) already defaults to `not DEBUG`, so production picks it up
+without an explicit setting; set it only to override.
 
 ## Development seed and tenant provisioning
 

@@ -100,11 +100,28 @@ npm run test:schedule-save # partial batch-save reconciliation test
 | `/staff` | admin, branch | employee roster CRUD, branch-scoped; admin-only inter-branch transfer with audit history |
 | `/scheduling` | admin, branch | month-only flow; hall table above kitchen table, date rows × employee columns; left-click cycles a cell forward (休→上午→下午→全日), right-click cycles it backward so any state is a single click away; partial-save preservation; publish + actual-work confirmation, where the delete action either hard-deletes an unlinked ad-hoc record or marks a shift-linked one absent (see backend README's scheduling section for why) |
 | `/wages` | admin, branch | simple monthly table: confirmed actual hours × hourly rate + inline transportation + bonus; no user-visible wage-rule/month-closing creation |
+| `/promotions` | admin, branch | loyalty-card campaign admin (`promotions` app): campaigns / customers / check-in + draw records / risk flags / monthly report tabs; prize-pool drawer + milestones (writes admin-only); store-QR generator |
+| `/lottery` | admin, branch, staff | standalone lottery-record entry (`lottery` app): 大饼 / 京都愛電王 winner logging + Excel export. **No sidebar item — reach it by URL** |
 | `/settings` | admin, branch | branch management, account management (incl. staff account creation), payment method master data with drag-to-reorder |
 | `/my-availability` | staff | submit availability wishes for an open schedule period |
 | `/my-shifts` | staff | read-only view of own published shifts |
 | `/my-wages` | staff | own wage results + printable personal payslip |
 | `/my-password` | staff | self password change |
+
+### Full-screen kiosk (outside `AppShell` — no admin chrome)
+
+| route | roles | notes |
+| --- | --- | --- |
+| `/kiosk/verify` | staff, branch, admin | counter tablet: scan a customer card → confirm the spend amount → grant points / advance the stamp card. The one trusted event in the loyalty feature |
+| `/kiosk/redeem` | staff, branch, admin | counter tablet: enter a redemption code → mark a next-visit voucher used (approval-required prizes need branch/admin) |
+
+### Public loyalty card (`/pc/*`, no auth, `GuestShell`, JA-first)
+
+| route | notes |
+| --- | --- |
+| `/pc/register?t=<store_token>` | open a card — the landing page for the printed store QR. `store_token` comes from `CampaignSerializer.store_token` / `seed_promotions_demo`. Optional 6-digit recovery PIN |
+| `/pc/card` | the customer's own card — points, ledger, active vouchers, milestones, spend-points actions. Needs the `pc_guest` cookie or `X-Guest-Token` |
+| `/pc/login` | new-device recovery — **暗証番号** tab (phone + PIN → full card) or **誕生日** tab (phone + birthday → read-only snapshot, never returns the token) |
 
 ## Not yet done / known limitations
 

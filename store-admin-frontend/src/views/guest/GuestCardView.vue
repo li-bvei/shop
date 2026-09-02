@@ -14,10 +14,33 @@ import {
   type GuestVoucher,
 } from '@/api/guest'
 import QrCanvas from '@/components/QrCanvas.vue'
+import GuestOnboarding from '@/components/GuestOnboarding.vue'
 
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
+
+const ONBOARDED_KEY = 'pc_onboarded'
+function hasOnboarded() {
+  try {
+    return localStorage.getItem(ONBOARDED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const showOnboarding = ref(false)
+function openOnboarding() {
+  showOnboarding.value = true
+}
+function closeOnboarding() {
+  showOnboarding.value = false
+  try {
+    localStorage.setItem(ONBOARDED_KEY, '1')
+  } catch {
+    /* ignore */
+  }
+  if (route.query.welcome) router.replace({ name: 'guest-card' })
+}
 
 function shortDateTime(iso: string) {
   const dt = new Date(iso)
@@ -112,6 +135,9 @@ async function load() {
       card.value = await guestLogin(state.phone, state.birthdayMd)
     } else {
       card.value = await fetchCard()
+    }
+    if (!readonly.value && card.value && route.query.welcome === '1' && !hasOnboarded()) {
+      showOnboarding.value = true
     }
   } catch {
     loadError.value = true
@@ -345,8 +371,13 @@ onMounted(load)
         <p v-else class="empty">{{ t('guest.historyEmpty') }}</p>
       </div>
 
-      <p class="footnote">{{ t('guest.saveHint') }}</p>
+      <p class="footnote">
+        {{ t('guest.saveHint') }}
+        <template v-if="!readonly"> · <button type="button" class="link-btn" @click="openOnboarding">{{ t('guest.howToUse') }}</button></template>
+      </p>
     </template>
+
+    <GuestOnboarding v-if="showOnboarding && card" :card="card" @close="closeOnboarding" />
 
     <!-- Draw modal -->
     <div v-if="drawModal" class="modal-overlay" @click.self="!drawSpinning && closeDrawModal()">
@@ -849,6 +880,15 @@ h2 {
   font-size: 11.5px;
   color: var(--text-tertiary);
   margin: 4px 0 0;
+}
+
+.link-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11.5px;
+  padding: 0;
+  cursor: pointer;
 }
 
 /* Modals */

@@ -54,7 +54,7 @@ async function submit() {
       pin: form.pin,
       consent: form.consent,
     })
-    router.replace({ name: 'guest-card' })
+    router.replace({ name: 'guest-card', query: { welcome: '1' } })
   } catch (err) {
     if (err instanceof AlreadyRegisteredError) {
       // This number already has a card — send them to the recovery login.

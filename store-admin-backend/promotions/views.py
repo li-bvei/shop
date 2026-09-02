@@ -318,6 +318,32 @@ def _active_campaign_for(customer):
     return campaign
 
 
+class GuestPrizesView(APIView):
+    """The prize pool the customer's wheel draws — names and types only, no
+    weights (odds are never exposed). Sold-out prizes are returned too, as
+    dimmed segments, so the wheel layout doesn't shift mid-campaign."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestReadThrottle]
+
+    def get(self, request):
+        customer = _resolve_guest_customer(request)
+        if not customer:
+            raise NotFound('card-not-found')
+        campaign = _active_campaign_for(customer)
+        prizes = campaign.prizes.filter(active=True).order_by('display_order', 'id')
+        return Response([
+            {
+                'id': p.id,
+                'name': p.name,
+                'reward_type': p.reward_type,
+                'sold_out': p.remaining_stock is not None and p.remaining_stock <= 0,
+            }
+            for p in prizes
+        ])
+
+
 def _draw_result_body(draw):
     voucher = draw.vouchers.first()
     return {

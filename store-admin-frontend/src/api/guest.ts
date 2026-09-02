@@ -388,6 +388,26 @@ export interface CardPulse {
   voucherCount: number
 }
 
+export interface WheelPrize {
+  id: number
+  name: string
+  rewardType: string
+  soldOut: boolean
+}
+
+/** The prize pool shown on the lottery wheel — names/types only, no odds. */
+export async function fetchPrizes(): Promise<WheelPrize[]> {
+  const d = await guestRequest<
+    Array<{ id: number; name: string; reward_type: string; sold_out: boolean }>
+  >('/guest/prizes/')
+  return d.map((p) => ({
+    id: p.id,
+    name: p.name,
+    rewardType: p.reward_type,
+    soldOut: p.sold_out,
+  }))
+}
+
 /** Cheap counters-only snapshot the open card page polls for live updates. */
 export async function pulseCard(): Promise<CardPulse> {
   const d = await guestRequest<{

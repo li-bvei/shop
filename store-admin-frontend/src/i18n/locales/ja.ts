@@ -911,6 +911,8 @@ export default {
     howToUse: '使い方',
     liveDrawChance: '無料抽選が {n} 回もらえました！',
     liveNewVoucher: '新しいクーポンが届きました！',
+    wheelSpin: '回す',
+    wheelCostPoints: '{n} ポイント消費',
     onboard: {
       skip: 'スキップ',
       next: '次へ',

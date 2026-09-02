@@ -915,6 +915,8 @@ export default {
     howToUse: '使用说明',
     liveDrawChance: '获得 {n} 次免费抽奖！',
     liveNewVoucher: '收到一张新券！',
+    wheelSpin: '抽奖',
+    wheelCostPoints: '消耗 {n} 积分',
     onboard: {
       skip: '跳过',
       next: '下一步',

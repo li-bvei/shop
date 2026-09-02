@@ -388,6 +388,22 @@ class GuestApiTests(ApiTestCase):
         self.assertNotIn('card_token', pulse.data)
         self.assertEqual(APIClient().get('/api/guest/card/pulse/').status_code, 404)
 
+    def test_prizes_endpoint_lists_names_and_types_no_weights(self):
+        from rest_framework.test import APIClient
+
+        make_prize(self.campaign, weight=1, reward_type=RewardType.DRINK, name='ドリンク')
+        make_prize(self.campaign, weight=3, reward_type=RewardType.CASH_VOUCHER,
+                   config={'face_yen': 500}, name='¥500券', total_stock=0, remaining_stock=0)
+        reg = self.client.post('/api/guest/register/', {
+            'store_token': self.store_token, 'phone': '09012345678', 'consent': True,
+        }, format='json')
+        rows = APIClient().get('/api/guest/prizes/', HTTP_X_GUEST_TOKEN=reg.data['card_token'])
+        self.assertEqual(rows.status_code, 200)
+        self.assertEqual({r['name'] for r in rows.data}, {'ドリンク', '¥500券'})
+        self.assertTrue(all('weight' not in r for r in rows.data))
+        sold = next(r for r in rows.data if r['name'] == '¥500券')
+        self.assertTrue(sold['sold_out'])
+
     def test_readonly_login_by_phone_and_birthday(self):
         self.client.post('/api/guest/register/', {
             'store_token': self.store_token, 'phone': '09012345678', 'birthday_md': '03-07', 'consent': True,

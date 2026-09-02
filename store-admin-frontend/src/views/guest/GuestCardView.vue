@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { ApiError } from '@/api/http'
 import {
   fetchCard,
+  fetchPrizes,
   guestLogin,
   pulseCard,
   redeem,
@@ -13,10 +14,12 @@ import {
   type DrawResult,
   type GuestCard,
   type GuestVoucher,
+  type WheelPrize,
 } from '@/api/guest'
 import QrCanvas from '@/components/QrCanvas.vue'
 import GuestOnboarding from '@/components/GuestOnboarding.vue'
 import AnimatedNumber from '@/components/AnimatedNumber.vue'
+import WheelOfFortune from '@/components/WheelOfFortune.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -66,10 +69,14 @@ const loadError = ref(false)
 const readonly = ref(route.query.readonly === '1')
 
 const busy = ref(false)
-const drawModal = ref(false)
-const drawSpinning = ref(false)
 const drawResult = ref<DrawResult | null>(null)
 const voucherModal = ref<GuestVoucher | null>(null)
+
+// Lottery wheel
+const wheelModal = ref(false)
+const wheelSource = ref<'points' | 'chance'>('points')
+const wheelPrizes = ref<WheelPrize[]>([])
+const wheelRef = ref<InstanceType<typeof WheelOfFortune>>()
 
 // One-time "set a recovery PIN" prompt, shown on a full card that has none.
 const pinPromptDismissed = ref(false)
@@ -148,33 +155,44 @@ async function load() {
   }
 }
 
-async function runDraw(fn: () => Promise<{ result?: DrawResult; pointsBalance: number }>) {
+async function openWheel(source: 'points' | 'chance') {
   if (busy.value || readonly.value) return
-  busy.value = true
+  wheelSource.value = source
   drawResult.value = null
-  drawModal.value = true
-  drawSpinning.value = true
+  wheelModal.value = true
+  if (wheelPrizes.value.length === 0) {
+    try {
+      wheelPrizes.value = await fetchPrizes()
+    } catch {
+      /* the wheel still spins to a random segment; the real result is authoritative */
+    }
+  }
+}
+
+async function onWheelSpin() {
+  if (busy.value) return
+  busy.value = true
   try {
-    const res = await fn()
-    // brief suspense before the reveal
-    await new Promise((r) => setTimeout(r, 900))
+    const res =
+      wheelSource.value === 'points'
+        ? await redeem('draw', newRequestId())
+        : await useDrawChance(newRequestId())
+    const idx = wheelPrizes.value.findIndex((p) => p.name === res.result?.prizeName)
+    await wheelRef.value?.spin(idx >= 0 ? idx : Math.floor(Math.random() * (wheelPrizes.value.length || 1)))
+    await new Promise((r) => setTimeout(r, 650)) // let it land before the reveal
     drawResult.value = res.result ?? null
-    drawSpinning.value = false
     await load()
   } catch (err) {
-    drawModal.value = false
-    drawSpinning.value = false
+    wheelModal.value = false
     handleError(err)
   } finally {
     busy.value = false
   }
 }
 
-function drawWithPoints() {
-  runDraw(() => redeem('draw', newRequestId()))
-}
-function drawWithChance() {
-  runDraw(() => useDrawChance(newRequestId()))
+function closeWheel() {
+  wheelModal.value = false
+  drawResult.value = null
 }
 
 async function redeemVoucher() {
@@ -201,11 +219,6 @@ function handleError(err: unknown) {
   else if (body.includes('daily-draw-limit')) window.alert(t('guest.errDrawLimit'))
   else if (body.includes('no-prizes')) window.alert(t('guest.errNoPrizes'))
   else window.alert(t('guest.errGeneric'))
-}
-
-function closeDrawModal() {
-  drawModal.value = false
-  drawResult.value = null
 }
 
 // --- live updates: poll a tiny endpoint, animate when the counter acts ---
@@ -362,7 +375,7 @@ onBeforeUnmount(() => {
           type="button"
           class="spend-btn accent"
           :disabled="busy"
-          @click="drawWithChance"
+          @click="openWheel('chance')"
         >
           <span class="spend-btn-main">{{ t('guest.drawFree') }}</span>
           <span class="spend-btn-sub">{{ t('guest.drawChancesLeft', { n: card.drawChances }) }}</span>
@@ -373,7 +386,7 @@ onBeforeUnmount(() => {
           type="button"
           class="spend-btn"
           :disabled="busy"
-          @click="drawWithPoints"
+          @click="openWheel('points')"
         >
           <span class="spend-btn-main">{{ t('guest.drawWithPoints') }}</span>
           <span class="spend-btn-sub">{{ c.pointsPerDraw }} {{ t('guest.points') }}</span>
@@ -457,14 +470,24 @@ onBeforeUnmount(() => {
 
     <GuestOnboarding v-if="showOnboarding && card" :card="card" @close="closeOnboarding" />
 
-    <!-- Draw modal -->
-    <div v-if="drawModal" class="modal-overlay" @click.self="!drawSpinning && closeDrawModal()">
-      <div class="modal">
-        <template v-if="drawSpinning">
-          <div class="spinner" />
-          <p class="modal-title">{{ t('guest.drawing') }}</p>
+    <!-- Lottery wheel -->
+    <div v-if="wheelModal" class="modal-overlay wheel-overlay">
+      <div class="wheel-sheet">
+        <button v-if="!busy && !drawResult" type="button" class="wheel-x" @click="closeWheel">✕</button>
+
+        <template v-if="!drawResult">
+          <p class="wheel-heading">
+            {{ wheelSource === 'points' ? t('guest.drawWithPoints') : t('guest.drawFree') }}
+          </p>
+          <WheelOfFortune ref="wheelRef" :prizes="wheelPrizes" :busy="busy" @spin="onWheelSpin" />
+          <p class="wheel-cost">
+            {{ wheelSource === 'points'
+              ? t('guest.wheelCostPoints', { n: c.pointsPerDraw })
+              : t('guest.drawChancesLeft', { n: card?.drawChances ?? 0 }) }}
+          </p>
         </template>
-        <template v-else-if="drawResult">
+
+        <template v-else>
           <div class="modal-emoji">{{ drawResult.status === 'won' ? '🎉' : '🍀' }}</div>
           <p class="modal-title">
             {{ drawResult.status === 'won' ? t('guest.drawWon') : t('guest.drawRefund', { n: drawResult.pointsRefunded }) }}
@@ -474,7 +497,7 @@ onBeforeUnmount(() => {
             <span class="voucher-code big">{{ drawResult.voucher.redemptionCode }}</span>
             <span class="modal-voucher-note">{{ t('guest.voucherAddedNote') }}</span>
           </div>
-          <button type="button" class="btn-primary inline" @click="closeDrawModal">{{ t('guest.close') }}</button>
+          <button type="button" class="btn-primary inline" @click="closeWheel">{{ t('guest.close') }}</button>
         </template>
       </div>
     </div>
@@ -1152,24 +1175,45 @@ h2 {
   line-height: 1.5;
 }
 
-.spinner {
-  width: 44px;
-  height: 44px;
-  border: 4px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
+/* Lottery wheel sheet */
+.wheel-overlay {
+  padding: 16px;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.wheel-sheet {
+  position: relative;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  padding: 26px 20px 22px;
+  max-width: 360px;
+  width: 100%;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation-duration: 2s;
-  }
+.wheel-x {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.wheel-heading {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 18px;
+}
+
+.wheel-cost {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 18px 0 0;
 }
 </style>

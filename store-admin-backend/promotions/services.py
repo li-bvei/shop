@@ -31,6 +31,12 @@ STORE_TOKEN_SALT = 'promotions.store_token'
 GUEST_COOKIE_NAME = 'pc_guest'
 GUEST_COOKIE_MAX_AGE = 34_560_000  # ~13 months
 
+# A single confirmed spend is a table's bill, not a wedding banquet — a
+# value past this is almost always a typo (an extra zero) and would grant a
+# wildly wrong number of points. Staff are trusted and `void` exists, so
+# this is a sanity rail, not a security control.
+MAX_SPEND_YEN = 1_000_000
+
 
 # ---------------------------------------------------------------------------
 # Store QR token (printed sticker -> campaign + branch)
@@ -233,6 +239,8 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
         raise ValidationError({'amount_yen': ['amount-invalid']})
     if amount_yen < 0:
         raise ValidationError({'amount_yen': ['amount-negative']})
+    if amount_yen > MAX_SPEND_YEN:
+        raise ValidationError({'amount_yen': ['amount-too-large']})
 
     now = timezone.now()
     consumed_at = consumed_at or now

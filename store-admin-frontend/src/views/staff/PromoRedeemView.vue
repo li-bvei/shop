@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -133,6 +133,7 @@ function exit() {
 }
 
 onMounted(focusScan)
+onBeforeUnmount(() => clearTimeout(resetTimer))
 </script>
 
 <template>

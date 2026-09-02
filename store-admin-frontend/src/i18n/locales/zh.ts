@@ -975,6 +975,7 @@ export default {
     amountInvalid: '请输入正确的金额',
     errBusinessDay: '消费时间不在当前营业日内',
     errNoCampaign: '该门店没有进行中的活动',
+    errAmountTooLarge: '金额过大，请确认是否多输了一位',
     confirmFailed: '确认失败，请重试',
     doneTitle: '打卡完成',
     donePoints: '+{pts} 积分',

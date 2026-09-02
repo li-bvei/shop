@@ -161,6 +161,13 @@ class VerifySpendServiceTests(ApiTestCase):
             verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
                          amount_yen=-100, verified_by=self.staff_user)
 
+    def test_absurdly_large_amount_rejected(self):
+        # A fat-fingered extra zero would otherwise grant a wild points total.
+        with self.assertRaises(ValidationError):
+            verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                         amount_yen=50_000_000, verified_by=self.staff_user)
+        self.assertEqual(SpendVerification.objects.count(), 0)
+
     def test_recent_backdate_ok_but_stale_backdate_rejected(self):
         # A sale earlier in the same shift, confirmed a bit later: fine.
         v = verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,

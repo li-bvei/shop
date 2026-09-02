@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
@@ -128,6 +128,7 @@ async function handleConfirm() {
       if (body.includes('consumed-at')) ElMessage.error(t('promoVerify.errBusinessDay'))
       else if (body.includes('no-active-campaign')) ElMessage.error(t('promoVerify.errNoCampaign'))
       else if (body.includes('customer-blocked')) ElMessage.error(t('promoVerify.blocked'))
+      else if (body.includes('amount-too-large')) ElMessage.error(t('promoVerify.errAmountTooLarge'))
       else ElMessage.error(t('promoVerify.confirmFailed'))
     } else {
       ElMessage.error(t('promoVerify.confirmFailed'))
@@ -145,6 +146,8 @@ onMounted(() => {
   focusScan()
   loadRecent()
 })
+
+onBeforeUnmount(() => clearTimeout(resetTimer))
 </script>
 
 <template>

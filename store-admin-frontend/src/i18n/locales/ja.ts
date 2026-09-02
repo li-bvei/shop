@@ -971,6 +971,7 @@ export default {
     amountInvalid: '正しい金額を入力してください',
     errBusinessDay: '会計時刻が当日の営業日の範囲外です',
     errNoCampaign: 'この店舗に実施中のキャンペーンがありません',
+    errAmountTooLarge: '金額が大きすぎます。桁を間違えていないかご確認ください',
     confirmFailed: '確定に失敗しました。もう一度お試しください',
     doneTitle: 'チェックイン完了',
     donePoints: '+{pts} ポイント',

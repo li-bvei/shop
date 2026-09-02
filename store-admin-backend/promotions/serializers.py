@@ -299,6 +299,8 @@ class VoucherSerializer(serializers.ModelSerializer):
     label = serializers.SerializerMethodField()
     customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.SerializerMethodField()
+    redeemed_by_name = serializers.SerializerMethodField()
+    self_service = serializers.SerializerMethodField()
 
     class Meta:
         model = Voucher
@@ -306,12 +308,18 @@ class VoucherSerializer(serializers.ModelSerializer):
             'id', 'redemption_code', 'label', 'customer', 'customer_name', 'customer_phone',
             'customer_deleted', 'campaign', 'source', 'reward_type', 'config_snapshot',
             'min_spend_yen', 'requires_manual_approval', 'status', 'issued_at', 'expires_at',
-            'redeemed_at', 'redeemed_spend_yen',
+            'redeemed_at', 'redeemed_spend_yen', 'redeemed_by_name', 'self_service',
         ]
         read_only_fields = fields
 
     def get_label(self, obj):
         return obj.config_snapshot.get('label', obj.get_reward_type_display())
+
+    def get_redeemed_by_name(self, obj):
+        return _user_name(obj.redeemed_by)
+
+    def get_self_service(self, obj):
+        return bool(obj.redeemed_at and obj.redeemed_by_id is None)
 
     def get_customer_name(self, obj):
         return obj.customer.name if obj.customer else ''

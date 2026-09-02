@@ -29,8 +29,9 @@ from .serializers import (
 )
 from .services import (
     GUEST_COOKIE_MAX_AGE, GUEST_COOKIE_NAME, adjust_points, delete_customer_by_phone, draw_lottery,
-    load_store_token, recover_card, redeem_points, redeem_voucher, register_customer,
-    set_customer_pin, staff_can, touch_customer_seen, verify_spend, void_spend_verification,
+    guest_redeem_voucher, load_store_token, recover_card, redeem_points, redeem_voucher,
+    register_customer, set_customer_pin, staff_can, touch_customer_seen, verify_spend,
+    void_spend_verification,
 )
 from .throttling import GuestReadThrottle, GuestWriteThrottle, StaffVerifyThrottle
 from .utils import client_ip, normalize_birthday_md, normalize_phone
@@ -412,6 +413,27 @@ class GuestDrawView(APIView):
             'draw_chances': customer.draw_chances,
             'result': _draw_result_body(draw),
         }, status=201)
+
+
+class GuestVoucherRedeemView(APIView):
+    """Self-serve redeem for a low-value next-visit item (drink / dessert /
+    side dish): the customer slides to confirm on their own phone with
+    staff present. Cash vouchers and the chef's special are refused here —
+    those go through the staff kiosk."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestWriteThrottle]
+
+    def post(self, request):
+        customer = _resolve_guest_customer(request)
+        if not customer:
+            raise NotFound('card-not-found')
+        voucher = guest_redeem_voucher(
+            customer=customer,
+            redemption_code=request.data.get('redemption_code', ''),
+        )
+        return Response({'redemption_code': voucher.redemption_code, 'status': voucher.status})
 
 
 # ---------------------------------------------------------------------------
@@ -877,6 +899,8 @@ class VoucherViewSet(viewsets.ReadOnlyModelViewSet):
         code = (request.data.get('redemption_code') or '').strip().upper()
         card_token = (request.data.get('card_token') or '').strip()
         phone_raw = (request.data.get('phone') or '').strip()
+        name = (request.data.get('name') or '').strip()
+        phone_tail = ''.join(ch for ch in (request.data.get('phone_tail') or '') if ch.isdigit())
         qs = self.get_queryset()
         if code:
             return qs.filter(redemption_code=code)
@@ -888,7 +912,16 @@ class VoucherViewSet(viewsets.ReadOnlyModelViewSet):
             except ValidationError:
                 raise NotFound('customer-not-found')
             return qs.filter(customer__phone=phone, customer__organization_id=request.user.organization_id)
-        raise ValidationError({'detail': ['redemption_code, card_token or phone is required']})
+        if name or phone_tail:
+            # Floor staff on a tablet, no scanner: search a customer the
+            # guest names + the last digits of their number.
+            hit = qs.filter(customer__organization_id=request.user.organization_id)
+            if name:
+                hit = hit.filter(customer__name__icontains=name)
+            if phone_tail:
+                hit = hit.filter(customer__phone__endswith=phone_tail)
+            return hit
+        raise ValidationError({'detail': ['redemption_code, card_token, phone or name is required']})
 
     @action(detail=False, methods=['post'])
     def verify(self, request):

@@ -832,11 +832,15 @@ export async function verifyVouchers(query: {
   redemptionCode?: string
   cardToken?: string
   phone?: string
+  name?: string
+  phoneTail?: string
 }): Promise<VoucherRow[]> {
   const rows = await http.post<VoucherRowDto[]>('/promotions/vouchers/verify/', {
     ...(query.redemptionCode ? { redemption_code: query.redemptionCode } : {}),
     ...(query.cardToken ? { card_token: query.cardToken } : {}),
     ...(query.phone ? { phone: query.phone } : {}),
+    ...(query.name ? { name: query.name } : {}),
+    ...(query.phoneTail ? { phone_tail: query.phoneTail } : {}),
   })
   return rows.map(fromVoucherRowDto)
 }

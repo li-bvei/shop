@@ -375,6 +375,17 @@ export async function setPin(pin: string): Promise<void> {
   })
 }
 
+/** Self-serve redeem: the customer slides to confirm a low-value voucher
+ * (drink / dessert / side dish) on their own phone with staff present. */
+export async function selfServeRedeem(redemptionCode: string): Promise<void> {
+  await guestRequest('/guest/voucher/redeem/', {
+    method: 'POST',
+    body: JSON.stringify({ redemption_code: redemptionCode }),
+  })
+}
+
+export const SELF_SERVE_REWARD_TYPES = ['drink', 'dessert', 'side_dish']
+
 export async function fetchCard(): Promise<GuestCard> {
   const dto = await guestRequest<CardDto>('/guest/card/')
   return fromCardDto(dto)

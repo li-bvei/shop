@@ -4,11 +4,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ApiError } from '@/api/http'
 import {
+  SELF_SERVE_REWARD_TYPES,
   fetchCard,
   fetchPrizes,
   guestLogin,
   pulseCard,
   redeem,
+  selfServeRedeem,
   setPin,
   useDrawChance,
   type DrawResult,
@@ -20,6 +22,7 @@ import QrCanvas from '@/components/QrCanvas.vue'
 import GuestOnboarding from '@/components/GuestOnboarding.vue'
 import AnimatedNumber from '@/components/AnimatedNumber.vue'
 import WheelOfFortune from '@/components/WheelOfFortune.vue'
+import SlideToConfirm from '@/components/SlideToConfirm.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -193,6 +196,38 @@ async function onWheelSpin() {
 function closeWheel() {
   wheelModal.value = false
   drawResult.value = null
+}
+
+// --- self-serve redeem (drink / dessert / side dish, on the guest's phone) ---
+const s2cRef = ref<InstanceType<typeof SlideToConfirm>>()
+const selfServeBusy = ref(false)
+const selfServeError = ref('')
+
+function canSelfServe(v: GuestVoucher) {
+  return v.status === 'active' && SELF_SERVE_REWARD_TYPES.includes(v.rewardType)
+}
+
+async function onSelfServe() {
+  const v = voucherModal.value
+  if (!v || selfServeBusy.value) return
+  selfServeBusy.value = true
+  selfServeError.value = ''
+  try {
+    await selfServeRedeem(v.redemptionCode)
+    voucherModal.value = null
+    bonusMsg.value = t('guest.selfServeDone')
+    confettiKey.value += 1
+    window.setTimeout(() => (bonusMsg.value = ''), 3000)
+    await load()
+  } catch (err) {
+    selfServeError.value =
+      err instanceof ApiError && JSON.stringify(err.body).includes('already-redeemed')
+        ? t('guest.selfServeAlready')
+        : t('guest.errGeneric')
+    s2cRef.value?.reset()
+  } finally {
+    selfServeBusy.value = false
+  }
 }
 
 async function redeemVoucher() {
@@ -517,6 +552,19 @@ onBeforeUnmount(() => {
             <br />{{ t('guest.voucherNeedsApproval') }}
           </template>
         </p>
+
+        <template v-if="!readonly && canSelfServe(voucherModal)">
+          <p class="s2c-hint">{{ t('guest.selfServeHint') }}</p>
+          <SlideToConfirm
+            ref="s2cRef"
+            class="s2c-wrap"
+            :label="t('guest.selfServeSlide')"
+            :disabled="selfServeBusy"
+            @confirm="onSelfServe"
+          />
+          <p v-if="selfServeError" class="s2c-error">{{ selfServeError }}</p>
+        </template>
+
         <button type="button" class="btn-primary inline" @click="voucherModal = null">{{ t('guest.close') }}</button>
       </div>
     </div>
@@ -1215,5 +1263,23 @@ h2 {
   font-size: 12px;
   color: var(--text-secondary);
   margin: 18px 0 0;
+}
+
+.s2c-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 16px 0 8px;
+  text-align: center;
+}
+
+.s2c-wrap {
+  width: 100%;
+}
+
+.s2c-error {
+  font-size: 11.5px;
+  color: var(--danger);
+  margin: 8px 0 0;
 }
 </style>

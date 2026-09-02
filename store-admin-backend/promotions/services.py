@@ -785,6 +785,47 @@ def redeem_voucher(*, voucher, branch, operator, spend_amount_yen=None, approved
     return v
 
 
+# Low-value next-visit items a customer can have confirmed by tapping on
+# their own phone (staff standing there, item costs the store ~nothing).
+# Cash vouchers and the chef's special still go through the staff kiosk.
+SELF_SERVE_REWARD_TYPES = frozenset({
+    RewardType.DRINK, RewardType.DESSERT, RewardType.SIDE_DISH,
+})
+
+
+def guest_redeem_voucher(*, customer, redemption_code) -> Voucher:
+    """The customer slides 'staff confirm' on their own phone for a
+    drink / dessert / side-dish voucher — no code entry, no staff login.
+    `redeemed_by` stays null, which is how the staff list shows it was a
+    self-serve confirmation."""
+    code = (redemption_code or '').strip().upper()
+    now = timezone.now()
+    with transaction.atomic():
+        v = (
+            Voucher.objects.select_for_update()
+            .select_related('campaign', 'campaign__branch')
+            .filter(redemption_code=code, customer=customer)
+            .first()
+        )
+        if not v:
+            raise ValidationError({'voucher': ['voucher-not-found']})
+        if v.reward_type not in SELF_SERVE_REWARD_TYPES or v.requires_manual_approval:
+            raise ValidationError({'voucher': ['voucher-needs-staff']})
+        if v.status == Voucher.Status.REDEEMED:
+            raise ValidationError({'voucher': ['voucher-already-redeemed']})
+        if v.status != Voucher.Status.ACTIVE or v.expires_at <= now:
+            if v.status == Voucher.Status.ACTIVE:
+                Voucher.objects.filter(pk=v.pk, status=Voucher.Status.ACTIVE).update(
+                    status=Voucher.Status.EXPIRED,
+                )
+            raise ValidationError({'voucher': ['voucher-not-redeemable']})
+        v.status = Voucher.Status.REDEEMED
+        v.redeemed_at = now
+        v.redeemed_branch = v.campaign.branch
+        v.save(update_fields=['status', 'redeemed_at', 'redeemed_branch'])
+    return v
+
+
 def expire_stale_points(*, now=None) -> dict:
     """Housekeeping: zero the balance of any customer with no points
     activity for their campaign's `points_expire_months` (default 12), and

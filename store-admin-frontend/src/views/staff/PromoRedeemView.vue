@@ -16,7 +16,9 @@ const stage = ref<Stage>('scan')
 const scanInput = ref<HTMLInputElement>()
 
 const query = ref('')
-const mode = ref<'code' | 'card' | 'phone'>('code')
+const nameQuery = ref('')
+const tailQuery = ref('')
+const mode = ref<'code' | 'card' | 'phone' | 'name'>('code')
 const vouchers = ref<VoucherRow[]>([])
 const redeemed = ref<VoucherRow | null>(null)
 const busy = ref(false)
@@ -33,6 +35,8 @@ function reset() {
   clearTimeout(resetTimer)
   stage.value = 'scan'
   query.value = ''
+  nameQuery.value = ''
+  tailQuery.value = ''
   vouchers.value = []
   redeemed.value = null
   focusScan()
@@ -43,17 +47,25 @@ function onScanEnter(event: KeyboardEvent) {
   lookup()
 }
 
+const canLookup = computed(() =>
+  mode.value === 'name'
+    ? nameQuery.value.trim().length > 0 || tailQuery.value.trim().length > 0
+    : query.value.trim().length > 0,
+)
+
 async function lookup() {
-  const raw = query.value.trim()
-  if (!raw || busy.value) return
+  if (!canLookup.value || busy.value) return
   busy.value = true
   try {
+    const raw = query.value.trim()
     const q =
-      mode.value === 'code'
-        ? { redemptionCode: raw }
-        : mode.value === 'phone'
-          ? { phone: raw }
-          : { cardToken: raw }
+      mode.value === 'name'
+        ? { name: nameQuery.value.trim(), phoneTail: tailQuery.value.trim() }
+        : mode.value === 'code'
+          ? { redemptionCode: raw }
+          : mode.value === 'phone'
+            ? { phone: raw }
+            : { cardToken: raw }
     vouchers.value = await verifyVouchers(q)
     stage.value = 'list'
   } catch (err) {
@@ -162,8 +174,32 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
           <button type="button" :class="{ active: mode === 'phone' }" @click="mode = 'phone'; focusScan()">
             {{ t('promoRedeem.modePhone') }}
           </button>
+          <button type="button" :class="{ active: mode === 'name' }" @click="mode = 'name'">
+            {{ t('promoRedeem.modeName') }}
+          </button>
         </div>
+
+        <template v-if="mode === 'name'">
+          <input
+            v-model="nameQuery"
+            class="big-input"
+            :placeholder="t('promoRedeem.placeholder_name')"
+            autocomplete="off"
+            @keydown.enter="onScanEnter"
+          />
+          <input
+            v-model="tailQuery"
+            class="big-input"
+            inputmode="numeric"
+            maxlength="4"
+            :placeholder="t('promoRedeem.placeholder_tail')"
+            autocomplete="off"
+            @keydown.enter="onScanEnter"
+            @input="tailQuery = tailQuery.replace(/\D/g, '').slice(0, 4)"
+          />
+        </template>
         <input
+          v-else
           ref="scanInput"
           v-model="query"
           class="big-input"
@@ -172,7 +208,8 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
           @keydown.enter="onScanEnter"
           @blur="focusScan"
         />
-        <button type="button" class="primary-btn" :disabled="busy || !query.trim()" @click="lookup">
+
+        <button type="button" class="primary-btn" :disabled="busy || !canLookup" @click="lookup">
           {{ t('promoRedeem.lookup') }}
         </button>
       </section>

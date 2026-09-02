@@ -1016,6 +1016,63 @@ class Phase2ApiTests(ApiTestCase):
         self.assertEqual(done.status_code, 200, done.content)
         self.assertEqual(done.data['status'], 'redeemed')
 
+    def test_guest_self_serve_redeem_low_value_only(self):
+        only_prize(self.campaign, weight=1, reward_type=RewardType.DESSERT, name='デザート')
+        draw = draw_lottery(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                            source='points', request_id='d')
+        code = draw.vouchers.first().redemption_code
+
+        ok = self._guest().post('/api/guest/voucher/redeem/', {'redemption_code': code}, format='json')
+        self.assertEqual(ok.status_code, 200, ok.content)
+        self.assertEqual(ok.data['status'], 'redeemed')
+        v = Voucher.objects.get(redemption_code=code)
+        self.assertIsNone(v.redeemed_by_id)          # self-serve marker
+        self.assertIsNotNone(v.redeemed_at)
+
+        # a second slide is refused
+        again = self._guest().post('/api/guest/voucher/redeem/', {'redemption_code': code}, format='json')
+        self.assertEqual(again.status_code, 400)
+
+    def test_guest_self_serve_refuses_cash_voucher(self):
+        only_prize(self.campaign, weight=1, reward_type=RewardType.CASH_VOUCHER,
+                   config={'face_yen': 500}, name='¥500券')
+        draw = draw_lottery(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                            source='points', request_id='d')
+        code = draw.vouchers.first().redemption_code
+        resp = self._guest().post('/api/guest/voucher/redeem/', {'redemption_code': code}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('voucher-needs-staff', str(resp.data))
+        self.assertEqual(Voucher.objects.get(redemption_code=code).status, 'active')
+
+    def test_staff_voucher_lookup_by_name_and_phone_tail(self):
+        self.customer.name = '田中花子'
+        self.customer.save(update_fields=['name'])
+        redeem_points(customer=self.customer, campaign=self.campaign, kind='voucher', request_id='v')
+
+        self.login_as(self.staff_user)
+        by_name = self.client.post(
+            '/api/promotions/vouchers/verify/', {'name': '田中', 'phone_tail': '5678'}, format='json',
+        )
+        self.assertEqual(by_name.status_code, 200, by_name.content)
+        self.assertEqual(by_name.data[0]['customer_name'], '田中花子')
+
+        miss = self.client.post(
+            '/api/promotions/vouchers/verify/', {'name': '田中', 'phone_tail': '0000'}, format='json',
+        )
+        self.assertEqual(miss.status_code, 404)
+
+    def test_guest_cannot_self_serve_another_customers_voucher(self):
+        only_prize(self.campaign, weight=1, reward_type=RewardType.DRINK, name='ドリンク')
+        other = register_customer(organization=self.org, phone='08000000000', campaign=self.campaign)
+        other.draw_chances = 1
+        other.save(update_fields=['draw_chances'])
+        draw = draw_lottery(campaign=self.campaign, branch=self.branch_a, customer=other,
+                            source='direct', request_id='d')
+        code = draw.vouchers.first().redemption_code
+        resp = self._guest().post('/api/guest/voucher/redeem/', {'redemption_code': code}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(Voucher.objects.get(redemption_code=code).status, 'active')
+
     def test_staff_cannot_redeem_approval_required_voucher(self):
         only_prize(self.campaign, weight=1, reward_type=RewardType.CASH_VOUCHER,
                    config={'face_yen': 5000}, requires_manual_approval=True)

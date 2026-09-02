@@ -913,6 +913,8 @@ export default {
     historyEmpty: '还没有积分记录',
     saveHint: '建议把本页加入主屏幕，下次直接打开',
     howToUse: '使用说明',
+    liveDrawChance: '获得 {n} 次免费抽奖！',
+    liveNewVoucher: '收到一张新券！',
     onboard: {
       skip: '跳过',
       next: '下一步',

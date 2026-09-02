@@ -379,3 +379,29 @@ export async function fetchCard(): Promise<GuestCard> {
   const dto = await guestRequest<CardDto>('/guest/card/')
   return fromCardDto(dto)
 }
+
+export interface CardPulse {
+  pointsBalance: number
+  lifetimePoints: number
+  stampCount: number
+  drawChances: number
+  voucherCount: number
+}
+
+/** Cheap counters-only snapshot the open card page polls for live updates. */
+export async function pulseCard(): Promise<CardPulse> {
+  const d = await guestRequest<{
+    points_balance: number
+    lifetime_points: number
+    stamp_count: number
+    draw_chances: number
+    voucher_count: number
+  }>('/guest/card/pulse/')
+  return {
+    pointsBalance: d.points_balance,
+    lifetimePoints: d.lifetime_points,
+    stampCount: d.stamp_count,
+    drawChances: d.draw_chances,
+    voucherCount: d.voucher_count,
+  }
+}

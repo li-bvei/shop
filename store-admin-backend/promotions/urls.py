@@ -2,9 +2,10 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    CampaignViewSet, CustomerViewSet, GuestCardView, GuestDrawView, GuestLoginView, GuestRecoverView,
-    GuestRedeemView, GuestRegisterView, GuestSetPinView, MilestoneViewSet, PrizeViewSet,
-    RiskEventViewSet, SpendVerificationViewSet, StaffPermissionViewSet, VoucherViewSet,
+    CampaignViewSet, CustomerViewSet, GuestCardPulseView, GuestCardView, GuestDrawView,
+    GuestLoginView, GuestRecoverView, GuestRedeemView, GuestRegisterView, GuestSetPinView,
+    MilestoneViewSet, PrizeViewSet, RiskEventViewSet, SpendVerificationViewSet,
+    StaffPermissionViewSet, VoucherViewSet,
 )
 
 router = DefaultRouter()
@@ -23,6 +24,7 @@ urlpatterns = [
     path('guest/recover/', GuestRecoverView.as_view(), name='promo-guest-recover'),
     path('guest/set-pin/', GuestSetPinView.as_view(), name='promo-guest-set-pin'),
     path('guest/card/', GuestCardView.as_view(), name='promo-guest-card'),
+    path('guest/card/pulse/', GuestCardPulseView.as_view(), name='promo-guest-card-pulse'),
     path('guest/redeem/', GuestRedeemView.as_view(), name='promo-guest-redeem'),
     path('guest/draw/', GuestDrawView.as_view(), name='promo-guest-draw'),
     *router.urls,

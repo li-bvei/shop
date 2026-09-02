@@ -909,6 +909,8 @@ export default {
     historyEmpty: 'まだ履歴がありません',
     saveHint: 'このページをホーム画面に追加すると次回すぐ開けます',
     howToUse: '使い方',
+    liveDrawChance: '無料抽選が {n} 回もらえました！',
+    liveNewVoucher: '新しいクーポンが届きました！',
     onboard: {
       skip: 'スキップ',
       next: '次へ',

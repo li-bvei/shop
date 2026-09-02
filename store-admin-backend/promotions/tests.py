@@ -371,6 +371,23 @@ class GuestApiTests(ApiTestCase):
         missing = APIClient().get('/api/guest/card/')
         self.assertEqual(missing.status_code, 404)
 
+    def test_card_pulse_returns_just_the_counters(self):
+        from rest_framework.test import APIClient
+
+        reg = self.client.post('/api/guest/register/', {
+            'store_token': self.store_token, 'phone': '09012345678', 'consent': True,
+        }, format='json')
+        token = reg.data['card_token']
+
+        pulse = APIClient().get('/api/guest/card/pulse/', HTTP_X_GUEST_TOKEN=token)
+        self.assertEqual(pulse.status_code, 200)
+        self.assertEqual(
+            set(pulse.data),
+            {'points_balance', 'lifetime_points', 'stamp_count', 'draw_chances', 'voucher_count'},
+        )
+        self.assertNotIn('card_token', pulse.data)
+        self.assertEqual(APIClient().get('/api/guest/card/pulse/').status_code, 404)
+
     def test_readonly_login_by_phone_and_birthday(self):
         self.client.post('/api/guest/register/', {
             'store_token': self.store_token, 'phone': '09012345678', 'birthday_md': '03-07', 'consent': True,

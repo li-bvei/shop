@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ApiError } from '@/api/http'
 import {
   fetchCard,
   guestLogin,
+  pulseCard,
   redeem,
   setPin,
   useDrawChance,
@@ -15,6 +16,7 @@ import {
 } from '@/api/guest'
 import QrCanvas from '@/components/QrCanvas.vue'
 import GuestOnboarding from '@/components/GuestOnboarding.vue'
+import AnimatedNumber from '@/components/AnimatedNumber.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -206,7 +208,72 @@ function closeDrawModal() {
   drawResult.value = null
 }
 
-onMounted(load)
+// --- live updates: poll a tiny endpoint, animate when the counter acts ---
+const pointsGain = ref(0)
+const showGain = ref(false)
+const bonusMsg = ref('')
+const justFilledStamp = ref(-1)
+const confettiKey = ref(0)
+let pollTimer: ReturnType<typeof setInterval> | undefined
+
+function startPolling() {
+  stopPolling()
+  if (readonly.value) return
+  pollTimer = setInterval(pollTick, 3000)
+}
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = undefined
+}
+
+async function pollTick() {
+  if (document.visibilityState !== 'visible' || busy.value || !card.value || showOnboarding.value) return
+  let p
+  try {
+    p = await pulseCard()
+  } catch {
+    return
+  }
+  if (!card.value) return
+  const pointsUp = p.pointsBalance - card.value.pointsBalance
+  const stampUp = p.stampCount - card.value.stampCount
+  const drawUp = p.drawChances - card.value.drawChances
+  const voucherUp = p.voucherCount - activeVouchers.value.length
+  if (pointsUp <= 0 && stampUp <= 0 && drawUp <= 0 && voucherUp <= 0) return
+
+  const stampBefore = stampFilled.value
+  await load()
+  confettiKey.value += 1 // one fresh key per celebration so animations replay cleanly
+
+  if (pointsUp > 0) {
+    pointsGain.value = pointsUp
+    showGain.value = true
+    window.setTimeout(() => (showGain.value = false), 2400)
+  }
+  if (stampUp > 0 && card.value?.stampTarget) {
+    justFilledStamp.value = stampBefore % card.value.stampTarget
+    window.setTimeout(() => (justFilledStamp.value = -1), 800)
+  }
+  if (drawUp > 0 || voucherUp > 0) {
+    bonusMsg.value =
+      drawUp > 0 ? t('guest.liveDrawChance', { n: drawUp }) : t('guest.liveNewVoucher')
+    window.setTimeout(() => (bonusMsg.value = ''), 3400)
+  }
+}
+
+function onVisibility() {
+  if (document.visibilityState === 'visible') pollTick()
+}
+
+onMounted(async () => {
+  await load()
+  startPolling()
+  document.addEventListener('visibilitychange', onVisibility)
+})
+onBeforeUnmount(() => {
+  stopPolling()
+  document.removeEventListener('visibilitychange', onVisibility)
+})
 </script>
 
 <template>
@@ -232,18 +299,29 @@ onMounted(load)
           <p class="qr-hint">{{ t('guest.qrHint') }}</p>
         </div>
 
-        <div class="points">
-          <span class="points-value">{{ card.pointsBalance.toLocaleString('ja-JP') }}</span>
+        <div class="points" :class="{ bump: showGain }">
+          <span class="points-value"><AnimatedNumber :value="card.pointsBalance" /></span>
           <span class="points-unit">{{ t('guest.points') }}</span>
+          <span v-if="showGain" :key="`g${confettiKey}`" class="points-gain">+{{ pointsGain }}</span>
+          <div v-if="showGain" :key="`c${confettiKey}`" class="confetti" aria-hidden="true">
+            <span v-for="n in 16" :key="n" :style="{ '--i': n }" />
+          </div>
         </div>
 
         <div v-if="card.stampTarget" class="stamps">
           <span class="stamps-label">{{ t('guest.stampProgress', { count: stampFilled, target: card.stampTarget }) }}</span>
           <div class="stamp-row">
-            <span v-for="(filled, i) in stampCells" :key="i" class="stamp" :class="{ filled }" />
+            <span
+              v-for="(filled, i) in stampCells"
+              :key="i"
+              class="stamp"
+              :class="{ filled, pop: i === justFilledStamp }"
+            />
           </div>
         </div>
       </div>
+
+      <div v-if="bonusMsg" :key="`t${confettiKey}`" class="live-toast">{{ bonusMsg }}</div>
 
       <!-- Set a recovery PIN -->
       <div v-if="showPinPrompt" class="card pin-card">
@@ -516,11 +594,17 @@ h2 {
 }
 
 .points {
+  position: relative;
   margin-top: 18px;
   display: flex;
   align-items: baseline;
   justify-content: center;
   gap: 6px;
+  transition: transform 0.25s ease;
+}
+
+.points.bump {
+  transform: scale(1.08);
 }
 
 .points-value {
@@ -533,6 +617,97 @@ h2 {
 .points-unit {
   font-size: 14px;
   color: var(--text-secondary);
+}
+
+.points-gain {
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--success);
+  pointer-events: none;
+  white-space: nowrap;
+  animation: gain-float 2.2s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+
+@keyframes gain-float {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 14px);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, -20px);
+  }
+  75% {
+    opacity: 1;
+    transform: translate(-50%, -30px);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -40px);
+  }
+}
+
+.confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.confetti span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 9px;
+  border-radius: 1px;
+  background: hsl(calc(var(--i) * 42deg), 82%, 62%);
+  animation: confetti-fly 0.9s ease-out forwards;
+}
+
+@keyframes confetti-fly {
+  0% {
+    opacity: 1;
+    transform: rotate(calc(var(--i) * 22.5deg)) translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(calc(var(--i) * 22.5deg)) translateY(-66px) rotate(220deg) scale(0.35);
+  }
+}
+
+.live-toast {
+  position: sticky;
+  top: 8px;
+  z-index: 20;
+  align-self: center;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 999px;
+  box-shadow: var(--shadow-card);
+  animation: toast-in 3.4s ease forwards;
+}
+
+@keyframes toast-in {
+  0% {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  8%,
+  90% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
 }
 
 .stamps {
@@ -561,6 +736,36 @@ h2 {
 .stamp.filled {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.stamp.pop {
+  animation: stamp-pop 0.6s ease;
+}
+
+@keyframes stamp-pop {
+  0% {
+    transform: scale(0.4);
+  }
+  55% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .points.bump,
+  .stamp.pop,
+  .confetti,
+  .points-gain,
+  .live-toast {
+    animation: none;
+    transition: none;
+  }
+  .points.bump {
+    transform: none;
+  }
 }
 
 /* Set-PIN prompt */

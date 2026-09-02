@@ -271,6 +271,29 @@ class GuestSetPinView(APIView):
         return Response({'has_pin': True})
 
 
+class GuestCardPulseView(APIView):
+    """A tiny snapshot the open card page polls (every few seconds) so a
+    spend confirmed at the counter animates live without a manual refresh.
+    Just the counters — the page pulls the full card only when one of them
+    moved."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestReadThrottle]
+
+    def get(self, request):
+        customer = _resolve_guest_customer(request)
+        if not customer:
+            raise NotFound('card-not-found')
+        return Response({
+            'points_balance': customer.points_balance,
+            'lifetime_points': customer.lifetime_points_earned,
+            'stamp_count': customer.stamp_count,
+            'draw_chances': customer.draw_chances,
+            'voucher_count': customer.vouchers.filter(status=Voucher.Status.ACTIVE).count(),
+        })
+
+
 class GuestCardView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []

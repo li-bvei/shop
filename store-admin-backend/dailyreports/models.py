@@ -21,6 +21,10 @@ class DailyReport(models.Model):
     morning_group_count = models.PositiveIntegerField(default=0)
     payment_amounts = models.JSONField(default=dict, blank=True)
     expenses = models.JSONField(default=list, blank=True)
+    # Physical cash count by denomination, keyed by yen value as a string
+    # because JSON object keys are strings. An empty object is kept for older
+    # reports that were saved before the cash-register count was introduced.
+    cash_register_counts = models.JSONField(default=dict, blank=True)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
     )

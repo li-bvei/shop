@@ -1,22 +1,18 @@
 import { http } from './http'
-import type { DailyReportFormData } from '@/components/DailyReportForm.vue'
+import {
+  createEmptyCashRegisterCounts,
+  normalizeDailyReportFormData,
+  type DailyReportFormData,
+} from '@/components/DailyReportForm.vue'
 
 export interface DailyReportSeed extends DailyReportFormData {
   /** null when no report has ever been saved for this branch+date yet. */
   id: number | null
 }
 
-const EMPTY_SEED: DailyReportFormData = {
-  personInCharge: '',
-  totalRevenue: 0,
-  totalCustomers: 0,
-  groupCount: 0,
-  morningRevenue: 0,
-  morningCustomers: 0,
-  morningGroupCount: 0,
-  paymentAmounts: {},
-  expenses: [],
-}
+const EMPTY_SEED: DailyReportFormData = normalizeDailyReportFormData({
+  cashRegisterCounts: createEmptyCashRegisterCounts(),
+})
 
 interface DailyReportDto {
   id: number
@@ -31,21 +27,29 @@ interface DailyReportDto {
   morning_group_count: number
   payment_amounts: Record<string, number>
   expenses: DailyReportFormData['expenses']
+  cash_register_counts?: Record<string, number>
 }
 
 function fromDto(dto: DailyReportDto): DailyReportSeed {
   return {
     id: dto.id,
-    personInCharge: dto.person_in_charge != null ? String(dto.person_in_charge) : '',
-    totalRevenue: Number(dto.total_revenue),
-    totalCustomers: dto.total_customers,
-    groupCount: dto.group_count,
-    morningRevenue: Number(dto.morning_revenue),
-    morningCustomers: dto.morning_customers,
-    morningGroupCount: dto.morning_group_count,
-    paymentAmounts: dto.payment_amounts,
-    expenses: dto.expenses,
+    ...normalizeDailyReportFormData({
+      personInCharge: dto.person_in_charge != null ? String(dto.person_in_charge) : '',
+      totalRevenue: Number(dto.total_revenue),
+      totalCustomers: dto.total_customers,
+      groupCount: dto.group_count,
+      morningRevenue: Number(dto.morning_revenue),
+      morningCustomers: dto.morning_customers,
+      morningGroupCount: dto.morning_group_count,
+      paymentAmounts: dto.payment_amounts,
+      expenses: dto.expenses,
+      cashRegisterCounts: dto.cash_register_counts,
+    }),
   }
+}
+
+function numericOrZero(value: number | null) {
+  return value ?? 0
 }
 
 function toDto(branchId: string, date: string, data: DailyReportFormData) {
@@ -55,14 +59,20 @@ function toDto(branchId: string, date: string, data: DailyReportFormData) {
     // fills it in server-side; on update it's implied by the row's own id.
     ...(branchId ? { branch: branchId } : {}),
     person_in_charge: data.personInCharge ? Number(data.personInCharge) : null,
-    total_revenue: data.totalRevenue,
-    total_customers: data.totalCustomers,
-    group_count: data.groupCount,
-    morning_revenue: data.morningRevenue,
-    morning_customers: data.morningCustomers,
-    morning_group_count: data.morningGroupCount,
-    payment_amounts: data.paymentAmounts,
-    expenses: data.expenses,
+    total_revenue: numericOrZero(data.totalRevenue),
+    total_customers: numericOrZero(data.totalCustomers),
+    group_count: numericOrZero(data.groupCount),
+    morning_revenue: numericOrZero(data.morningRevenue),
+    morning_customers: numericOrZero(data.morningCustomers),
+    morning_group_count: numericOrZero(data.morningGroupCount),
+    payment_amounts: Object.fromEntries(
+      Object.entries(data.paymentAmounts).map(([key, value]) => [key, numericOrZero(value)]),
+    ),
+    expenses: data.expenses.map((expense) => ({ ...expense, amount: numericOrZero(expense.amount) })),
+    cash_register_counts: Object.fromEntries(
+      Object.entries({ ...createEmptyCashRegisterCounts(), ...data.cashRegisterCounts })
+        .map(([key, value]) => [key, numericOrZero(value)]),
+    ),
   }
 }
 
@@ -121,7 +131,7 @@ function fromHistoryDto(dto: HistoryDto): DailyReportHistoryEntry {
     personInCharge: dto.person_in_charge != null ? String(dto.person_in_charge) : '',
     totalRevenue: Number(dto.total_revenue),
     cashRemaining: Number(dto.cash_remaining),
-    data: dto.data,
+    data: normalizeDailyReportFormData(dto.data),
   }
 }
 

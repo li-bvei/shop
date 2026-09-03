@@ -7,6 +7,9 @@ from paymentmethods.models import PaymentMethodDef
 from .models import DailyReport, DailyReportHistory
 
 
+CASH_REGISTER_DENOMINATIONS = ('10000', '5000', '1000', '500', '100', '50', '10', '5', '1')
+
+
 class DailyReportSerializer(serializers.ModelSerializer):
     cash_remaining = serializers.SerializerMethodField()
     class Meta:
@@ -15,7 +18,7 @@ class DailyReportSerializer(serializers.ModelSerializer):
             'id', 'branch', 'date', 'person_in_charge',
             'total_revenue', 'total_customers', 'group_count',
             'morning_revenue', 'morning_customers', 'morning_group_count',
-            'payment_amounts', 'expenses', 'cash_remaining',
+            'payment_amounts', 'expenses', 'cash_register_counts', 'cash_remaining',
             'updated_by', 'updated_at',
         ]
         read_only_fields = ['updated_by', 'updated_at', 'cash_remaining']
@@ -67,6 +70,35 @@ class DailyReportSerializer(serializers.ModelSerializer):
         if sum(cleaned.values()) > total_revenue:
             raise serializers.ValidationError({'payment_amounts': ['non-cash-payments-exceed-total-revenue']})
         attrs['payment_amounts'] = cleaned
+
+        raw_cash_counts = attrs.get(
+            'cash_register_counts',
+            self.instance.cash_register_counts if self.instance else {},
+        ) or {}
+        if not isinstance(raw_cash_counts, dict):
+            raise serializers.ValidationError({'cash_register_counts': ['Must be an object.']})
+        unknown_cash_denominations = sorted(set(map(str, raw_cash_counts)) - set(CASH_REGISTER_DENOMINATIONS))
+        if unknown_cash_denominations:
+            raise serializers.ValidationError({
+                'cash_register_counts': [
+                    f'unknown-denomination:{key}' for key in unknown_cash_denominations
+                ],
+            })
+        cleaned_cash_counts = {}
+        for denomination in CASH_REGISTER_DENOMINATIONS:
+            raw_count = raw_cash_counts.get(denomination, 0)
+            try:
+                count = Decimal(str(raw_count))
+            except (InvalidOperation, TypeError, ValueError):
+                raise serializers.ValidationError({
+                    'cash_register_counts': [f'invalid-count:{denomination}'],
+                })
+            if count < 0 or count != count.to_integral_value():
+                raise serializers.ValidationError({
+                    'cash_register_counts': [f'non-negative-integer-required:{denomination}'],
+                })
+            cleaned_cash_counts[denomination] = int(count)
+        attrs['cash_register_counts'] = cleaned_cash_counts
 
         expenses = attrs.get('expenses', self.instance.expenses if self.instance else []) or []
         for index, expense in enumerate(expenses):

@@ -15,7 +15,14 @@ import {
 } from '@/api/dailyReport'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
-import DailyReportForm, { computeDerived, type DailyReportFormData } from '@/components/DailyReportForm.vue'
+import DailyReportForm, {
+  CASH_REGISTER_DENOMINATIONS,
+  CASH_REGISTER_EXPECTED_TOTAL,
+  computeCashRegisterTotal,
+  computeDerived,
+  normalizeDailyReportFormData,
+  type DailyReportFormData,
+} from '@/components/DailyReportForm.vue'
 import { formatCurrency, branchDisplayName, todayJst } from '@/utils/format'
 import { downloadCustomExcel } from '@/utils/excelExport'
 
@@ -32,17 +39,7 @@ const reportDate = ref(todayJst())
 const reportId = ref<number | null>(null)
 const submitting = ref(false)
 
-const reportForm = reactive<DailyReportFormData>({
-  personInCharge: '',
-  totalRevenue: 0,
-  totalCustomers: 0,
-  groupCount: 0,
-  morningRevenue: 0,
-  morningCustomers: 0,
-  morningGroupCount: 0,
-  paymentAmounts: {},
-  expenses: [],
-})
+const reportForm = reactive<DailyReportFormData>(normalizeDailyReportFormData({}))
 
 const historyDialogVisible = ref(false)
 const historyLoading = ref(false)
@@ -96,6 +93,7 @@ async function loadReport() {
   reportForm.morningGroupCount = seed.morningGroupCount
   reportForm.paymentAmounts = { ...seed.paymentAmounts }
   reportForm.expenses = seed.expenses.map((e) => ({ ...e }))
+  reportForm.cashRegisterCounts = { ...seed.cashRegisterCounts }
 }
 
 onMounted(async () => {
@@ -232,6 +230,21 @@ async function handleDownload() {
     ws.addRow([])
 
     ws.addRow([t('dailyReport.cashRemaining'), derived.cashRemaining]).font = { bold: true }
+    ws.addRow([])
+    ws.addRow([t('dailyReport.cashRegisterTitle')]).font = { bold: true }
+    ws.addRow([
+      t('dailyReport.cashRegisterDenomination'),
+      t('dailyReport.cashRegisterQuantity'),
+      t('dailyReport.cashRegisterSubtotal'),
+    ]).font = { bold: true }
+    for (const denomination of CASH_REGISTER_DENOMINATIONS) {
+      const quantity = reportForm.cashRegisterCounts[String(denomination)] ?? 0
+      ws.addRow([denomination, quantity, denomination * quantity])
+    }
+    const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts)
+    ws.addRow([t('dailyReport.cashRegisterExpected'), CASH_REGISTER_EXPECTED_TOTAL])
+    ws.addRow([t('dailyReport.cashRegisterActual'), cashRegisterTotal])
+    ws.addRow([t('dailyReport.cashRegisterDifference'), cashRegisterTotal - CASH_REGISTER_EXPECTED_TOTAL])
     ws.columns.forEach((col) => { col.width = 18 })
   })
 }

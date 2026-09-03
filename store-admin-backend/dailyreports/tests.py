@@ -66,6 +66,29 @@ class CashCalculationTests(ApiTestCase):
         }, format='json')
         self.assertEqual(response.status_code, 400)
 
+    def test_cash_register_counts_are_saved_and_normalized(self):
+        self.login_as(self.branch_a_user)
+        response = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id,
+            'date': '2026-02-04',
+            'total_revenue': 1000,
+            'cash_register_counts': {'10000': 2, '1000': 3},
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['cash_register_counts']['10000'], 2)
+        self.assertEqual(response.data['cash_register_counts']['1000'], 3)
+        self.assertEqual(response.data['cash_register_counts']['1'], 0)
+
+    def test_cash_register_counts_reject_negative_or_unknown_values(self):
+        self.login_as(self.branch_a_user)
+        for counts in ({'500': -1}, {'2000': 1}, {'100': 1.5}):
+            response = self.client.post('/api/daily-reports/', {
+                'date': f'2026-02-{10 + len(counts):02d}',
+                'total_revenue': 1000,
+                'cash_register_counts': counts,
+            }, format='json')
+            self.assertEqual(response.status_code, 400)
+
 
 class HistoryAppendOnlyTests(ApiTestCase):
     def test_history_patch_not_allowed(self):

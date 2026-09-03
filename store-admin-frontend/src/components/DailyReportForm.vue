@@ -1,20 +1,47 @@
 <script lang="ts">
 export interface ExpenseRow {
   itemName: string
-  amount: number
+  amount: number | null
   purpose: string
 }
 
+export const CASH_REGISTER_DENOMINATIONS = [10000, 5000, 1000, 500, 100, 50, 10, 5, 1] as const
+export const CASH_REGISTER_EXPECTED_TOTAL = 130000
+
 export interface DailyReportFormData {
   personInCharge: string
-  totalRevenue: number
-  totalCustomers: number
-  groupCount: number
-  morningRevenue: number
-  morningCustomers: number
-  morningGroupCount: number
-  paymentAmounts: Record<string, number>
+  totalRevenue: number | null
+  totalCustomers: number | null
+  groupCount: number | null
+  morningRevenue: number | null
+  morningCustomers: number | null
+  morningGroupCount: number | null
+  paymentAmounts: Record<string, number | null>
   expenses: ExpenseRow[]
+  cashRegisterCounts: Record<string, number | null>
+}
+
+export function createEmptyCashRegisterCounts(): Record<string, number | null> {
+  return Object.fromEntries(CASH_REGISTER_DENOMINATIONS.map((denomination) => [String(denomination), null]))
+}
+
+/** Makes old history snapshots and pre-feature API responses safe to edit. */
+export function normalizeDailyReportFormData(data: Partial<DailyReportFormData>): DailyReportFormData {
+  return {
+    personInCharge: data.personInCharge ?? '',
+    totalRevenue: data.totalRevenue ?? null,
+    totalCustomers: data.totalCustomers ?? null,
+    groupCount: data.groupCount ?? null,
+    morningRevenue: data.morningRevenue ?? null,
+    morningCustomers: data.morningCustomers ?? null,
+    morningGroupCount: data.morningGroupCount ?? null,
+    paymentAmounts: { ...data.paymentAmounts },
+    expenses: (data.expenses ?? []).map((row) => ({ ...row, amount: row.amount ?? null })),
+    cashRegisterCounts: {
+      ...createEmptyCashRegisterCounts(),
+      ...data.cashRegisterCounts,
+    },
+  }
 }
 
 /**
@@ -31,17 +58,30 @@ export function computeDerived(
   data: DailyReportFormData,
   paymentMethods: { id: number; protected: boolean }[],
 ) {
-  const afternoonRevenue = data.totalRevenue - data.morningRevenue
-  const afternoonCustomers = data.totalCustomers - data.morningCustomers
-  const afternoonGroupCount = data.groupCount - data.morningGroupCount
-  const expenseTotal = data.expenses.reduce((sum, row) => sum + (row.amount || 0), 0)
+  const totalRevenue = data.totalRevenue ?? 0
+  const morningRevenue = data.morningRevenue ?? 0
+  const totalCustomers = data.totalCustomers ?? 0
+  const morningCustomers = data.morningCustomers ?? 0
+  const groupCount = data.groupCount ?? 0
+  const morningGroupCount = data.morningGroupCount ?? 0
+  const afternoonRevenue = totalRevenue - morningRevenue
+  const afternoonCustomers = totalCustomers - morningCustomers
+  const afternoonGroupCount = groupCount - morningGroupCount
+  const expenseTotal = data.expenses.reduce((sum, row) => sum + (row.amount ?? 0), 0)
   const nonCashSum = paymentMethods.reduce(
-    (sum, m) => (m.protected ? sum : sum + (data.paymentAmounts[String(m.id)] || 0)),
+    (sum, m) => (m.protected ? sum : sum + (data.paymentAmounts[String(m.id)] ?? 0)),
     0,
   )
-  const cashAmount = data.totalRevenue - nonCashSum
+  const cashAmount = totalRevenue - nonCashSum
   const cashRemaining = cashAmount - expenseTotal
   return { afternoonRevenue, afternoonCustomers, afternoonGroupCount, expenseTotal, cashAmount, cashRemaining }
+}
+
+export function computeCashRegisterTotal(counts: Record<string, number | null | undefined>) {
+  return CASH_REGISTER_DENOMINATIONS.reduce(
+    (sum, denomination) => sum + denomination * (counts[String(denomination)] ?? 0),
+    0,
+  )
 }
 </script>
 
@@ -49,7 +89,10 @@ export function computeDerived(
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessageBox } from 'element-plus'
-import { Plus, Close, Wallet, EditPen, User, CreditCard, Tickets } from '@element-plus/icons-vue'
+import {
+  Plus, Close, Wallet, EditPen, User, CreditCard, Tickets,
+  CircleCheckFilled, WarningFilled, CircleCloseFilled,
+} from '@element-plus/icons-vue'
 import {
   fetchPaymentMethods,
   renamePaymentMethod,
@@ -76,6 +119,18 @@ const paymentMethods = ref<PaymentMethodDef[]>([])
 const topSuggestions = ref<SuggestionOption[]>([])
 
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
+const cashRegister = computed(() => {
+  const actual = computeCashRegisterTotal(data.value.cashRegisterCounts)
+  const difference = actual - CASH_REGISTER_EXPECTED_TOTAL
+  const hasInput = CASH_REGISTER_DENOMINATIONS.some(
+    (denomination) => data.value.cashRegisterCounts[String(denomination)] != null,
+  )
+  return {
+    actual,
+    difference,
+    status: !hasInput ? 'empty' : difference === 0 ? 'match' : difference > 0 ? 'over' : 'short',
+  } as const
+})
 
 // Only hall (front-of-house) staff can be recorded as the person in charge
 // of the daily report — kitchen staff aren't customer/cash-facing, so
@@ -98,7 +153,7 @@ function syncPaymentAmountKeys(methods: PaymentMethodDef[]) {
   }
   for (const method of methods) {
     const key = String(method.id)
-    if (!(key in data.value.paymentAmounts)) data.value.paymentAmounts[key] = 0
+    if (!(key in data.value.paymentAmounts)) data.value.paymentAmounts[key] = null
   }
 }
 
@@ -124,7 +179,7 @@ onMounted(loadReferenceData)
 watch(() => props.branchId, loadReferenceData)
 
 function addExpenseRow() {
-  data.value.expenses.push({ itemName: '', amount: 0, purpose: '' })
+  data.value.expenses.push({ itemName: '', amount: null, purpose: '' })
 }
 
 function removeExpenseRow(index: number) {
@@ -144,7 +199,7 @@ function handleSelectSuggestion(row: ExpenseRow, suggestion: SuggestionOption) {
 
 function applyQuickSuggestion(suggestion: SuggestionOption) {
   const emptyRow = data.value.expenses.find((r) => !r.itemName)
-  const target = emptyRow ?? { itemName: '', amount: 0, purpose: '' }
+  const target = emptyRow ?? { itemName: '', amount: null, purpose: '' }
   target.itemName = suggestion.itemName
   target.amount = suggestion.lastAmount
   target.purpose = suggestion.lastPurpose
@@ -301,44 +356,93 @@ async function handleAddPaymentMethod() {
         </span>
       </section>
 
-      <section class="report-section col">
-        <div class="section-title expense-label-row">
-          <span><el-icon class="field-icon"><Tickets /></el-icon>{{ t('dailyReport.expenseTitle') }}</span>
-          <span class="expense-total">{{ t('dailyReport.expenseTotal') }} {{ formatCurrency(derived.expenseTotal) }}</span>
-        </div>
-        <div v-for="(row, index) in data.expenses" :key="index" class="expense-row">
-          <div class="i1">
-            <el-autocomplete
-              v-model="row.itemName"
-              :placeholder="t('dailyReport.itemNamePlaceholder')"
-              :fetch-suggestions="querySuggestions"
-              @select="(s: SuggestionOption) => handleSelectSuggestion(row, s)"
-            >
-              <template #default="{ item }">
-                <div class="suggestion-item">
-                  <span>{{ item.itemName }}</span>
-                  <span class="suggestion-meta">{{ formatCurrency(item.lastAmount) }}</span>
-                </div>
-              </template>
-            </el-autocomplete>
+      <div class="cash-expense-col">
+        <section class="report-section col cash-register-section">
+          <div class="section-title">
+            <el-icon class="field-icon"><Wallet /></el-icon>{{ t('dailyReport.cashRegisterTitle') }}
           </div>
-          <el-input v-model.number="row.amount" class="i2" type="number">
-            <template #prefix>¥</template>
-          </el-input>
-          <el-input v-model="row.purpose" class="i3" :placeholder="t('dailyReport.purposePlaceholder')" />
-          <el-button circle text :icon="Close" class="no-print" @click="removeExpenseRow(index)" />
-        </div>
+          <p class="cash-register-hint">{{ t('dailyReport.cashRegisterHint') }}</p>
+          <div class="cash-register-layout">
+            <div class="cash-register-table">
+              <div class="cash-register-row cash-register-header">
+                <span>{{ t('dailyReport.cashRegisterDenomination') }}</span>
+                <span>{{ t('dailyReport.cashRegisterQuantity') }}</span>
+                <span>{{ t('dailyReport.cashRegisterSubtotal') }}</span>
+              </div>
+              <div v-for="denomination in CASH_REGISTER_DENOMINATIONS" :key="denomination" class="cash-register-row">
+                <strong>{{ formatCurrency(denomination) }}</strong>
+                <el-input
+                  v-model.number="data.cashRegisterCounts[String(denomination)]"
+                  type="number"
+                  min="0"
+                  step="1"
+                  class="cash-register-quantity"
+                />
+                <span class="cash-register-subtotal">{{ formatCurrency(denomination * (data.cashRegisterCounts[String(denomination)] ?? 0)) }}</span>
+              </div>
+            </div>
+            <div class="cash-register-summary">
+              <div class="cash-register-summary-row">
+                <span>{{ t('dailyReport.cashRegisterExpected') }}</span>
+                <strong>{{ formatCurrency(CASH_REGISTER_EXPECTED_TOTAL) }}</strong>
+              </div>
+              <div class="cash-register-summary-row actual">
+                <span>{{ t('dailyReport.cashRegisterActual') }}</span>
+                <strong>{{ formatCurrency(cashRegister.actual) }}</strong>
+              </div>
+              <div class="cash-register-status" :class="`is-${cashRegister.status}`">
+                <el-icon v-if="cashRegister.status === 'match'"><CircleCheckFilled /></el-icon>
+                <el-icon v-else-if="cashRegister.status === 'over'"><WarningFilled /></el-icon>
+                <el-icon v-else-if="cashRegister.status === 'short'"><CircleCloseFilled /></el-icon>
+                <el-icon v-else><Wallet /></el-icon>
+                <span v-if="cashRegister.status === 'match'">{{ t('dailyReport.cashRegisterMatch') }}</span>
+                <span v-else-if="cashRegister.status === 'over'">{{ t('dailyReport.cashRegisterOver', { amount: formatCurrency(cashRegister.difference) }) }}</span>
+                <span v-else-if="cashRegister.status === 'short'">{{ t('dailyReport.cashRegisterShort', { amount: formatCurrency(Math.abs(cashRegister.difference)) }) }}</span>
+                <span v-else>{{ t('dailyReport.cashRegisterEmpty') }}</span>
+              </div>
+            </div>
+          </div>
+        </section>
 
-        <div class="expense-actions no-print">
-          <span class="add-row-btn" @click="addExpenseRow"><el-icon><Plus /></el-icon>{{ t('dailyReport.addExpenseRow') }}</span>
-          <span
-            v-for="s in topSuggestions"
-            :key="s.itemName"
-            class="suggest-tag"
-            @click="applyQuickSuggestion(s)"
-          >{{ s.itemName }}</span>
-        </div>
-      </section>
+        <section class="report-section col expense-section">
+          <div class="section-title expense-label-row">
+            <span><el-icon class="field-icon"><Tickets /></el-icon>{{ t('dailyReport.expenseTitle') }}</span>
+            <span class="expense-total">{{ t('dailyReport.expenseTotal') }} {{ formatCurrency(derived.expenseTotal) }}</span>
+          </div>
+          <div v-for="(row, index) in data.expenses" :key="index" class="expense-row">
+            <div class="i1">
+              <el-autocomplete
+                v-model="row.itemName"
+                :placeholder="t('dailyReport.itemNamePlaceholder')"
+                :fetch-suggestions="querySuggestions"
+                @select="(s: SuggestionOption) => handleSelectSuggestion(row, s)"
+              >
+                <template #default="{ item }">
+                  <div class="suggestion-item">
+                    <span>{{ item.itemName }}</span>
+                    <span class="suggestion-meta">{{ formatCurrency(item.lastAmount) }}</span>
+                  </div>
+                </template>
+              </el-autocomplete>
+            </div>
+            <el-input v-model.number="row.amount" class="i2" type="number">
+              <template #prefix>¥</template>
+            </el-input>
+            <el-input v-model="row.purpose" class="i3" :placeholder="t('dailyReport.purposePlaceholder')" />
+            <el-button circle text :icon="Close" class="no-print" @click="removeExpenseRow(index)" />
+          </div>
+
+          <div class="expense-actions no-print">
+            <span class="add-row-btn" @click="addExpenseRow"><el-icon><Plus /></el-icon>{{ t('dailyReport.addExpenseRow') }}</span>
+            <span
+              v-for="s in topSuggestions"
+              :key="s.itemName"
+              class="suggest-tag"
+              @click="applyQuickSuggestion(s)"
+            >{{ s.itemName }}</span>
+          </div>
+        </section>
+      </div>
     </div>
 
     <div class="cash-stat">
@@ -443,6 +547,22 @@ async function handleAddPaymentMethod() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+  align-items: start;
+}
+
+.cash-expense-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.cash-expense-col > .expense-section {
+  order: -1;
+}
+
+.cash-expense-col > .report-section {
+  margin-bottom: 0;
 }
 
 @media (max-width: 760px) {
@@ -636,6 +756,154 @@ async function handleAddPaymentMethod() {
   font-size: 20px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.cash-register-hint {
+  margin: -2px 0 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.cash-register-section {
+  padding: 14px 16px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cash-register-section .section-title {
+  margin-bottom: 8px;
+}
+
+.cash-register-layout {
+  display: block;
+}
+
+.cash-register-table {
+  border-top: 1px solid var(--border);
+}
+
+.cash-register-row {
+  display: grid;
+  grid-template-columns: 82px 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.cash-register-header {
+  min-height: 26px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.cash-register-row > * {
+  min-width: 0;
+}
+
+.cash-register-row > :last-child {
+  text-align: right;
+}
+
+.cash-register-quantity {
+  width: 84px;
+}
+
+.cash-register-quantity :deep(.el-input__inner) {
+  text-align: right;
+}
+
+.cash-register-subtotal {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.cash-register-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 10px;
+  margin-top: 10px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+}
+
+.cash-register-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.cash-register-summary-row strong {
+  color: var(--text-primary);
+}
+
+.cash-register-summary-row.actual strong {
+  font-size: 14px;
+}
+
+.cash-register-status {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cash-register-status.is-match {
+  color: var(--success, #26966f);
+}
+
+.cash-register-status.is-over {
+  color: var(--warning, #b7791f);
+}
+
+.cash-register-status.is-short {
+  color: var(--danger, #d14f5a);
+}
+
+.cash-register-status.is-empty {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 680px) {
+  .cash-register-row {
+    grid-template-columns: minmax(58px, 1fr) 76px minmax(60px, 1fr);
+  }
+
+  .cash-register-quantity {
+    width: 76px;
+  }
+}
+
+@media (max-width: 520px) {
+  .expense-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 34px;
+    gap: 8px;
+  }
+
+  .expense-row .i1,
+  .expense-row .i2,
+  .expense-row .i3 {
+    grid-column: 1 / -1;
+  }
+
+  .expense-row > .no-print {
+    grid-column: 2;
+    grid-row: 2 / span 2;
+    align-self: center;
+  }
 }
 
 @media print {

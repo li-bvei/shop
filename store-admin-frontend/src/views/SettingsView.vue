@@ -18,6 +18,8 @@ import {
   deleteAccount,
   adminResetPassword,
   changeOwnPassword,
+  fetchOrganization,
+  updateOrganization,
   type CreateAccountPayload,
   type AccountRecord,
   type AccountRole,
@@ -36,6 +38,36 @@ const isAdmin = computed(() => auth.role === 'admin')
 
 const paymentMethods = ref<PaymentMethodDef[]>([])
 const loading = ref(false)
+
+// Brand logo shown on the customer-facing loyalty pages (admin only).
+const orgLogoInput = ref('')
+const orgLogoSaved = ref('')
+const orgSaving = ref(false)
+
+async function loadOrg() {
+  if (!isAdmin.value) return
+  try {
+    const org = await fetchOrganization()
+    orgLogoInput.value = org.logoUrl
+    orgLogoSaved.value = org.logoUrl
+  } catch {
+    /* non-critical */
+  }
+}
+
+async function saveOrgLogo() {
+  orgSaving.value = true
+  try {
+    const org = await updateOrganization({ logoUrl: orgLogoInput.value.trim() })
+    orgLogoInput.value = org.logoUrl
+    orgLogoSaved.value = org.logoUrl
+    ElMessage.success(t('common.savedSuccess'))
+  } catch {
+    ElMessage.error(t('common.unexpectedError'))
+  } finally {
+    orgSaving.value = false
+  }
+}
 // Admin picks which branch's payment methods to manage; branch accounts are
 // implicitly scoped to their own — payment methods are per-branch master
 // data now, same as purchasing/staff.
@@ -89,6 +121,7 @@ onMounted(async () => {
   if (isAdmin.value) {
     await loadAccounts()
     allStaff.value = await fetchAllStaff()
+    await loadOrg()
   }
 })
 
@@ -463,6 +496,25 @@ async function handleChangePassword() {
       </div>
     </div>
 
+    <div v-if="isAdmin" class="card">
+      <h3>{{ t('settings.brandSection') }}</h3>
+      <p class="section-hint">{{ t('settings.brandHint') }}</p>
+      <div class="brand-row">
+        <img v-if="orgLogoInput" :src="orgLogoInput" alt="" class="brand-preview" />
+        <div v-else class="brand-preview brand-preview-empty">{{ t('settings.brandNoLogo') }}</div>
+        <div class="brand-input">
+          <el-input
+            v-model="orgLogoInput"
+            :placeholder="t('settings.brandLogoPlaceholder')"
+            clearable
+          />
+          <el-button type="primary" :loading="orgSaving" :disabled="orgLogoInput === orgLogoSaved" @click="saveOrgLogo">
+            {{ t('common.save') }}
+          </el-button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="!isAdmin" class="card">
       <h3>{{ t('settings.branchInfoSection') }}</h3>
       <p class="section-hint">{{ t('settings.branchInfoHint') }}</p>
@@ -700,6 +752,38 @@ async function handleChangePassword() {
   justify-content: space-between;
   padding: 12px 0;
   border-top: 1px solid var(--border);
+}
+
+.brand-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.brand-preview {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.brand-preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: 4px;
+  box-sizing: border-box;
+}
+
+.brand-input {
+  display: flex;
+  gap: 8px;
+  flex: 1;
 }
 
 .preference-label {

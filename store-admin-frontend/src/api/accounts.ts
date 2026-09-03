@@ -76,3 +76,33 @@ export async function changeOwnPassword(oldPassword: string, newPassword: string
     throw err
   }
 }
+
+export interface OrganizationInfo {
+  code: string
+  nameZh: string
+  nameJa: string
+  logoUrl: string
+}
+
+export async function fetchOrganization(): Promise<OrganizationInfo> {
+  const d = await http.get<{ code: string; name_zh: string; name_ja: string; logo_url: string }>(
+    '/organization/',
+  )
+  return { code: d.code, nameZh: d.name_zh, nameJa: d.name_ja, logoUrl: d.logo_url }
+}
+
+export async function updateOrganization(patch: {
+  nameZh?: string
+  nameJa?: string
+  logoUrl?: string
+}): Promise<OrganizationInfo> {
+  const d = await http.patch<{ code: string; name_zh: string; name_ja: string; logo_url: string }>(
+    '/organization/',
+    {
+      ...(patch.nameZh !== undefined ? { name_zh: patch.nameZh } : {}),
+      ...(patch.nameJa !== undefined ? { name_ja: patch.nameJa } : {}),
+      ...(patch.logoUrl !== undefined ? { logo_url: patch.logoUrl } : {}),
+    },
+  )
+  return { code: d.code, nameZh: d.name_zh, nameJa: d.name_ja, logoUrl: d.logo_url }
+}

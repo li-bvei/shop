@@ -184,3 +184,26 @@ class StaffRolePermissionBoundaryTests(ApiTestCase):
         self.assertEqual(self.client.get('/api/staff/').status_code, 200)
         self.login_as(self.branch_a_user)
         self.assertEqual(self.client.get('/api/staff/').status_code, 200)
+
+
+class OrganizationEndpointTests(ApiTestCase):
+    def test_any_role_reads_own_org_admin_only_writes_logo(self):
+        self.login_as(self.staff_user)
+        got = self.client.get('/api/organization/')
+        self.assertEqual(got.status_code, 200)
+        self.assertIn('logo_url', got.data)
+
+        # branch cannot change it
+        self.login_as(self.branch_a_user)
+        self.assertEqual(
+            self.client.patch('/api/organization/', {'logo_url': 'https://x/l.png'}).status_code, 403,
+        )
+
+        # admin can
+        self.login_as(self.admin)
+        ok = self.client.patch('/api/organization/', {'logo_url': 'https://cdn.example.com/logo.png'})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(ok.data['logo_url'], 'https://cdn.example.com/logo.png')
+
+        bad = self.client.patch('/api/organization/', {'logo_url': 'not a url'})
+        self.assertEqual(bad.status_code, 400)

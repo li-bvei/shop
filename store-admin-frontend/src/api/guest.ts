@@ -99,6 +99,9 @@ export interface MilestoneProgress {
 export interface GuestCard {
   cardToken: string
   name: string
+  orgNameZh: string
+  orgNameJa: string
+  orgLogoUrl: string
   pointsBalance: number
   lifetimePoints: number
   stampCount: number
@@ -148,6 +151,9 @@ interface CardDto {
   card_token?: string
   has_pin?: boolean
   name: string
+  org_name_zh?: string
+  org_name_ja?: string
+  org_logo_url?: string
   points_balance: number
   lifetime_points: number
   stamp_count: number
@@ -191,6 +197,9 @@ function fromCardDto(dto: CardDto): GuestCard {
   return {
     cardToken: dto.card_token ?? '',
     name: dto.name,
+    orgNameZh: dto.org_name_zh ?? '',
+    orgNameJa: dto.org_name_ja ?? '',
+    orgLogoUrl: dto.org_logo_url ?? '',
     pointsBalance: dto.points_balance,
     lifetimePoints: dto.lifetime_points ?? 0,
     stampCount: dto.stamp_count,
@@ -338,21 +347,27 @@ export async function register(payload: RegisterPayload): Promise<RegisterResult
   }
 }
 
-/** One entry per chain when a phone is registered at more than one — the
- * caller shows a "which card?" picker and re-requests with `org`. */
+/** One entry per chain when a phone holds a card at more than one — the
+ * caller shows a merchant picker and re-requests with `org`. */
 export interface RecoveryOption {
   org: string
   orgNameZh: string
   orgNameJa: string
+  logoUrl: string
 }
 
-interface AmbiguousDto {
-  ambiguous: true
-  options: Array<{ org: string; org_name_zh: string; org_name_ja: string }>
+interface MultipleDto {
+  multiple: true
+  options: Array<{ org: string; org_name_zh: string; org_name_ja: string; logo_url: string }>
 }
 
-function toOptions(d: AmbiguousDto): RecoveryOption[] {
-  return d.options.map((o) => ({ org: o.org, orgNameZh: o.org_name_zh, orgNameJa: o.org_name_ja }))
+function toOptions(d: MultipleDto): RecoveryOption[] {
+  return d.options.map((o) => ({
+    org: o.org,
+    orgNameZh: o.org_name_zh,
+    orgNameJa: o.org_name_ja,
+    logoUrl: o.logo_url,
+  }))
 }
 
 export async function guestLogin(
@@ -360,11 +375,11 @@ export async function guestLogin(
   birthdayMd: string,
   org?: string,
 ): Promise<{ card: GuestCard } | { options: RecoveryOption[] }> {
-  const dto = await guestRequest<CardDto | AmbiguousDto>('/guest/login/', {
+  const dto = await guestRequest<CardDto | MultipleDto>('/guest/login/', {
     method: 'POST',
     body: JSON.stringify({ phone, birthday_md: birthdayMd, ...(org ? { org } : {}) }),
   })
-  if ('ambiguous' in dto) return { options: toOptions(dto) }
+  if ('multiple' in dto) return { options: toOptions(dto) }
   return { card: fromCardDto(dto) }
 }
 
@@ -379,12 +394,12 @@ export async function recoverCard(
 ): Promise<{ result: RegisterResult } | { options: RecoveryOption[] }> {
   const dto = await guestRequest<
     | { card_token: string; name?: string; points_balance?: number; stamp_count?: number }
-    | AmbiguousDto
+    | MultipleDto
   >('/guest/recover/', {
     method: 'POST',
     body: JSON.stringify({ phone, birthday_md: birthdayMd, pin, ...(org ? { org } : {}) }),
   })
-  if ('ambiguous' in dto) return { options: toOptions(dto) }
+  if ('multiple' in dto) return { options: toOptions(dto) }
   setGuestToken(dto.card_token)
   return {
     result: {

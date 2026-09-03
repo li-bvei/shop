@@ -613,6 +613,10 @@ export default {
   settings: {
     pageTitle: '設定',
     preferenceSection: '言語とテーマ',
+    brandSection: 'ブランドロゴ',
+    brandHint: 'お客様のポイントカード・発行・復元ページに表示されます。公開アクセスできる画像URLを入力してください',
+    brandNoLogo: 'なし',
+    brandLogoPlaceholder: 'ロゴ画像URL（https://…）',
     preferenceHint: '設定は自動的にアカウントに同期されます',
     languageLabel: '表示言語',
     themeLabel: 'ダークモード',

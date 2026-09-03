@@ -92,7 +92,7 @@ function submit() {
     <h1>{{ t('guest.loginTitle') }}</h1>
     <p v-if="cameFromExisting" class="notice notice-info">{{ t('guest.existingHint') }}</p>
 
-    <!-- "which card?" picker -->
+    <!-- merchant picker -->
     <template v-if="pickerOptions">
       <p class="lead">{{ t('guest.pickCardLead') }}</p>
       <div class="picker">
@@ -104,7 +104,8 @@ function submit() {
           :disabled="submitting"
           @click="run(o.org)"
         >
-          {{ orgName(o) }}
+          <img v-if="o.logoUrl" :src="o.logoUrl" alt="" class="picker-logo" />
+          <span>{{ orgName(o) }}</span>
         </button>
       </div>
       <button type="button" class="text-btn" @click="pickerOptions = null">{{ t('common.back') }}</button>
@@ -295,7 +296,11 @@ select:focus {
 }
 
 .picker-item {
-  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-alt);
@@ -303,6 +308,15 @@ select:focus {
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
+  text-align: left;
+}
+
+.picker-logo {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 6px;
+  flex-shrink: 0;
 }
 
 .picker-item:disabled {

@@ -11,6 +11,10 @@ class Organization(models.Model):
     code = models.SlugField(max_length=50, unique=True)
     name_zh = models.CharField(max_length=100)
     name_ja = models.CharField(max_length=100)
+    # Brand logo for the customer-facing loyalty pages (register / recovery
+    # / card). A URL the chain hosts themselves — the platform has no media
+    # storage. Empty = the pages just show the name.
+    logo_url = models.URLField(blank=True, default='')
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

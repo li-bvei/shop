@@ -26,7 +26,7 @@ import SlideToConfirm from '@/components/SlideToConfirm.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const ONBOARDED_KEY = 'pc_onboarded'
 function hasOnboarded() {
@@ -120,6 +120,10 @@ const stampCells = computed(() => {
 })
 
 const c = computed(() => card.value?.campaign ?? {})
+const orgLogo = computed(() => card.value?.orgLogoUrl ?? '')
+const orgName = computed(() =>
+  card.value ? (locale.value === 'ja' ? card.value.orgNameJa : card.value.orgNameZh) : '',
+)
 const canDrawWithPoints = computed(
   () => !!c.value.hasPrizes && !!c.value.pointsPerDraw && (card.value?.pointsBalance ?? 0) >= c.value.pointsPerDraw,
 )
@@ -341,6 +345,10 @@ onBeforeUnmount(() => {
 
     <template v-else-if="card">
       <div class="card qr-card">
+        <div v-if="orgLogo || orgName" class="brand">
+          <img v-if="orgLogo" :src="orgLogo" alt="" class="brand-logo" />
+          <span v-else class="brand-name">{{ orgName }}</span>
+        </div>
         <div class="greeting">
           <span class="hello">{{ card.name ? t('guest.helloName', { name: card.name }) : t('guest.hello') }}</span>
           <span v-if="readonly" class="readonly-badge">{{ t('guest.readonlyBadge') }}</span>
@@ -621,6 +629,24 @@ h2 {
 
 .qr-card {
   text-align: center;
+}
+
+.brand {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.brand-logo {
+  max-height: 40px;
+  max-width: 60%;
+  object-fit: contain;
+}
+
+.brand-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
 }
 
 .greeting {

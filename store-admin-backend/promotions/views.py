@@ -117,8 +117,12 @@ def _card_payload(customer, *, include_token=False):
     ledger = customer.points_ledger.select_related('operator').all()[:30]
     vouchers = customer.vouchers.filter(status=Voucher.Status.ACTIVE).order_by('expires_at')[:50]
     milestones = _milestone_progress(customer, campaign) if campaign_active else []
+    org = customer.organization
     payload = {
         'name': customer.name,
+        'org_name_zh': org.name_zh,
+        'org_name_ja': org.name_ja,
+        'org_logo_url': org.logo_url,
         'points_balance': customer.points_balance,
         'lifetime_points': customer.lifetime_points_earned,
         'stamp_count': customer.stamp_count,
@@ -189,14 +193,16 @@ class GuestRegisterView(APIView):
 
 
 def _recovery_options(customers):
-    """The "which card?" picker payload — just enough to name each chain."""
+    """The merchant picker payload — the customer holds a card at more than
+    one chain, so they choose which to open (each shown with its logo)."""
     return {
-        'ambiguous': True,
+        'multiple': True,
         'options': [
             {
                 'org': str(c.organization_id),
                 'org_name_zh': c.organization.name_zh,
                 'org_name_ja': c.organization.name_ja,
+                'logo_url': c.organization.logo_url,
             }
             for c in customers
         ],

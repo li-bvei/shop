@@ -752,7 +752,7 @@ class CrossOrganizationIsolationTests(TwoOrganizationApiTestCase):
         login = self.client.post('/api/guest/login/',
                                  {'phone': '08099998888', 'birthday_md': '03-07'}, format='json')
         self.assertEqual(login.status_code, 200)
-        self.assertTrue(login.data['ambiguous'])
+        self.assertTrue(login.data['multiple'])
         self.assertEqual(len(login.data['options']), 2)
 
         recover = self.client.post(
@@ -760,7 +760,7 @@ class CrossOrganizationIsolationTests(TwoOrganizationApiTestCase):
             {'phone': '08099998888', 'birthday_md': '03-07', 'pin': '481902'}, format='json',
         )
         self.assertEqual(recover.status_code, 200)
-        self.assertTrue(recover.data['ambiguous'])
+        self.assertTrue(recover.data['multiple'])
 
         # picking a chain resolves to exactly that card
         picked = self.client.post(

@@ -1,6 +1,7 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -21,6 +22,40 @@ class MeView(RetrieveAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class OrganizationView(APIView):
+    """The caller's own tenant. Every role may read it (the customer-facing
+    loyalty pages need the brand logo); only an admin may change the
+    display name / logo."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(_org_body(request.user.organization))
+
+    def patch(self, request):
+        if request.user.role != request.user.Role.ADMIN:
+            raise PermissionDenied('admin-only')
+        org = request.user.organization
+        for field in ('name_zh', 'name_ja', 'logo_url'):
+            if field in request.data:
+                setattr(org, field, (request.data[field] or '').strip())
+        try:
+            org.full_clean(exclude=['code'])
+        except DjangoValidationError as exc:
+            raise ValidationError(exc.message_dict)
+        org.save(update_fields=['name_zh', 'name_ja', 'logo_url', 'updated_at'])
+        return Response(_org_body(org))
+
+
+def _org_body(org):
+    return {
+        'code': org.code,
+        'name_zh': org.name_zh,
+        'name_ja': org.name_ja,
+        'logo_url': org.logo_url,
+    }
 
 
 class PreferenceView(APIView):

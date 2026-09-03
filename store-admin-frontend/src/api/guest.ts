@@ -319,6 +319,25 @@ export class AlreadyRegisteredError extends Error {
   }
 }
 
+/** The chain's brand identity behind a printed store-QR token — used to
+ * show the logo on the register page before the customer types anything. */
+export interface StoreContext {
+  orgNameZh: string
+  orgNameJa: string
+  orgLogoUrl: string
+}
+
+export async function fetchStoreContext(storeToken: string): Promise<StoreContext> {
+  const d = await guestRequest<{ org_name_zh?: string; org_name_ja?: string; org_logo_url?: string }>(
+    `/guest/store-context/?t=${encodeURIComponent(storeToken)}`,
+  )
+  return {
+    orgNameZh: d.org_name_zh ?? '',
+    orgNameJa: d.org_name_ja ?? '',
+    orgLogoUrl: d.org_logo_url ?? '',
+  }
+}
+
 export async function register(payload: RegisterPayload): Promise<RegisterResult> {
   const dto = await guestRequest<{
     existing?: boolean

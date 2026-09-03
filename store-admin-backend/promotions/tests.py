@@ -353,6 +353,21 @@ class GuestApiTests(ApiTestCase):
         self.assertIn('birthday', str(resp.data))
         self.assertFalse(Customer.objects.exists())
 
+    def test_store_context_returns_the_chain_brand(self):
+        self.org.logo_url = 'https://cdn.example.com/logo.png'
+        self.org.save(update_fields=['logo_url'])
+        resp = self.client.get('/api/guest/store-context/', {'t': self.store_token})
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertEqual(resp.data['org_name_ja'], self.org.name_ja)
+        self.assertEqual(resp.data['org_logo_url'], 'https://cdn.example.com/logo.png')
+        # never leaks the campaign / token internals
+        self.assertNotIn('card_token', resp.data)
+
+    def test_store_context_rejects_a_bad_token(self):
+        resp = self.client.get('/api/guest/store-context/', {'t': 'not-a-real-token'})
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('store-token-invalid', str(resp.data))
+
     def test_public_register_ignores_spend_fields(self):
         resp = self.client.post('/api/guest/register/', {
             'store_token': self.store_token, 'phone': '09012345678',

@@ -1,17 +1,34 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ApiError } from '@/api/http'
-import { AlreadyRegisteredError, register } from '@/api/guest'
+import { AlreadyRegisteredError, fetchStoreContext, register, type StoreContext } from '@/api/guest'
 
 const route = useRoute()
 const router = useRouter()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const storeToken = computed(() => (route.query.t as string) || '')
 const submitting = ref(false)
 const errorMsg = ref('')
+
+// The chain's brand, resolved from the store-QR token — shown before the
+// customer fills anything in so they know whose card they're opening.
+const store = ref<StoreContext | null>(null)
+const brandLogo = computed(() => store.value?.orgLogoUrl ?? '')
+const brandName = computed(() =>
+  store.value ? (locale.value === 'ja' ? store.value.orgNameJa : store.value.orgNameZh) : '',
+)
+
+onMounted(async () => {
+  if (!storeToken.value) return
+  try {
+    store.value = await fetchStoreContext(storeToken.value)
+  } catch {
+    /* a bad/closed token surfaces on submit — no need to pre-empt it here */
+  }
+})
 
 const form = reactive({
   phone: '',
@@ -81,6 +98,10 @@ async function submit() {
 
 <template>
   <div class="card">
+    <div v-if="brandLogo || brandName" class="brand">
+      <img v-if="brandLogo" :src="brandLogo" alt="" class="brand-logo" />
+      <span v-else class="brand-name">{{ brandName }}</span>
+    </div>
     <h1>{{ t('guest.registerTitle') }}</h1>
     <p class="lead">{{ t('guest.registerLead') }}</p>
 
@@ -156,6 +177,24 @@ async function submit() {
   box-shadow: var(--shadow-card);
   padding: 28px 24px 24px;
   margin-top: 24px;
+}
+
+.brand {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.brand-logo {
+  max-height: 44px;
+  max-width: 65%;
+  object-fit: contain;
+}
+
+.brand-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
 }
 
 h1 {

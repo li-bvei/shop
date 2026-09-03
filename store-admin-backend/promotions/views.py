@@ -192,6 +192,26 @@ class GuestRegisterView(APIView):
         return _set_guest_cookie(Response(body, status=201), customer.card_token)
 
 
+class GuestStoreContextView(APIView):
+    """Public — resolves a printed store-QR token to just the chain's
+    display identity, so the register page can show the brand logo before
+    the customer has typed anything. Same vague failure as registration
+    (a bad/closed token must not reveal which)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestReadThrottle]
+
+    def get(self, request):
+        campaign = load_store_token(request.query_params.get('t', ''))
+        org = campaign.branch.organization
+        return Response({
+            'org_name_zh': org.name_zh,
+            'org_name_ja': org.name_ja,
+            'org_logo_url': org.logo_url,
+        })
+
+
 def _recovery_options(customers):
     """The merchant picker payload — the customer holds a card at more than
     one chain, so they choose which to open (each shown with its logo)."""

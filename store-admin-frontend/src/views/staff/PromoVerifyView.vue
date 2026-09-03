@@ -33,6 +33,13 @@ const lastResult = ref<{ pointsGranted: number; pointsBalance: number; stampCoun
 const busy = ref(false)
 const recent = ref<SpendVerification[]>([])
 
+// One id per (customer, amount screen). A retry after a timeout reuses it
+// so the backend won't double-grant; a new customer gets a fresh one.
+const requestId = ref('')
+function newRequestId() {
+  return `sv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 let resetTimer: ReturnType<typeof setTimeout> | undefined
 
 const stampTarget = computed(() => customer.value?.stampTarget ?? 0)
@@ -56,6 +63,7 @@ function resetToScan() {
   tableNumber.value = ''
   customer.value = null
   lastResult.value = null
+  requestId.value = ''
   focusScan()
 }
 
@@ -81,6 +89,7 @@ async function handleLookup() {
   try {
     const query = manualMode.value === 'phone' ? { phone: raw } : { cardToken: raw }
     customer.value = await lookupCustomer(query)
+    requestId.value = newRequestId()
     stage.value = 'amount'
     focusAmount()
   } catch (err) {
@@ -113,6 +122,7 @@ async function handleConfirm() {
       ...query,
       amountYen: Math.round(value),
       tableNumber: tableNumber.value.trim(),
+      requestId: requestId.value,
     })
     lastResult.value = {
       pointsGranted: res.pointsGranted,

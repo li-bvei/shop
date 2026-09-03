@@ -39,6 +39,25 @@ MAX_SPEND_YEN = 1_000_000
 
 
 # ---------------------------------------------------------------------------
+# Campaign availability
+# ---------------------------------------------------------------------------
+
+def campaign_is_open(campaign, now=None) -> bool:
+    """Usable for registration / spend confirmation / points spend / draw:
+    ACTIVE *and* within [starts_at, ends_at). Either bound null = open on
+    that side. `status` alone is not enough — an ACTIVE campaign that has
+    not started, or is past its end, must behave as closed everywhere."""
+    if not campaign or campaign.status != Campaign.Status.ACTIVE:
+        return False
+    now = now or timezone.now()
+    if campaign.starts_at and now < campaign.starts_at:
+        return False
+    if campaign.ends_at and now >= campaign.ends_at:
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Store QR token (printed sticker -> campaign + branch)
 # ---------------------------------------------------------------------------
 
@@ -47,9 +66,9 @@ def make_store_token(campaign) -> str:
 
 
 def load_store_token(token: str) -> Campaign:
-    """Resolve a printed store-QR token to its active campaign, or 400 with
-    a deliberately vague message (a bad token must not reveal whether the
-    campaign merely exists)."""
+    """Resolve a printed store-QR token to its open campaign, or 400 with a
+    deliberately vague message (a bad token must not reveal whether the
+    campaign merely exists, or is just not running yet)."""
     try:
         data = signing.loads(token or '', salt=STORE_TOKEN_SALT)
     except signing.BadSignature:
@@ -57,10 +76,10 @@ def load_store_token(token: str) -> Campaign:
     campaign = (
         Campaign.objects
         .select_related('branch', 'branch__organization')
-        .filter(pk=data.get('c'), status=Campaign.Status.ACTIVE)
+        .filter(pk=data.get('c'))
         .first()
     )
-    if not campaign:
+    if not campaign_is_open(campaign):
         raise ValidationError({'store_token': ['store-token-invalid']})
     return campaign
 
@@ -221,14 +240,17 @@ def touch_customer_seen(customer) -> None:
 # ---------------------------------------------------------------------------
 
 def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
-                 consumed_at=None, verified_by=None, ip=None) -> SpendVerification:
+                 consumed_at=None, verified_by=None, ip=None, request_id='') -> SpendVerification:
     """Record a staff-confirmed spend: log the visit (once per business
     day), grant points (¥1,000 -> campaign.points_per_1000yen), advance the
     stamp card if enabled. All in one transaction under a Customer row
-    lock."""
+    lock. `request_id` (optional) makes a retried / double-tapped request
+    idempotent — every *real* spend still earns, but the same id twice
+    returns the first result."""
+    request_id = (request_id or '').strip()[:64]
     if campaign.branch_id != branch.id:
         raise ValidationError({'campaign': ['campaign-branch-mismatch']})
-    if campaign.status != Campaign.Status.ACTIVE:
+    if not campaign_is_open(campaign):
         raise ValidationError({'campaign': ['campaign-not-active']})
     if customer.organization_id != branch.organization_id:
         raise ValidationError({'customer': ['customer-outside-organization']})
@@ -256,15 +278,23 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
     local_date = business_local_date(consumed_at, campaign.business_day_cutover)
 
     points = amount_yen // 1000 * campaign.points_per_1000yen
-    direct_draws = (
-        1 if campaign.direct_draw_threshold_yen and amount_yen >= campaign.direct_draw_threshold_yen
-        else 0
+    qualifies_for_draw = bool(
+        campaign.direct_draw_threshold_yen
+        and amount_yen >= campaign.direct_draw_threshold_yen
     )
+    direct_draws = campaign.max_draws_per_verification if qualifies_for_draw else 0
 
     with transaction.atomic():
         locked = Customer.objects.select_for_update().get(pk=customer.pk)
         if locked.status == Customer.Status.BLOCKED:
             raise ValidationError({'customer': ['customer-blocked']})
+
+        if request_id:
+            prior = SpendVerification.objects.filter(
+                customer=locked, campaign=campaign, request_id=request_id,
+            ).first()
+            if prior:
+                return prior
 
         check_in, ci_created = CheckInRecord.objects.get_or_create(
             customer=locked, campaign=campaign, local_date=local_date,
@@ -275,7 +305,7 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
             customer=locked, check_in_record=check_in, campaign=campaign, branch=branch,
             table_number=(table_number or '').strip()[:16], amount_yen=amount_yen,
             consumed_at=consumed_at, points_granted=points, direct_draws_granted=direct_draws,
-            verified_by=verified_by, source_ip=ip,
+            verified_by=verified_by, source_ip=ip, request_id=request_id,
         )
         if ci_created:
             check_in.spend_verification = verification
@@ -575,7 +605,7 @@ def draw_lottery(*, campaign, branch, customer, source, request_id,
     if existing:
         return existing
 
-    if campaign.status != Campaign.Status.ACTIVE:
+    if not campaign_is_open(campaign):
         raise ValidationError({'campaign': ['campaign-not-active']})
 
     now = timezone.now()
@@ -686,7 +716,7 @@ def redeem_points(*, customer, campaign, kind, request_id, branch=None) -> dict:
     request_id = (request_id or '').strip()
     if not request_id:
         raise ValidationError({'request_id': ['request-id-required']})
-    if campaign.status != Campaign.Status.ACTIVE:
+    if not campaign_is_open(campaign):
         raise ValidationError({'campaign': ['campaign-not-active']})
 
     if kind == 'draw':

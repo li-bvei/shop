@@ -60,9 +60,10 @@ class NormalizePhoneTests(ApiTestCase):
     def test_birthday_md_normalization(self):
         self.assertEqual(normalize_birthday_md('3/7'), '03-07')
         self.assertEqual(normalize_birthday_md('12-25'), '12-25')
-        self.assertEqual(normalize_birthday_md('2月29日'), '02-29')
+        self.assertEqual(normalize_birthday_md('2月29日'), '02-29')  # no year -> Feb 29 ok
         self.assertEqual(normalize_birthday_md(''), '')
-        for bad in ['13-01', '00-10', '01-32', 'abc', '5']:
+        for bad in ['13-01', '00-10', '01-32', 'abc', '5',
+                    '02-30', '02-31', '04-31', '06-31', '09-31', '11-31']:
             with self.assertRaises(ValidationError):
                 normalize_birthday_md(bad)
 
@@ -167,6 +168,40 @@ class VerifySpendServiceTests(ApiTestCase):
             verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
                          amount_yen=50_000_000, verified_by=self.staff_user)
         self.assertEqual(SpendVerification.objects.count(), 0)
+
+    def test_verify_spend_is_idempotent_on_request_id(self):
+        v1 = verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                          amount_yen=3000, verified_by=self.staff_user, request_id='sv-1')
+        v2 = verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                          amount_yen=3000, verified_by=self.staff_user, request_id='sv-1')
+        self.assertEqual(v1.id, v2.id)
+        self.assertEqual(SpendVerification.objects.count(), 1)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.points_balance, 30)  # granted once
+        # a genuinely new spend (new id) still earns
+        verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                     amount_yen=3000, verified_by=self.staff_user, request_id='sv-2')
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.points_balance, 60)
+
+    def test_campaign_time_window_gates_spend(self):
+        future = make_campaign(self.branch_a, starts_at=timezone.now() + timedelta(days=1))
+        with self.assertRaises(ValidationError):
+            verify_spend(campaign=future, branch=self.branch_a, customer=self.customer,
+                         amount_yen=2000, verified_by=self.staff_user)
+        ended = make_campaign(self.branch_a, ends_at=timezone.now() - timedelta(minutes=1))
+        with self.assertRaises(ValidationError):
+            verify_spend(campaign=ended, branch=self.branch_a, customer=self.customer,
+                         amount_yen=2000, verified_by=self.staff_user)
+
+    def test_max_draws_per_verification_controls_granted_chances(self):
+        self.campaign.direct_draw_threshold_yen = 3000
+        self.campaign.max_draws_per_verification = 3
+        self.campaign.save(update_fields=['direct_draw_threshold_yen', 'max_draws_per_verification'])
+        verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                     amount_yen=3500, verified_by=self.staff_user)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.draw_chances, 3)
 
     def test_recent_backdate_ok_but_stale_backdate_rejected(self):
         # A sale earlier in the same shift, confirmed a bit later: fine.
@@ -1109,6 +1144,27 @@ class Phase2ApiTests(ApiTestCase):
         }, format='json')
         self.assertEqual(bad.status_code, 400)
         self.assertIn('face_yen', str(bad.data))
+
+    def test_limited_prize_gets_remaining_stock_on_create_and_edit(self):
+        self.login_as(self.admin)
+        made = self.client.post('/api/promotions/prizes/', {
+            'campaign': self.campaign.id, 'name': '限定', 'weight': 1,
+            'reward_type': 'drink', 'total_stock': 10,
+        }, format='json')
+        self.assertEqual(made.status_code, 201, made.content)
+        prize = Prize.objects.get(pk=made.data['id'])
+        self.assertEqual(prize.remaining_stock, 10)
+
+        # consume 3, then admin raises the cap to 20 -> remaining tracks it
+        Prize.objects.filter(pk=prize.pk).update(remaining_stock=7)
+        self.client.patch(f'/api/promotions/prizes/{prize.pk}/', {'total_stock': 20}, format='json')
+        prize.refresh_from_db()
+        self.assertEqual(prize.remaining_stock, 17)  # 20 - 3 consumed
+
+        # switching to unlimited clears the cap
+        self.client.patch(f'/api/promotions/prizes/{prize.pk}/', {'total_stock': None}, format='json')
+        prize.refresh_from_db()
+        self.assertIsNone(prize.remaining_stock)
 
     def test_prize_writes_are_admin_only_branch_reads(self):
         # §15 decision 09 — prize economics is chain-level.

@@ -77,12 +77,15 @@ const blankCampaign = (): CampaignPayload => ({
   name: '',
   description: '',
   status: 'draft',
+  startsAt: null,
+  endsAt: null,
   pointsPer1000yen: 10,
   pointsPerDraw: 100,
   pointsPerVoucher: 100,
   voucherYenPerUnit: 100,
   pointsExpireMonths: 12,
   directDrawThresholdYen: null,
+  maxDrawsPerVerification: 1,
   maxDrawsPerCustomerPerDay: 10,
   stampTarget: 5,
   businessDayCutover: '05:00',
@@ -111,12 +114,15 @@ function openCampaignEdit(row: Campaign) {
     name: row.name,
     description: row.description,
     status: row.status,
+    startsAt: row.startsAt,
+    endsAt: row.endsAt,
     pointsPer1000yen: row.pointsPer1000yen,
     pointsPerDraw: row.pointsPerDraw,
     pointsPerVoucher: row.pointsPerVoucher,
     voucherYenPerUnit: row.voucherYenPerUnit,
     pointsExpireMonths: row.pointsExpireMonths,
     directDrawThresholdYen: row.directDrawThresholdYen,
+    maxDrawsPerVerification: row.maxDrawsPerVerification,
     maxDrawsPerCustomerPerDay: row.maxDrawsPerCustomerPerDay,
     stampTarget: row.stampTarget,
     businessDayCutover: row.businessDayCutover?.slice(0, 5) ?? '05:00',
@@ -762,6 +768,24 @@ onMounted(async () => {
           <el-form-item :label="t('promotions.businessDayCutover')">
             <el-time-picker v-model="campaignForm.businessDayCutover" value-format="HH:mm" format="HH:mm" style="width: 100%" />
           </el-form-item>
+          <el-form-item :label="t('promotions.startsAt')">
+            <el-date-picker
+              v-model="campaignForm.startsAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              :placeholder="t('promotions.timeOpenEnded')"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item :label="t('promotions.endsAt')">
+            <el-date-picker
+              v-model="campaignForm.endsAt"
+              type="datetime"
+              value-format="YYYY-MM-DDTHH:mm:ss"
+              :placeholder="t('promotions.timeOpenEnded')"
+              style="width: 100%"
+            />
+          </el-form-item>
           <el-form-item :label="t('promotions.earnRateLabel')">
             <el-input v-model.number="campaignForm.pointsPer1000yen" type="number" />
           </el-form-item>
@@ -777,6 +801,9 @@ onMounted(async () => {
           </el-form-item>
           <el-form-item :label="t('promotions.maxDrawsPerDay')">
             <el-input v-model.number="campaignForm.maxDrawsPerCustomerPerDay" type="number" />
+          </el-form-item>
+          <el-form-item :label="t('promotions.maxDrawsPerVerification')">
+            <el-input v-model.number="campaignForm.maxDrawsPerVerification" type="number" />
           </el-form-item>
         </div>
         <p class="phase-note">{{ t('promotions.phase2Note') }}</p>

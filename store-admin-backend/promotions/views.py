@@ -28,10 +28,10 @@ from .serializers import (
     SpendVerificationSerializer, StaffPermissionSerializer, VoucherSerializer,
 )
 from .services import (
-    GUEST_COOKIE_MAX_AGE, GUEST_COOKIE_NAME, adjust_points, delete_customer_by_phone, draw_lottery,
-    guest_redeem_voucher, load_store_token, recover_card, redeem_points, redeem_voucher,
-    register_customer, set_customer_pin, staff_can, touch_customer_seen, verify_spend,
-    void_spend_verification,
+    GUEST_COOKIE_MAX_AGE, GUEST_COOKIE_NAME, adjust_points, campaign_is_open,
+    delete_customer_by_phone, draw_lottery, guest_redeem_voucher, load_store_token, recover_card,
+    redeem_points, redeem_voucher, register_customer, set_customer_pin, staff_can,
+    touch_customer_seen, verify_spend, void_spend_verification,
 )
 from .throttling import GuestReadThrottle, GuestWriteThrottle, StaffVerifyThrottle
 from .utils import client_ip, normalize_birthday_md, normalize_phone
@@ -100,7 +100,7 @@ def _card_payload(customer, *, include_token=False):
     stranger who knows your number can view, never take), so it must never
     receive the token back."""
     campaign = customer.registered_campaign
-    campaign_active = bool(campaign and campaign.status == Campaign.Status.ACTIVE)
+    campaign_active = campaign_is_open(campaign)
     if campaign_active:
         campaign_info = {
             'name': campaign.name,
@@ -314,7 +314,7 @@ class GuestCardView(APIView):
 
 def _active_campaign_for(customer):
     campaign = customer.registered_campaign
-    if not campaign or campaign.status != Campaign.Status.ACTIVE:
+    if not campaign_is_open(campaign):
         raise ValidationError({'campaign': ['no-active-campaign']})
     return campaign
 
@@ -705,6 +705,7 @@ class SpendVerificationViewSet(viewsets.ModelViewSet):
             table_number=request.data.get('table_number', ''),
             consumed_at=consumed_at,
             verified_by=user, ip=client_ip(request),
+            request_id=request.data.get('request_id', ''),
         )
         customer.refresh_from_db()
         return Response({
@@ -858,6 +859,28 @@ class PrizeViewSet(_CampaignChildViewSet):
 
     def get_queryset(self):
         return super().get_queryset().prefetch_related('campaign__prizes')
+
+    def perform_create(self, serializer):
+        self._require_admin()
+        campaign = _campaign_in_scope(self.request.user, self.request.data.get('campaign'))
+        # A limited prize (total_stock set) starts with its full stock
+        # available; unlimited keeps remaining_stock null. `remaining_stock`
+        # is a read-only serializer field, so it's only ever set here.
+        total = serializer.validated_data.get('total_stock')
+        serializer.save(campaign=campaign, remaining_stock=total)
+
+    def perform_update(self, serializer):
+        self._require_admin()
+        prize = serializer.instance
+        new_total = serializer.validated_data.get('total_stock', prize.total_stock)
+        extra = {'campaign': prize.campaign}
+        if new_total != prize.total_stock:
+            if new_total is None:
+                extra['remaining_stock'] = None
+            else:
+                consumed = max(0, (prize.total_stock or 0) - (prize.remaining_stock or 0))
+                extra['remaining_stock'] = max(0, new_total - consumed)
+        serializer.save(**extra)
 
 
 class MilestoneViewSet(_CampaignChildViewSet):

@@ -110,12 +110,15 @@ export interface CampaignPayload {
   name: string
   description?: string
   status: CampaignStatus
+  startsAt: string | null
+  endsAt: string | null
   pointsPer1000yen: number
   pointsPerDraw: number
   pointsPerVoucher: number
   voucherYenPerUnit: number
   pointsExpireMonths: number
   directDrawThresholdYen: number | null
+  maxDrawsPerVerification: number
   maxDrawsPerCustomerPerDay: number
   stampTarget: number | null
   businessDayCutover: string
@@ -127,12 +130,15 @@ function toCampaignDto(p: CampaignPayload): Record<string, unknown> {
     name: p.name,
     description: p.description ?? '',
     status: p.status,
+    starts_at: p.startsAt,
+    ends_at: p.endsAt,
     points_per_1000yen: p.pointsPer1000yen,
     points_per_draw: p.pointsPerDraw,
     points_per_voucher: p.pointsPerVoucher,
     voucher_yen_per_unit: p.voucherYenPerUnit,
     points_expire_months: p.pointsExpireMonths,
     direct_draw_threshold_yen: p.directDrawThresholdYen,
+    max_draws_per_verification: p.maxDrawsPerVerification,
     max_draws_per_customer_per_day: p.maxDrawsPerCustomerPerDay,
     stamp_target: p.stampTarget,
     business_day_cutover: p.businessDayCutover,
@@ -340,6 +346,7 @@ export async function confirmSpend(payload: {
   tableNumber?: string
   branchId?: string
   campaignId?: string
+  requestId?: string
 }): Promise<SpendResult> {
   const res = await http.post<{
     id: number
@@ -353,6 +360,7 @@ export async function confirmSpend(payload: {
     ...(payload.phone ? { phone: payload.phone } : {}),
     ...(payload.branchId ? { branch: payload.branchId } : {}),
     ...(payload.campaignId ? { campaign: payload.campaignId } : {}),
+    ...(payload.requestId ? { request_id: payload.requestId } : {}),
     amount_yen: payload.amountYen,
     table_number: payload.tableNumber ?? '',
   })

@@ -249,6 +249,13 @@ class SpendVerification(models.Model):
     consumed_at = models.DateTimeField()
     points_granted = models.IntegerField(default=0)
     direct_draws_granted = models.PositiveIntegerField(default=0)  # phase 2.5 dual track
+    # Idempotency anchor for one confirmation. Every *real* spend still
+    # earns (a customer can be confirmed several times a day), but a
+    # retried or double-tapped request that carries the same id returns the
+    # first result instead of granting twice. Not DB-unique — MySQL can't
+    # do a conditional unique — the per-customer row lock in verify_spend
+    # serialises it.
+    request_id = models.CharField(max_length=64, blank=True, default='')
 
     verified_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='+',

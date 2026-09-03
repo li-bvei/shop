@@ -57,25 +57,25 @@ def normalize_pin(raw: str) -> str:
     return text
 
 
-BIRTHDAY_MD_RE = re.compile(r'^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$')
+# Days per month with no year in play — February keeps 29 so a Feb-29
+# birthday is accepted.
+_DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
 
 
 def normalize_birthday_md(raw: str) -> str:
     """'M/D', 'MM-DD', 'MM月DD日' etc. -> 'MM-DD'. Empty stays empty
-    (birthday is optional). A value that isn't a real month/day is
-    rejected."""
+    (birthday is optional). A value that isn't a real calendar month/day
+    (e.g. 02-31, 04-31) is rejected."""
     text = unicodedata.normalize('NFKC', raw or '').strip()
     if not text:
         return ''
-    parts = re.split(r'[^\d]+', text.strip('　 '))
-    parts = [p for p in parts if p]
+    parts = [p for p in re.split(r'[^\d]+', text.strip('　 ')) if p]
     if len(parts) != 2:
         raise ValidationError({'birthday_md': ['birthday-md-format']})
-    month, day = parts
-    value = f'{int(month):02d}-{int(day):02d}'
-    if not BIRTHDAY_MD_RE.match(value):
+    month, day = int(parts[0]), int(parts[1])
+    if not (1 <= month <= 12 and 1 <= day <= _DAYS_IN_MONTH[month - 1]):
         raise ValidationError({'birthday_md': ['birthday-md-format']})
-    return value
+    return f'{month:02d}-{day:02d}'
 
 
 def business_local_date(dt, cutover):

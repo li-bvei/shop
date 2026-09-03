@@ -725,6 +725,32 @@ class CrossOrganizationIsolationTests(TwoOrganizationApiTestCase):
             404,
         )
 
+    def test_guest_recovery_fails_closed_when_phone_is_ambiguous_across_orgs(self):
+        # Same person, same phone + birthday + PIN, registered at two
+        # separate chains. Neither self-serve recovery may guess a card.
+        campaign_b = Campaign.objects.create(
+            branch=self.branch_b1, name='B社カード', status=Campaign.Status.ACTIVE,
+        )
+        register_customer(organization=self.org_a, phone='08099998888',
+                          birthday_md='03-07', pin='481902', campaign=self.campaign_a)
+        register_customer(organization=self.org_b, phone='08099998888',
+                          birthday_md='03-07', pin='481902', campaign=campaign_b)
+
+        login = self.client.post('/api/guest/login/',
+                                 {'phone': '08099998888', 'birthday_md': '03-07'}, format='json')
+        self.assertEqual(login.status_code, 400)
+
+        recover = self.client.post('/api/guest/recover/',
+                                   {'phone': '08099998888', 'pin': '481902'}, format='json')
+        self.assertEqual(recover.status_code, 400)
+
+        # a phone that is unique to one org still recovers fine
+        register_customer(organization=self.org_a, phone='08011112222',
+                          birthday_md='05-05', pin='728364', campaign=self.campaign_a)
+        ok = self.client.post('/api/guest/recover/',
+                              {'phone': '08011112222', 'pin': '728364'}, format='json')
+        self.assertEqual(ok.status_code, 200)
+
 
 # ===========================================================================
 # Phase 2 / 2.5 — lottery, prizes, vouchers, milestones

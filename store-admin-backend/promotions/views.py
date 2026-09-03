@@ -209,16 +209,17 @@ class GuestLoginView(APIView):
         if not birthday_md:
             raise ValidationError({'birthday_md': ['birthday-md-required']})
 
-        customer = (
+        matches = list(
             Customer.objects
             .filter(phone=phone, birthday_md=birthday_md, status=Customer.Status.ACTIVE)
-            .select_related('registered_campaign')
-            .first()
+            .select_related('registered_campaign')[:2]
         )
-        if not customer:
-            # Same error whether the phone is unknown or the birthday is
-            # wrong — no oracle for "which phones are registered".
+        # Same error whether the phone is unknown, the birthday is wrong, or
+        # the pair is ambiguous across chains (this phone registered at more
+        # than one Organization) — no oracle, and never guess which card.
+        if len(matches) != 1:
             raise ValidationError({'detail': ['login-failed']})
+        customer = matches[0]
 
         touch_customer_seen(customer)
         payload = _card_payload(customer)

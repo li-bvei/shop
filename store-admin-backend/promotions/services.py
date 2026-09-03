@@ -214,9 +214,13 @@ def recover_card(*, phone, pin, ip=None) -> Customer:
     candidates = list(
         Customer.objects.filter(phone=phone, status=Customer.Status.ACTIVE).exclude(pin_hash='')
     )
-    customer = next((c for c in candidates if check_password(pin, c.pin_hash)), None)
-    if customer is None and not candidates:
-        check_password(pin, _timing_equaliser_hash())
+    verified = [c for c in candidates if check_password(pin, c.pin_hash)]
+    if not candidates:
+        check_password(pin, _timing_equaliser_hash())  # equalise timing
+    # Exactly one card must match. Zero = wrong pin / no pin. More than one
+    # = this phone + this PIN is registered at multiple chains — never
+    # guess which card to hand back.
+    customer = verified[0] if len(verified) == 1 else None
 
     if customer is None:
         burst, day = _note_pin_failure(phone)

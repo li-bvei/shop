@@ -330,7 +330,8 @@ class GuestApiTests(ApiTestCase):
 
     def test_register_rejects_invalid_store_token(self):
         resp = self.client.post('/api/guest/register/', {
-            'store_token': 'not-a-real-token', 'phone': '09012345678', 'consent': True,
+            'store_token': 'not-a-real-token', 'phone': '09012345678',
+            'birthday_md': '03-07', 'consent': True,
         }, format='json')
         self.assertEqual(resp.status_code, 400)
         self.assertIn('store-token-invalid', str(resp.data))
@@ -339,13 +340,23 @@ class GuestApiTests(ApiTestCase):
         self.campaign.status = Campaign.Status.PAUSED
         self.campaign.save(update_fields=['status'])
         resp = self.client.post('/api/guest/register/', {
-            'store_token': self.store_token, 'phone': '09012345678', 'consent': True,
+            'store_token': self.store_token, 'phone': '09012345678',
+            'birthday_md': '03-07', 'consent': True,
         }, format='json')
         self.assertEqual(resp.status_code, 400)
 
-    def test_public_register_ignores_spend_fields(self):
+    def test_register_requires_a_birthday(self):
         resp = self.client.post('/api/guest/register/', {
             'store_token': self.store_token, 'phone': '09012345678', 'consent': True,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('birthday', str(resp.data))
+        self.assertFalse(Customer.objects.exists())
+
+    def test_public_register_ignores_spend_fields(self):
+        resp = self.client.post('/api/guest/register/', {
+            'store_token': self.store_token, 'phone': '09012345678',
+            'birthday_md': '03-07', 'consent': True,
             'amount_yen': 999999, 'points_granted': 5000, 'points_balance': 5000,
         }, format='json')
         self.assertEqual(resp.status_code, 201)
@@ -377,7 +388,7 @@ class GuestApiTests(ApiTestCase):
         from rest_framework.test import APIClient
 
         r1 = self.client.post('/api/guest/register/', {
-            'store_token': self.store_token, 'phone': '09011110000', 'consent': True,
+            'store_token': self.store_token, 'phone': '09011110000', 'birthday_md': '03-07', 'consent': True,
         }, format='json')
         good_token = r1.data['card_token']
 
@@ -391,7 +402,7 @@ class GuestApiTests(ApiTestCase):
         from rest_framework.test import APIClient
 
         register = self.client.post('/api/guest/register/', {
-            'store_token': self.store_token, 'phone': '09012345678', 'consent': True,
+            'store_token': self.store_token, 'phone': '09012345678', 'birthday_md': '03-07', 'consent': True,
         }, format='json')
         token = register.data['card_token']
 
@@ -410,7 +421,7 @@ class GuestApiTests(ApiTestCase):
         from rest_framework.test import APIClient
 
         reg = self.client.post('/api/guest/register/', {
-            'store_token': self.store_token, 'phone': '09012345678', 'consent': True,
+            'store_token': self.store_token, 'phone': '09012345678', 'birthday_md': '03-07', 'consent': True,
         }, format='json')
         token = reg.data['card_token']
 
@@ -430,7 +441,7 @@ class GuestApiTests(ApiTestCase):
         make_prize(self.campaign, weight=3, reward_type=RewardType.CASH_VOUCHER,
                    config={'face_yen': 500}, name='¥500券', total_stock=0, remaining_stock=0)
         reg = self.client.post('/api/guest/register/', {
-            'store_token': self.store_token, 'phone': '09012345678', 'consent': True,
+            'store_token': self.store_token, 'phone': '09012345678', 'birthday_md': '03-07', 'consent': True,
         }, format='json')
         rows = APIClient().get('/api/guest/prizes/', HTTP_X_GUEST_TOKEN=reg.data['card_token'])
         self.assertEqual(rows.status_code, 200)
@@ -472,12 +483,18 @@ class PinRecoveryTests(ApiTestCase):
         self.campaign = make_campaign(self.branch_a)
         self.store_token = make_store_token(self.campaign)
 
-    def _register(self, phone='09012345678', pin='481902', **extra):
-        body = {'store_token': self.store_token, 'phone': phone, 'consent': True}
+    def _register(self, phone='09012345678', pin='481902', birthday_md='03-07', **extra):
+        body = {'store_token': self.store_token, 'phone': phone,
+                'birthday_md': birthday_md, 'consent': True}
         body.update(extra)
         if pin is not None:
             body['pin'] = pin
         return self.client.post('/api/guest/register/', body, format='json')
+
+    def _recover(self, pin, phone='09012345678', birthday_md='03-07', client=None, **extra):
+        body = {'phone': phone, 'birthday_md': birthday_md, 'pin': pin}
+        body.update(extra)
+        return (client or self.client).post('/api/guest/recover/', body, format='json')
 
     def test_register_with_pin_then_recover_full_access(self):
         reg = self._register(pin='481902')
@@ -485,33 +502,30 @@ class PinRecoveryTests(ApiTestCase):
         token = reg.data['card_token']
 
         from rest_framework.test import APIClient
-        fresh = APIClient()  # new device, no cookie
-        rec = fresh.post('/api/guest/recover/', {'phone': '090-1234-5678', 'pin': '481902'}, format='json')
+        rec = self._recover('481902', phone='090-1234-5678', client=APIClient())  # new device
         self.assertEqual(rec.status_code, 200, rec.content)
         self.assertEqual(rec.data['card_token'], token)
         self.assertIn('pc_guest', rec.cookies)
 
     def test_recover_rejects_wrong_pin_without_an_oracle(self):
         self._register(pin='481902')
-        bad = self.client.post('/api/guest/recover/', {'phone': '09012345678', 'pin': '999000'}, format='json')
+        bad = self._recover('999000')
         self.assertEqual(bad.status_code, 400)
         self.assertNotIn('card_token', bad.data)
         # same generic error for a phone that was never registered
-        unknown = self.client.post('/api/guest/recover/', {'phone': '08000000000', 'pin': '481902'}, format='json')
+        unknown = self._recover('481902', phone='08000000000')
         self.assertEqual(unknown.status_code, 400)
         self.assertEqual(str(bad.data), str(unknown.data))
 
     def test_recover_needs_a_pin_to_have_been_set(self):
         self._register(pin=None)  # registered without a PIN
-        resp = self.client.post('/api/guest/recover/', {'phone': '09012345678', 'pin': '481902'}, format='json')
-        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(self._recover('481902').status_code, 400)
 
     def test_five_wrong_tries_locks_the_phone_and_flags_it(self):
         self._register(pin='481902')
         for _ in range(5):
-            self.client.post('/api/guest/recover/', {'phone': '09012345678', 'pin': '000001'}, format='json')
-        # even the correct PIN is now refused
-        locked = self.client.post('/api/guest/recover/', {'phone': '09012345678', 'pin': '481902'}, format='json')
+            self._recover('000001')
+        locked = self._recover('481902')  # even the correct PIN is now refused
         self.assertEqual(locked.status_code, 400)
         self.assertIn('pin-recovery-locked', str(locked.data))
         self.assertTrue(
@@ -539,8 +553,7 @@ class PinRecoveryTests(ApiTestCase):
         self.assertEqual(
             holder.post('/api/guest/set-pin/', {'pin': '481902'}, format='json').status_code, 200,
         )
-        rec = self.client.post('/api/guest/recover/', {'phone': '09012345678', 'pin': '481902'}, format='json')
-        self.assertEqual(rec.data['card_token'], token)
+        self.assertEqual(self._recover('481902').data['card_token'], token)
 
     def test_a_stranger_cannot_set_a_pin_on_an_existing_card(self):
         self._register(pin='481902')
@@ -549,8 +562,7 @@ class PinRecoveryTests(ApiTestCase):
         self.assertEqual(again.status_code, 200)
         self.assertTrue(again.data.get('existing'))
         # the stranger's PIN did not take: the original still recovers
-        rec = self.client.post('/api/guest/recover/', {'phone': '09012345678', 'pin': '481902'}, format='json')
-        self.assertEqual(rec.status_code, 200)
+        self.assertEqual(self._recover('481902').status_code, 200)
 
 
 # ---------------------------------------------------------------------------
@@ -725,31 +737,50 @@ class CrossOrganizationIsolationTests(TwoOrganizationApiTestCase):
             404,
         )
 
-    def test_guest_recovery_fails_closed_when_phone_is_ambiguous_across_orgs(self):
+    def test_guest_recovery_disambiguates_when_phone_is_at_two_chains(self):
         # Same person, same phone + birthday + PIN, registered at two
-        # separate chains. Neither self-serve recovery may guess a card.
+        # separate chains -> recovery returns a "which card?" picker, then
+        # the chosen org resolves to exactly one card.
         campaign_b = Campaign.objects.create(
             branch=self.branch_b1, name='B社カード', status=Campaign.Status.ACTIVE,
         )
-        register_customer(organization=self.org_a, phone='08099998888',
-                          birthday_md='03-07', pin='481902', campaign=self.campaign_a)
+        cust_a = register_customer(organization=self.org_a, phone='08099998888',
+                                   birthday_md='03-07', pin='481902', campaign=self.campaign_a)
         register_customer(organization=self.org_b, phone='08099998888',
                           birthday_md='03-07', pin='481902', campaign=campaign_b)
 
         login = self.client.post('/api/guest/login/',
                                  {'phone': '08099998888', 'birthday_md': '03-07'}, format='json')
-        self.assertEqual(login.status_code, 400)
+        self.assertEqual(login.status_code, 200)
+        self.assertTrue(login.data['ambiguous'])
+        self.assertEqual(len(login.data['options']), 2)
 
-        recover = self.client.post('/api/guest/recover/',
-                                   {'phone': '08099998888', 'pin': '481902'}, format='json')
-        self.assertEqual(recover.status_code, 400)
+        recover = self.client.post(
+            '/api/guest/recover/',
+            {'phone': '08099998888', 'birthday_md': '03-07', 'pin': '481902'}, format='json',
+        )
+        self.assertEqual(recover.status_code, 200)
+        self.assertTrue(recover.data['ambiguous'])
 
-        # a phone that is unique to one org still recovers fine
+        # picking a chain resolves to exactly that card
+        picked = self.client.post(
+            '/api/guest/recover/',
+            {'phone': '08099998888', 'birthday_md': '03-07', 'pin': '481902',
+             'org': str(self.org_a.id)},
+            format='json',
+        )
+        self.assertEqual(picked.status_code, 200)
+        self.assertEqual(picked.data['card_token'], cust_a.card_token)
+
+        # a phone unique to one org recovers straight away
         register_customer(organization=self.org_a, phone='08011112222',
                           birthday_md='05-05', pin='728364', campaign=self.campaign_a)
-        ok = self.client.post('/api/guest/recover/',
-                              {'phone': '08011112222', 'pin': '728364'}, format='json')
+        ok = self.client.post(
+            '/api/guest/recover/',
+            {'phone': '08011112222', 'birthday_md': '05-05', 'pin': '728364'}, format='json',
+        )
         self.assertEqual(ok.status_code, 200)
+        self.assertIn('card_token', ok.data)
 
 
 # ===========================================================================

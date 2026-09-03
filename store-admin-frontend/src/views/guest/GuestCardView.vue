@@ -139,12 +139,17 @@ async function load() {
   loadError.value = false
   try {
     if (readonly.value) {
-      const state = history.state as { phone?: string; birthdayMd?: string }
+      const state = history.state as { phone?: string; birthdayMd?: string; org?: string }
       if (!state?.phone || !state?.birthdayMd) {
         router.replace({ name: 'guest-login' })
         return
       }
-      card.value = await guestLogin(state.phone, state.birthdayMd)
+      const r = await guestLogin(state.phone, state.birthdayMd, state.org || undefined)
+      if ('options' in r) {
+        router.replace({ name: 'guest-login' })
+        return
+      }
+      card.value = r.card
     } else {
       card.value = await fetchCard()
     }

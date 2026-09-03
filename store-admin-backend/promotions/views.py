@@ -28,7 +28,7 @@ from .serializers import (
     SpendVerificationSerializer, StaffPermissionSerializer, VoucherSerializer,
 )
 from .services import (
-    GUEST_COOKIE_MAX_AGE, GUEST_COOKIE_NAME, adjust_points, campaign_is_open,
+    GUEST_COOKIE_MAX_AGE, GUEST_COOKIE_NAME, AmbiguousGuestLookup, adjust_points, campaign_is_open,
     delete_customer_by_phone, draw_lottery, guest_redeem_voucher, load_store_token, recover_card,
     redeem_points, redeem_voucher, register_customer, set_customer_pin, staff_can,
     touch_customer_seen, verify_spend, void_spend_verification,
@@ -188,11 +188,27 @@ class GuestRegisterView(APIView):
         return _set_guest_cookie(Response(body, status=201), customer.card_token)
 
 
+def _recovery_options(customers):
+    """The "which card?" picker payload — just enough to name each chain."""
+    return {
+        'ambiguous': True,
+        'options': [
+            {
+                'org': str(c.organization_id),
+                'org_name_zh': c.organization.name_zh,
+                'org_name_ja': c.organization.name_ja,
+            }
+            for c in customers
+        ],
+    }
+
+
 class GuestLoginView(APIView):
-    """Read-only recovery: phone + birthday month/day returns the card data
-    snapshot directly, no session token. Birthday is a weak second factor,
-    not a security boundary (打卡与抽奖实施方案.md §14) — the snapshot can
-    be viewed, never spent from."""
+    """Read-only recovery: phone + birthday returns the card snapshot
+    directly, no session token. Birthday is a weak second factor, not a
+    security boundary (打卡与抽奖实施方案.md §14) — the snapshot can be
+    viewed, never spent from. When the pair matches a card at more than one
+    chain, returns a picker instead of guessing."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -208,19 +224,23 @@ class GuestLoginView(APIView):
             raise ValidationError({'detail': ['login-failed']})
         if not birthday_md:
             raise ValidationError({'birthday_md': ['birthday-md-required']})
+        org = serializer.validated_data.get('org') or ''
 
-        matches = list(
+        qs = (
             Customer.objects
             .filter(phone=phone, birthday_md=birthday_md, status=Customer.Status.ACTIVE)
-            .select_related('registered_campaign')[:2]
+            .select_related('registered_campaign', 'organization')
         )
-        # Same error whether the phone is unknown, the birthday is wrong, or
-        # the pair is ambiguous across chains (this phone registered at more
-        # than one Organization) — no oracle, and never guess which card.
-        if len(matches) != 1:
+        if org:
+            qs = qs.filter(organization_id=org)
+        matches = list(qs[:5])
+        if not matches:
+            # Same error whether the phone is unknown or the birthday wrong.
             raise ValidationError({'detail': ['login-failed']})
-        customer = matches[0]
+        if len(matches) > 1:
+            return Response(_recovery_options(matches))
 
+        customer = matches[0]
         touch_customer_seen(customer)
         payload = _card_payload(customer)
         payload['readonly'] = True
@@ -228,11 +248,11 @@ class GuestLoginView(APIView):
 
 
 class GuestRecoverView(APIView):
-    """Full-access recovery on a new device: phone + the 6-digit PIN the
-    customer set at registration. Unlike phone+birthday (read-only), this
-    DOES re-issue the card credential — the PIN is the security boundary
-    (per-phone rate limit, no self-service reset; a real owner who forgot
-    it goes to staff in person)."""
+    """Full-access recovery on a new device: phone + birthday + the 6-digit
+    PIN. Unlike the read-only login this DOES re-issue the card credential
+    — the PIN is the security boundary (per-phone rate limit, no
+    self-service reset; a forgotten PIN goes to staff). A triple that
+    matches a card at more than one chain returns a picker."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -241,11 +261,17 @@ class GuestRecoverView(APIView):
     def post(self, request):
         serializer = GuestRecoverSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        customer = recover_card(
-            phone=serializer.validated_data['phone'],
-            pin=serializer.validated_data['pin'],
-            ip=client_ip(request),
-        )
+        try:
+            customer = recover_card(
+                phone=serializer.validated_data['phone'],
+                pin=serializer.validated_data['pin'],
+                birthday_md=serializer.validated_data['birthday_md'],
+                org=serializer.validated_data.get('org') or None,
+                ip=client_ip(request),
+            )
+        except AmbiguousGuestLookup as exc:
+            return Response(_recovery_options(exc.customers))
+
         body = {
             'card_token': customer.card_token,
             'name': customer.name,

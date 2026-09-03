@@ -161,7 +161,9 @@ class GuestRegisterSerializer(serializers.Serializer):
     store_token = serializers.CharField()
     phone = serializers.CharField()
     name = serializers.CharField(required=False, allow_blank=True, default='')
-    birthday_md = serializers.CharField(required=False, allow_blank=True, default='')
+    # Birthday (MM-DD) is required — it's the second factor for recovery and
+    # for telling two same-phone cards apart when a chain later federates.
+    birthday_md = serializers.CharField()
     pin = serializers.CharField(required=False, allow_blank=True, default='')
     consent = serializers.BooleanField()
 
@@ -174,13 +176,17 @@ class GuestRegisterSerializer(serializers.Serializer):
 class GuestLoginSerializer(serializers.Serializer):
     phone = serializers.CharField()
     birthday_md = serializers.CharField()
+    # Set only on the second request, after the "which card" picker.
+    org = serializers.CharField(required=False, allow_blank=True, default='')
 
 
 class GuestRecoverSerializer(serializers.Serializer):
-    """Full-access recovery — phone + the 6-digit PIN."""
+    """Full-access recovery — phone + birthday + the 6-digit PIN."""
 
     phone = serializers.CharField()
+    birthday_md = serializers.CharField()
     pin = serializers.CharField()
+    org = serializers.CharField(required=False, allow_blank=True, default='')
 
 
 class GuestSetPinSerializer(serializers.Serializer):

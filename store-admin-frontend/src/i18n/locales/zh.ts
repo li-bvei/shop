@@ -2,6 +2,7 @@ export default {
   common: {
     save: '保存',
     cancel: '取消',
+    back: '返回',
     confirm: '确认',
     add: '添加',
     edit: '编辑',
@@ -883,6 +884,8 @@ export default {
     namePlaceholder: '如何称呼你',
     birthday: '生日',
     birthdayHint: '仅用于生日礼遇，只需月和日',
+    birthdayHintRequired: '用于生日礼遇，也是换手机找回时的验证项，只需月和日',
+    pickCardLead: '这个手机号在下面几家都有卡，请选择要打开的一家',
     month: '月',
     day: '日',
     pin: '找回密码',

@@ -338,32 +338,61 @@ export async function register(payload: RegisterPayload): Promise<RegisterResult
   }
 }
 
-export async function guestLogin(phone: string, birthdayMd: string): Promise<GuestCard> {
-  const dto = await guestRequest<CardDto>('/guest/login/', {
-    method: 'POST',
-    body: JSON.stringify({ phone, birthday_md: birthdayMd }),
-  })
-  return fromCardDto(dto)
+/** One entry per chain when a phone is registered at more than one — the
+ * caller shows a "which card?" picker and re-requests with `org`. */
+export interface RecoveryOption {
+  org: string
+  orgNameZh: string
+  orgNameJa: string
 }
 
-/** Full-access recovery on a new device: phone + the 6-digit PIN. On
- * success the card credential is re-issued (cookie + stored token). */
-export async function recoverCard(phone: string, pin: string): Promise<RegisterResult> {
-  const dto = await guestRequest<{
-    card_token: string
-    name?: string
-    points_balance?: number
-    stamp_count?: number
-  }>('/guest/recover/', {
+interface AmbiguousDto {
+  ambiguous: true
+  options: Array<{ org: string; org_name_zh: string; org_name_ja: string }>
+}
+
+function toOptions(d: AmbiguousDto): RecoveryOption[] {
+  return d.options.map((o) => ({ org: o.org, orgNameZh: o.org_name_zh, orgNameJa: o.org_name_ja }))
+}
+
+export async function guestLogin(
+  phone: string,
+  birthdayMd: string,
+  org?: string,
+): Promise<{ card: GuestCard } | { options: RecoveryOption[] }> {
+  const dto = await guestRequest<CardDto | AmbiguousDto>('/guest/login/', {
     method: 'POST',
-    body: JSON.stringify({ phone, pin }),
+    body: JSON.stringify({ phone, birthday_md: birthdayMd, ...(org ? { org } : {}) }),
   })
+  if ('ambiguous' in dto) return { options: toOptions(dto) }
+  return { card: fromCardDto(dto) }
+}
+
+/** Full-access recovery on a new device: phone + birthday + 6-digit PIN.
+ * On success the card credential is re-issued (cookie + stored token).
+ * Returns options instead when the triple matches more than one chain. */
+export async function recoverCard(
+  phone: string,
+  birthdayMd: string,
+  pin: string,
+  org?: string,
+): Promise<{ result: RegisterResult } | { options: RecoveryOption[] }> {
+  const dto = await guestRequest<
+    | { card_token: string; name?: string; points_balance?: number; stamp_count?: number }
+    | AmbiguousDto
+  >('/guest/recover/', {
+    method: 'POST',
+    body: JSON.stringify({ phone, birthday_md: birthdayMd, pin, ...(org ? { org } : {}) }),
+  })
+  if ('ambiguous' in dto) return { options: toOptions(dto) }
   setGuestToken(dto.card_token)
   return {
-    cardToken: dto.card_token,
-    name: dto.name ?? '',
-    pointsBalance: dto.points_balance ?? 0,
-    stampCount: dto.stamp_count ?? 0,
+    result: {
+      cardToken: dto.card_token,
+      name: dto.name ?? '',
+      pointsBalance: dto.points_balance ?? 0,
+      stampCount: dto.stamp_count ?? 0,
+    },
   }
 }
 

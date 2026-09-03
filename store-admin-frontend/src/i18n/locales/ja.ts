@@ -2,6 +2,7 @@ export default {
   common: {
     save: '保存',
     cancel: 'キャンセル',
+    back: '戻る',
     confirm: '確認',
     add: '追加',
     edit: '編集',
@@ -879,6 +880,8 @@ export default {
     namePlaceholder: 'お呼びする名前',
     birthday: '誕生日',
     birthdayHint: '誕生日特典のみに利用。月と日だけで結構です',
+    birthdayHintRequired: '誕生日特典に加え、機種変更時の復元確認にも使います。月と日だけで結構です',
+    pickCardLead: 'この電話番号は複数の店舗にカードがあります。開くカードを選んでください',
     month: '月',
     day: '日',
     pin: '復元用の暗証番号',

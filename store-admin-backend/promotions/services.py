@@ -197,40 +197,56 @@ def _clear_pin_failures(phone):
     cache.delete(day_key)
 
 
-def recover_card(*, phone, pin, ip=None) -> Customer:
-    """Full-access recovery: phone + the 6-digit PIN set at registration.
-    Returns the Customer (whose `card_token` the caller may then hand back
-    and cookie) or raises ValidationError. Errors are deliberately generic
-    — no oracle for "is this phone registered" or "does it have a PIN" —
-    except the lockout, which a caller can only reach by trying."""
+class AmbiguousGuestLookup(Exception):
+    """The phone + factors matched a card at more than one chain — the
+    caller (a view) turns `self.customers` into a "which card?" picker."""
+
+    def __init__(self, customers):
+        self.customers = list(customers)
+
+
+def recover_card(*, phone, pin, birthday_md, org=None, ip=None) -> Customer:
+    """Full-access recovery: phone + birthday + the 6-digit PIN. Returns the
+    Customer (whose `card_token` the caller may hand back and cookie), or
+    raises ValidationError, or — when the triple matches a card at more than
+    one Organization — AmbiguousGuestLookup. Errors are deliberately generic
+    (no oracle) except the lockout, which a caller can only reach by
+    trying. `org` is set on the follow-up request after the picker."""
     phone = normalize_phone(phone)
     pin = normalize_pin(pin)
+    birthday_md = normalize_birthday_md(birthday_md)
     if not pin:
         raise ValidationError({'pin': ['pin-required']})
+    if not birthday_md:
+        raise ValidationError({'birthday_md': ['birthday-md-required']})
 
     if pin_recovery_locked(phone):
         raise ValidationError({'detail': ['pin-recovery-locked']})
 
-    candidates = list(
-        Customer.objects.filter(phone=phone, status=Customer.Status.ACTIVE).exclude(pin_hash='')
+    qs = (
+        Customer.objects
+        .filter(phone=phone, birthday_md=birthday_md, status=Customer.Status.ACTIVE)
+        .exclude(pin_hash='')
+        .select_related('organization')
     )
+    if org:
+        qs = qs.filter(organization_id=org)
+    candidates = list(qs)
     verified = [c for c in candidates if check_password(pin, c.pin_hash)]
     if not candidates:
         check_password(pin, _timing_equaliser_hash())  # equalise timing
-    # Exactly one card must match. Zero = wrong pin / no pin. More than one
-    # = this phone + this PIN is registered at multiple chains — never
-    # guess which card to hand back.
-    customer = verified[0] if len(verified) == 1 else None
 
-    if customer is None:
+    if not verified:
         burst, day = _note_pin_failure(phone)
         if burst >= PIN_FAIL_BURST_LIMIT or day >= PIN_FAIL_DAY_LIMIT:
-            locked_target = candidates[0] if candidates else None
-            if locked_target is not None:
-                risk.flag_pin_recovery_lockout(locked_target, ip=ip, burst=burst, day=day)
+            if candidates:
+                risk.flag_pin_recovery_lockout(candidates[0], ip=ip, burst=burst, day=day)
         raise ValidationError({'detail': ['pin-recovery-failed']})
 
     _clear_pin_failures(phone)
+    if len(verified) > 1:
+        raise AmbiguousGuestLookup(verified)
+    customer = verified[0]
     Customer.objects.filter(pk=customer.pk).update(last_seen_at=timezone.now())
     return customer
 

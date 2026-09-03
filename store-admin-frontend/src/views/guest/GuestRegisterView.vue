@@ -31,6 +31,7 @@ const canSubmit = computed(
   () =>
     storeToken.value &&
     form.phone.trim().length >= 10 &&
+    !!birthdayMd.value &&
     form.consent &&
     !pinError.value &&
     !submitting.value,
@@ -103,7 +104,7 @@ async function submit() {
       </label>
 
       <div class="field">
-        <span class="label">{{ t('guest.birthday') }} <em class="opt">{{ t('guest.optional') }}</em></span>
+        <span class="label">{{ t('guest.birthday') }} <em>{{ t('guest.required') }}</em></span>
         <div class="birthday-row">
           <select v-model="form.birthdayMonth">
             <option value="">{{ t('guest.month') }}</option>
@@ -114,7 +115,7 @@ async function submit() {
             <option v-for="d in days" :key="d" :value="d">{{ d }}</option>
           </select>
         </div>
-        <span class="hint">{{ t('guest.birthdayHint') }}</span>
+        <span class="hint">{{ t('guest.birthdayHintRequired') }}</span>
       </div>
 
       <label class="field">

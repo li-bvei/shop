@@ -6,10 +6,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { ApiError } from '@/api/http'
 import { redeemVoucher, verifyVouchers, type VoucherRow } from '@/api/promotions'
+import KioskBlockedNotice from '@/components/KioskBlockedNotice.vue'
+import QrScanner from '@/components/QrScanner.vue'
 
 const router = useRouter()
 const { t } = useI18n()
 const auth = useAuthStore()
+
+// A head-office (本部 / admin) account has no branch, so it can't redeem
+// at a store counter — see promotions.views VoucherViewSet.redeem.
+const headOfficeBlocked = computed(() => auth.role === 'admin' && !auth.branchId)
 
 type Stage = 'scan' | 'list' | 'done'
 const stage = ref<Stage>('scan')
@@ -44,6 +50,24 @@ function reset() {
 
 function onScanEnter(event: KeyboardEvent) {
   if (event.isComposing || (event as KeyboardEvent & { keyCode: number }).keyCode === 229) return
+  lookup()
+}
+
+// --- Tablet camera scan ---------------------------------------------------
+const scanning = ref(false)
+
+function onScanDecode(payload: string) {
+  scanning.value = false
+  let value = payload.trim()
+  try {
+    const url = new URL(value)
+    value = url.searchParams.get('code') || url.searchParams.get('card') || url.pathname.split('/').filter(Boolean).pop() || value
+  } catch {
+    /* not a URL — use as-is */
+  }
+  // An 8-char redemption code vs. a longer card token.
+  mode.value = /^[A-Z0-9]{8}$/i.test(value) ? 'code' : 'card'
+  query.value = value
   lookup()
 }
 
@@ -127,7 +151,8 @@ async function handleRedeem(v: VoucherRow) {
   } catch (err) {
     if (err instanceof ApiError) {
       const body = JSON.stringify(err.body)
-      if (body.includes('already-redeemed')) ElMessage.error(t('promoRedeem.alreadyRedeemed'))
+      if (body.includes('head-office-account-cannot-scan')) ElMessage.error(t('kioskBlocked.body'))
+      else if (body.includes('already-redeemed')) ElMessage.error(t('promoRedeem.alreadyRedeemed'))
       else if (body.includes('expired')) ElMessage.error(t('promoRedeem.expired'))
       else if (body.includes('min-spend')) ElMessage.error(t('promoRedeem.minSpendNotMet'))
       else if (body.includes('manager-approval')) ElMessage.error(t('promoRedeem.needsManager'))
@@ -149,7 +174,8 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
 </script>
 
 <template>
-  <div class="kiosk">
+  <KioskBlockedNotice v-if="headOfficeBlocked" />
+  <div v-else class="kiosk">
     <header class="kiosk-head">
       <div class="head-left">
         <span class="brand">{{ t('promoRedeem.title') }}</span>
@@ -212,6 +238,9 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
         <button type="button" class="primary-btn" :disabled="busy || !canLookup" @click="lookup">
           {{ t('promoRedeem.lookup') }}
         </button>
+        <button v-if="mode !== 'name'" type="button" class="scan-cam-btn" @click="scanning = true">
+          <span aria-hidden="true">📷</span> {{ t('promoVerify.scanWithCamera') }}
+        </button>
       </section>
 
       <section v-else-if="stage === 'list'" class="stage stage-list">
@@ -260,6 +289,8 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
         <button type="button" class="primary-btn" @click="reset">{{ t('promoVerify.next') }}</button>
       </section>
     </main>
+
+    <QrScanner v-if="scanning" @decode="onScanDecode" @close="scanning = false" />
   </div>
 </template>
 
@@ -412,6 +443,18 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
 .primary-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.scan-cam-btn {
+  width: 100%;
+  height: 52px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .ghost-btn {

@@ -104,6 +104,7 @@ import {
 import { fetchStaffByBranch, type StaffMember } from '@/api/staff'
 import type { PaymentMethodDef } from '@/api/masterData'
 import { formatCurrency } from '@/utils/format'
+import MoneyInput from '@/components/MoneyInput.vue'
 
 const props = defineProps<{ branchId: string }>()
 const data = defineModel<DailyReportFormData>('data', { required: true })
@@ -275,9 +276,7 @@ async function handleAddPaymentMethod() {
       <div class="stat-grid">
         <div class="stat-tile">
           <label>{{ t('dailyReport.totalRevenue') }}</label>
-          <el-input v-model.number="data.totalRevenue" type="number">
-            <template #prefix>¥</template>
-          </el-input>
+          <MoneyInput v-model="data.totalRevenue" />
         </div>
         <div class="stat-tile">
           <label>{{ t('dailyReport.totalCustomers') }}</label>
@@ -293,9 +292,7 @@ async function handleAddPaymentMethod() {
       <div class="stat-grid">
         <div class="stat-tile">
           <label>{{ t('dailyReport.morningRevenue') }}</label>
-          <el-input v-model.number="data.morningRevenue" type="number">
-            <template #prefix>¥</template>
-          </el-input>
+          <MoneyInput v-model="data.morningRevenue" />
         </div>
         <div class="stat-tile">
           <label>{{ t('dailyReport.morningCustomers') }}</label>
@@ -309,9 +306,7 @@ async function handleAddPaymentMethod() {
       <div class="stat-grid">
         <div class="stat-tile auto">
           <label>{{ t('dailyReport.afternoonRevenueAuto') }}</label>
-          <el-input :model-value="derived.afternoonRevenue" disabled>
-            <template #prefix>¥</template>
-          </el-input>
+          <el-input :model-value="formatCurrency(derived.afternoonRevenue)" disabled />
         </div>
         <div class="stat-tile auto">
           <label>{{ t('dailyReport.afternoonCustomersAuto') }}</label>
@@ -333,15 +328,13 @@ async function handleAddPaymentMethod() {
             <div class="pm-controls">
               <el-input
                 v-if="method.protected"
-                :model-value="derived.cashAmount"
-                type="number"
+                :model-value="formatCurrency(derived.cashAmount)"
                 class="pm-input auto"
                 disabled
               />
-              <el-input
+              <MoneyInput
                 v-else
-                v-model.number="data.paymentAmounts[String(method.id)]"
-                type="number"
+                v-model="data.paymentAmounts[String(method.id)]"
                 class="pm-input"
               />
               <div class="pm-actions no-print" :class="{ 'is-hidden': method.protected }">
@@ -425,9 +418,7 @@ async function handleAddPaymentMethod() {
                 </template>
               </el-autocomplete>
             </div>
-            <el-input v-model.number="row.amount" class="i2" type="number">
-              <template #prefix>¥</template>
-            </el-input>
+            <MoneyInput v-model="row.amount" class="i2" />
             <el-input v-model="row.purpose" class="i3" :placeholder="t('dailyReport.purposePlaceholder')" />
             <el-button circle text :icon="Close" class="no-print" @click="removeExpenseRow(index)" />
           </div>

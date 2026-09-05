@@ -9,6 +9,7 @@ export interface AccountRecord {
   role: AccountRole
   branchId: string | null
   staffMemberId: string | null
+  isActive: boolean
 }
 
 export async function fetchAccounts(): Promise<AccountRecord[]> {
@@ -62,6 +63,21 @@ export async function deleteAccount(id: number): Promise<void> {
 /** Admin-only: overwrite any account's password without knowing the old one. */
 export async function adminResetPassword(id: number, newPassword: string): Promise<void> {
   await http.post(`/users/${id}/reset_password/`, { password: newPassword })
+}
+
+/** Admin-only: enable / disable an account. A disabled account can't log in
+ * and its live tokens stop working immediately. */
+export async function setAccountActive(id: number, isActive: boolean): Promise<void> {
+  try {
+    await http.post(`/users/${id}/set_active/`, { is_active: isActive })
+  } catch (err) {
+    if (err instanceof ApiError) {
+      const msgs = err.messages()
+      if (msgs.some((m) => m.includes('currently logged in'))) throw new Error('cannot-disable-self')
+      if (msgs.some((m) => m.includes('at least one active admin'))) throw new Error('cannot-disable-last-admin')
+    }
+    throw err
+  }
 }
 
 /** Self-service: the currently logged-in account changes its own password. */

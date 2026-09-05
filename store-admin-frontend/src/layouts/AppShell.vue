@@ -18,6 +18,8 @@ const routeTitleKeys: Record<string, string> = {
   inventory: 'inventory.pageTitle',
   staff: 'staff.pageTitle',
   settings: 'settings.pageTitle',
+  'platform-overview': 'platformOverview.title',
+  'platform-manage': 'platformFeatures.title',
 }
 
 const pageTitle = computed(() => {

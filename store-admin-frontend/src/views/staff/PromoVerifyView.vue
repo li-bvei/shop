@@ -9,15 +9,23 @@ import {
   confirmSpend,
   fetchMyVerifications,
   lookupCustomer,
+  recordCheckin,
+  type CheckinResult,
   type CustomerLookup,
   type SpendVerification,
 } from '@/api/promotions'
+import KioskBlockedNotice from '@/components/KioskBlockedNotice.vue'
+import QrScanner from '@/components/QrScanner.vue'
 
 const router = useRouter()
 const { t } = useI18n()
 const auth = useAuthStore()
 
-type Stage = 'scan' | 'amount' | 'done'
+// A head-office (本部 / admin) account has no branch, so it can't run the
+// counter kiosk — see promotions.views SpendVerificationViewSet._resolve_branch.
+const headOfficeBlocked = computed(() => auth.role === 'admin' && !auth.branchId)
+
+type Stage = 'scan' | 'amount' | 'done' | 'checkin-done'
 const stage = ref<Stage>('scan')
 
 const scanInput = ref<HTMLInputElement>()
@@ -30,6 +38,7 @@ const tableNumber = ref('')
 
 const customer = ref<CustomerLookup | null>(null)
 const lastResult = ref<{ pointsGranted: number; pointsBalance: number; stampCount: number } | null>(null)
+const checkinResult = ref<CheckinResult | null>(null)
 const busy = ref(false)
 const recent = ref<SpendVerification[]>([])
 
@@ -63,6 +72,7 @@ function resetToScan() {
   tableNumber.value = ''
   customer.value = null
   lastResult.value = null
+  checkinResult.value = null
   requestId.value = ''
   focusScan()
 }
@@ -79,6 +89,32 @@ async function loadRecent() {
 // on a soft keyboard might; only submit on a real Enter.
 function onScanEnter(event: KeyboardEvent) {
   if (event.isComposing || (event as KeyboardEvent & { keyCode: number }).keyCode === 229) return
+  handleLookup()
+}
+
+// --- Tablet camera scan -----------------------------------------------------
+const scanning = ref(false)
+
+function extractCardToken(payload: string): string {
+  // The card QR carries the raw card_token; stay tolerant of a URL form
+  // (?card= / ?t= / trailing path segment) in case that ever changes.
+  try {
+    const url = new URL(payload)
+    return (
+      url.searchParams.get('card') ||
+      url.searchParams.get('t') ||
+      url.pathname.split('/').filter(Boolean).pop() ||
+      payload
+    )
+  } catch {
+    return payload
+  }
+}
+
+function onScanDecode(payload: string) {
+  scanning.value = false
+  manualMode.value = 'card'
+  tokenValue.value = extractCardToken(payload)
   handleLookup()
 }
 
@@ -135,10 +171,36 @@ async function handleConfirm() {
   } catch (err) {
     if (err instanceof ApiError) {
       const body = JSON.stringify(err.body)
-      if (body.includes('consumed-at')) ElMessage.error(t('promoVerify.errBusinessDay'))
+      if (body.includes('head-office-account-cannot-scan')) ElMessage.error(t('kioskBlocked.body'))
+      else if (body.includes('consumed-at')) ElMessage.error(t('promoVerify.errBusinessDay'))
       else if (body.includes('no-active-campaign')) ElMessage.error(t('promoVerify.errNoCampaign'))
       else if (body.includes('customer-blocked')) ElMessage.error(t('promoVerify.blocked'))
       else if (body.includes('amount-too-large')) ElMessage.error(t('promoVerify.errAmountTooLarge'))
+      else ElMessage.error(t('promoVerify.confirmFailed'))
+    } else {
+      ElMessage.error(t('promoVerify.confirmFailed'))
+    }
+  } finally {
+    busy.value = false
+  }
+}
+
+// "Check-in only" — the customer showed their QR but isn't paying now
+// (e.g. just walked in). Records the visit and issues the daily reward.
+async function handleCheckinOnly() {
+  if (busy.value || !customer.value) return
+  busy.value = true
+  try {
+    const query = manualMode.value === 'phone' ? { phone: tokenValue.value.trim() } : { cardToken: tokenValue.value.trim() }
+    checkinResult.value = await recordCheckin(query)
+    stage.value = 'checkin-done'
+    resetTimer = setTimeout(resetToScan, 3500)
+  } catch (err) {
+    if (err instanceof ApiError) {
+      const body = JSON.stringify(err.body)
+      if (body.includes('head-office-account-cannot-scan')) ElMessage.error(t('kioskBlocked.body'))
+      else if (body.includes('no-active-campaign')) ElMessage.error(t('promoVerify.errNoCampaign'))
+      else if (body.includes('customer-blocked')) ElMessage.error(t('promoVerify.blocked'))
       else ElMessage.error(t('promoVerify.confirmFailed'))
     } else {
       ElMessage.error(t('promoVerify.confirmFailed'))
@@ -161,7 +223,8 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
 </script>
 
 <template>
-  <div class="kiosk">
+  <KioskBlockedNotice v-if="headOfficeBlocked" />
+  <div v-else class="kiosk">
     <header class="kiosk-head">
       <div class="head-left">
         <span class="brand">{{ t('promoVerify.title') }}</span>
@@ -197,6 +260,9 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
         />
         <button type="button" class="primary-btn" :disabled="busy || !tokenValue.trim()" @click="handleLookup">
           {{ t('promoVerify.lookup') }}
+        </button>
+        <button type="button" class="scan-cam-btn" @click="scanning = true">
+          <span aria-hidden="true">📷</span> {{ t('promoVerify.scanWithCamera') }}
         </button>
       </section>
 
@@ -235,6 +301,9 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
             {{ t('promoVerify.confirm') }}
           </button>
         </div>
+        <button type="button" class="scan-cam-btn" :disabled="busy" @click="handleCheckinOnly">
+          {{ t('promoVerify.checkinOnly') }}
+        </button>
       </section>
 
       <!-- Stage: done -->
@@ -250,6 +319,18 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
         <p class="done-balance">{{ t('promoVerify.doneBalance', { bal: lastResult.pointsBalance.toLocaleString('ja-JP') }) }}</p>
         <button type="button" class="primary-btn" @click="resetToScan">{{ t('promoVerify.next') }}</button>
       </section>
+
+      <!-- Stage: check-in only done -->
+      <section v-else-if="stage === 'checkin-done' && checkinResult" class="stage stage-done" @click="resetToScan">
+        <div class="check-mark">✓</div>
+        <h1>{{ t('promoVerify.checkinDoneTitle') }}</h1>
+        <p v-if="checkinResult.alreadyCheckedIn" class="done-detail">{{ t('promoVerify.checkinAlready') }}</p>
+        <p v-else-if="checkinResult.rewardVoucher" class="done-detail">
+          {{ t('promoVerify.checkinVoucher', { label: checkinResult.rewardVoucher.label }) }}
+        </p>
+        <p v-else class="done-detail">{{ t('promoVerify.checkinNoReward') }}</p>
+        <button type="button" class="primary-btn" @click="resetToScan">{{ t('promoVerify.next') }}</button>
+      </section>
     </main>
 
     <footer v-if="recent.length" class="kiosk-foot">
@@ -262,6 +343,8 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
         </li>
       </ul>
     </footer>
+
+    <QrScanner v-if="scanning" @decode="onScanDecode" @close="scanning = false" />
   </div>
 </template>
 
@@ -399,6 +482,18 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
 .primary-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.scan-cam-btn {
+  width: 100%;
+  height: 52px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .ghost-btn {

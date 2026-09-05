@@ -32,6 +32,10 @@ export interface Campaign {
   status: CampaignStatus
   startsAt: string | null
   endsAt: string | null
+  activeWeekdays: string
+  activeDateFrom: string | null
+  activeDateTo: string | null
+  priority: number
   pointsPer1000yen: number
   pointsPerDraw: number
   pointsPerVoucher: number
@@ -42,6 +46,10 @@ export interface Campaign {
   maxDrawsPerCustomerPerDay: number
   stampTarget: number | null
   businessDayCutover: string
+  checkinRewardEnabled: boolean
+  checkinRewardType: string
+  checkinRewardConfig: Record<string, unknown>
+  checkinRewardExpiresAfterDays: number
   createdByName: string
   updatedByName: string
   createdAt: string
@@ -59,6 +67,10 @@ interface CampaignDto {
   status: CampaignStatus
   starts_at: string | null
   ends_at: string | null
+  active_weekdays: string
+  active_date_from: string | null
+  active_date_to: string | null
+  priority: number
   points_per_1000yen: number
   points_per_draw: number
   points_per_voucher: number
@@ -69,6 +81,10 @@ interface CampaignDto {
   max_draws_per_customer_per_day: number
   stamp_target: number | null
   business_day_cutover: string
+  checkin_reward_enabled: boolean
+  checkin_reward_type: string
+  checkin_reward_config: Record<string, unknown>
+  checkin_reward_expires_after_days: number
   created_by_name: string
   updated_by_name: string
   created_at: string
@@ -87,6 +103,10 @@ function fromCampaignDto(d: CampaignDto): Campaign {
     status: d.status,
     startsAt: d.starts_at,
     endsAt: d.ends_at,
+    activeWeekdays: d.active_weekdays,
+    activeDateFrom: d.active_date_from,
+    activeDateTo: d.active_date_to,
+    priority: d.priority,
     pointsPer1000yen: d.points_per_1000yen,
     pointsPerDraw: d.points_per_draw,
     pointsPerVoucher: d.points_per_voucher,
@@ -97,6 +117,10 @@ function fromCampaignDto(d: CampaignDto): Campaign {
     maxDrawsPerCustomerPerDay: d.max_draws_per_customer_per_day,
     stampTarget: d.stamp_target,
     businessDayCutover: d.business_day_cutover,
+    checkinRewardEnabled: d.checkin_reward_enabled,
+    checkinRewardType: d.checkin_reward_type,
+    checkinRewardConfig: d.checkin_reward_config ?? {},
+    checkinRewardExpiresAfterDays: d.checkin_reward_expires_after_days,
     createdByName: d.created_by_name,
     updatedByName: d.updated_by_name,
     createdAt: d.created_at,
@@ -112,6 +136,10 @@ export interface CampaignPayload {
   status: CampaignStatus
   startsAt: string | null
   endsAt: string | null
+  activeWeekdays: string
+  activeDateFrom: string | null
+  activeDateTo: string | null
+  priority: number
   pointsPer1000yen: number
   pointsPerDraw: number
   pointsPerVoucher: number
@@ -122,6 +150,10 @@ export interface CampaignPayload {
   maxDrawsPerCustomerPerDay: number
   stampTarget: number | null
   businessDayCutover: string
+  checkinRewardEnabled: boolean
+  checkinRewardType: string
+  checkinRewardConfig: Record<string, unknown>
+  checkinRewardExpiresAfterDays: number
 }
 
 function toCampaignDto(p: CampaignPayload): Record<string, unknown> {
@@ -132,6 +164,10 @@ function toCampaignDto(p: CampaignPayload): Record<string, unknown> {
     status: p.status,
     starts_at: p.startsAt,
     ends_at: p.endsAt,
+    active_weekdays: p.activeWeekdays,
+    active_date_from: p.activeDateFrom,
+    active_date_to: p.activeDateTo,
+    priority: p.priority,
     points_per_1000yen: p.pointsPer1000yen,
     points_per_draw: p.pointsPerDraw,
     points_per_voucher: p.pointsPerVoucher,
@@ -142,6 +178,10 @@ function toCampaignDto(p: CampaignPayload): Record<string, unknown> {
     max_draws_per_customer_per_day: p.maxDrawsPerCustomerPerDay,
     stamp_target: p.stampTarget,
     business_day_cutover: p.businessDayCutover,
+    checkin_reward_enabled: p.checkinRewardEnabled,
+    checkin_reward_type: p.checkinRewardType,
+    checkin_reward_config: p.checkinRewardConfig,
+    checkin_reward_expires_after_days: p.checkinRewardExpiresAfterDays,
   }
 }
 
@@ -371,6 +411,40 @@ export async function confirmSpend(payload: {
     pointsBalance: res.points_balance,
     stampCount: res.stamp_count,
     riskLevel: res.risk_level,
+  }
+}
+
+export interface CheckinResult {
+  alreadyCheckedIn: boolean
+  rewardVoucher: { label: string; rewardType: string; redemptionCode: string } | null
+}
+
+/** Record a "customer showed their QR" visit with no purchase, and issue
+ * the daily check-in reward voucher if the campaign has one. */
+export async function recordCheckin(payload: {
+  cardToken?: string
+  phone?: string
+  branchId?: string
+  campaignId?: string
+}): Promise<CheckinResult> {
+  const res = await http.post<{
+    already_checked_in: boolean
+    reward_voucher: { label: string; reward_type: string; redemption_code: string } | null
+  }>('/promotions/spend-verifications/checkin/', {
+    ...(payload.cardToken ? { card_token: payload.cardToken } : {}),
+    ...(payload.phone ? { phone: payload.phone } : {}),
+    ...(payload.branchId ? { branch: payload.branchId } : {}),
+    ...(payload.campaignId ? { campaign: payload.campaignId } : {}),
+  })
+  return {
+    alreadyCheckedIn: res.already_checked_in,
+    rewardVoucher: res.reward_voucher
+      ? {
+          label: res.reward_voucher.label,
+          rewardType: res.reward_voucher.reward_type,
+          redemptionCode: res.reward_voucher.redemption_code,
+        }
+      : null,
   }
 }
 

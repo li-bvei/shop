@@ -245,3 +245,169 @@ class OrganizationIsolationTests(TwoOrganizationApiTestCase):
         self.assertEqual(resp.status_code, 200)
         for row in resp.data:
             self.assertNotEqual(row.get('lastUnitPrice'), 999)
+
+
+# ---------------------------------------------------------------------------
+# Per-organization feature entitlements (common.features + middleware)
+# ---------------------------------------------------------------------------
+
+from common.test_utils import TEST_PASSWORD  # noqa: E402
+
+from .models import OrganizationFeature  # noqa: E402
+
+
+class OrganizationFeatureGateTests(TwoOrganizationApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.superuser = User.objects.create_user(
+            username='platform-op', password=TEST_PASSWORD, role=User.Role.ADMIN,
+            organization=self.org_a, is_superuser=True, is_staff=True,
+        )
+
+    def test_me_lists_enabled_features_and_superuser_flag(self):
+        self.login_as(self.admin_a)
+        resp = self.client.get('/api/auth/me/')
+        self.assertIn('inventory', resp.data['enabledFeatures'])
+        self.assertFalse(resp.data['isSuperuser'])
+
+        OrganizationFeature.objects.create(organization=self.org_a, feature='inventory', enabled=False)
+        resp = self.client.get('/api/auth/me/')
+        self.assertNotIn('inventory', resp.data['enabledFeatures'])
+        self.assertIn('products', resp.data['enabledFeatures'])
+
+    def test_disabled_module_returns_403_feature_disabled_for_every_role(self):
+        OrganizationFeature.objects.create(organization=self.org_a, feature='inventory', enabled=False)
+        for user in (self.admin_a, self.branch_a1_user, self.staff_user_a1):
+            self.login_as(user)
+            resp = self.client.get('/api/stock/')
+            self.assertEqual(resp.status_code, 403, f'{user.username} got {resp.status_code}')
+            self.assertEqual(resp.json().get('detail'), 'feature-disabled')
+
+    def test_other_organization_is_unaffected(self):
+        OrganizationFeature.objects.create(organization=self.org_a, feature='inventory', enabled=False)
+        self.login_as(self.admin_b)
+        resp = self.client.get('/api/products/')
+        self.assertEqual(resp.status_code, 200)
+
+    def test_ungated_endpoints_still_work_when_a_module_is_off(self):
+        OrganizationFeature.objects.create(organization=self.org_a, feature='promotions', enabled=False)
+        self.login_as(self.admin_a)
+        self.assertEqual(self.client.get('/api/daily-reports/').status_code, 200)
+        self.assertEqual(self.client.get('/api/auth/me/').status_code, 200)
+
+    def test_platform_endpoints_require_superuser(self):
+        self.login_as(self.admin_a)
+        self.assertEqual(self.client.get('/api/platform/organizations/').status_code, 403)
+
+        self.login_as(self.superuser)
+        resp = self.client.get('/api/platform/organizations/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(any(o['code'] == 'org-a' for o in resp.data))
+
+    def test_superuser_toggles_a_module_for_one_org(self):
+        self.login_as(self.superuser)
+        resp = self.client.patch(
+            f'/api/platform/organizations/{self.org_a.id}/features/',
+            {'inventory': False}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        row = OrganizationFeature.objects.get(organization=self.org_a, feature='inventory')
+        self.assertFalse(row.enabled)
+        self.assertEqual(row.updated_by, self.superuser)
+
+        # and it takes effect immediately
+        self.login_as(self.branch_a1_user)
+        self.assertEqual(self.client.get('/api/stock/').status_code, 403)
+
+    def test_unknown_feature_key_rejected(self):
+        self.login_as(self.superuser)
+        resp = self.client.patch(
+            f'/api/platform/organizations/{self.org_a.id}/features/',
+            {'not-a-real-module': False}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+
+class PlatformAccountManagementTests(TwoOrganizationApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.superuser = User.objects.create_user(
+            username='platform-op', password=TEST_PASSWORD, role=User.Role.ADMIN,
+            organization=self.org_a, is_superuser=True, is_staff=True,
+        )
+
+    def test_superuser_lists_users_of_any_org(self):
+        self.login_as(self.superuser)
+        resp = self.client.get(f'/api/platform/organizations/{self.org_b.id}/users/')
+        self.assertEqual(resp.status_code, 200)
+        accounts = {u['account'] for u in resp.data}
+        self.assertIn('org-b-admin', accounts)
+        self.assertIn('org-b-branch1-user', accounts)
+
+    def test_superuser_disables_an_account_in_another_org(self):
+        self.login_as(self.superuser)
+        resp = self.client.post(
+            f'/api/platform/users/{self.branch_b1_user.id}/set_active/', {'is_active': False}, format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.branch_b1_user.refresh_from_db()
+        self.assertFalse(self.branch_b1_user.is_active)
+        got = self.client.post('/api/token/', {'username': self.branch_b1_user.username, 'password': TEST_PASSWORD})
+        self.assertEqual(got.status_code, 401)
+
+    def test_cannot_disable_last_active_admin_of_an_org(self):
+        self.login_as(self.superuser)
+        resp = self.client.post(
+            f'/api/platform/users/{self.admin_b.id}/set_active/', {'is_active': False}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_non_superuser_blocked_from_platform_user_endpoints(self):
+        self.login_as(self.admin_a)
+        self.assertEqual(
+            self.client.get(f'/api/platform/organizations/{self.org_a.id}/users/').status_code, 403,
+        )
+        self.assertEqual(
+            self.client.post(
+                f'/api/platform/users/{self.branch_a1_user.id}/set_active/', {'is_active': False}, format='json',
+            ).status_code,
+            403,
+        )
+
+
+class PlatformOverviewTests(TwoOrganizationApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.superuser = User.objects.create_user(
+            username='platform-op', password=TEST_PASSWORD, role=User.Role.ADMIN,
+            organization=self.org_a, is_superuser=True, is_staff=True,
+        )
+
+    def test_overview_spans_all_orgs_with_counts(self):
+        DailyReport.objects.create(
+            branch=self.branch_a1, date=date.today(), total_revenue=50000, total_customers=40,
+        )
+        from organizations.models import Organization
+
+        self.login_as(self.superuser)
+        resp = self.client.get('/api/platform/overview/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['totals']['organizations'], Organization.objects.count())
+        codes = {o['code'] for o in resp.data['organizations']}
+        self.assertTrue({'org-a', 'org-b'} <= codes)
+        org_a = next(o for o in resp.data['organizations'] if o['code'] == 'org-a')
+        self.assertEqual(org_a['branch_count'], 2)
+        self.assertEqual(org_a['month_revenue'], '50000')
+        self.assertEqual(org_a['accounts']['total'], org_a['accounts']['active'] + org_a['accounts']['inactive'])
+
+    def test_overview_reflects_a_disabled_module(self):
+        OrganizationFeature.objects.create(organization=self.org_a, feature='inventory', enabled=False)
+        self.login_as(self.superuser)
+        resp = self.client.get('/api/platform/overview/')
+        org_a = next(o for o in resp.data['organizations'] if o['code'] == 'org-a')
+        self.assertIn('inventory', org_a['disabled_features'])
+        self.assertEqual(org_a['features_enabled'], org_a['features_total'] - 1)
+
+    def test_overview_is_superuser_only(self):
+        self.login_as(self.admin_a)
+        self.assertEqual(self.client.get('/api/platform/overview/').status_code, 403)

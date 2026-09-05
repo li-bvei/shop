@@ -134,16 +134,17 @@ class MonthlyAnalysisTerminologyTests(ApiTestCase):
             self.assertNotIn(forbidden, blob, f'forbidden term "{forbidden}" leaked into the response')
 
 
-class MonthlyAnalysisV2SimpleWageCostTests(ApiTestCase):
-    """wageTotal must come from v2_simple's estimated_total (base +
-    transportation + bonus) — never re-derived from the retired night/
-    overtime/statutory-holiday premium fields, even though those columns
-    still physically exist on the model for v1's historical rows."""
+class MonthlyAnalysisExcludesPayrollTests(ApiTestCase):
+    """暂定经营差额 = revenue − purchasing − expenses, with NO payroll term
+    (removed at the user's request — wages live only in the 工资 feature)."""
 
-    def test_wage_total_includes_bonus_and_transportation_not_zeroed_premiums(self):
+    def test_response_has_no_wage_fields_and_gap_ignores_payroll(self):
         from scheduling.models import ActualWorkRecord
         from wages.models import WageRule
 
+        DailyReport.objects.create(
+            branch=self.branch_a, date=date(2026, 1, 5), total_revenue=100000, total_customers=100,
+        )
         WageRule.objects.create(
             employee=self.staff_employee, effective_from=date(2026, 1, 1), hourly_rate=1000,
             transportation_type='monthly', transportation_amount=500,
@@ -157,14 +158,11 @@ class MonthlyAnalysisV2SimpleWageCostTests(ApiTestCase):
         closing_resp = self.client.post(
             '/api/wage-monthly-closings/', {'branch': self.branch_a.id, 'month': '2026-01-01'}, format='json',
         )
-        closing_id = closing_resp.data['id']
-        gen_resp = self.client.post(f'/api/wage-monthly-closings/{closing_id}/generate/')
-        result = gen_resp.data['employee_results'][0]
-        # base = 7h * 1000 = 7000; +500 transportation = 7500 so far
-        self.client.patch(f'/api/wage-employee-results/{result["id"]}/', {
-            'bonus_amount': 2000, 'bonus_note': '旺季奖金',
-        }, format='json')
+        self.client.post(f'/api/wage-monthly-closings/{closing_resp.data["id"]}/generate/')
 
         resp = self.client.get(f'/api/dashboard/monthly-analysis/?month=2026-01&branch={self.branch_a.id}')
-        self.assertEqual(resp.data['wageTotal'], '9500')  # 7000 base + 500 transportation + 2000 bonus
-        self.assertEqual(resp.data['wageStatus'], 'draft')
+        self.assertNotIn('wageTotal', resp.data)
+        self.assertNotIn('wageStatus', resp.data)
+        # gap = 100000 revenue − 0 purchasing − 0 expenses, payroll untouched
+        self.assertEqual(resp.data['tentativeOperatingGap'], '100000')
+        self.assertFalse(any(i['rule'] == 'hourly_wage_to_revenue_ratio' for i in resp.data['insights']))

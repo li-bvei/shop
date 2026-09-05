@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from branches.models import Branch
+from common.features import enabled_features_for_org
 from staff.models import StaffMember
 
 from .models import User, UserPreference
@@ -12,6 +13,10 @@ class MeSerializer(serializers.ModelSerializer):
     branchId = serializers.CharField(source='branch_id', allow_null=True)
     staffMemberId = serializers.CharField(source='staff_member_id', allow_null=True)
     organizationId = serializers.SerializerMethodField()
+    isSuperuser = serializers.BooleanField(source='is_superuser', read_only=True)
+    # The module keys this account may use — its Organization's entitlement,
+    # inherited by every role (see common.features).
+    enabledFeatures = serializers.SerializerMethodField()
     # Exposed in both locales (matching Branch's own name_zh/name_ja
     # convention) rather than one server-resolved string — this app never
     # picks a display locale on the backend, the frontend always does.
@@ -23,6 +28,7 @@ class MeSerializer(serializers.ModelSerializer):
         fields = [
             'account', 'displayName', 'role', 'branchId', 'staffMemberId',
             'organizationId', 'organizationNameZh', 'organizationNameJa',
+            'isSuperuser', 'enabledFeatures',
         ]
 
     def get_displayName(self, obj):
@@ -30,6 +36,9 @@ class MeSerializer(serializers.ModelSerializer):
 
     def get_organizationId(self, obj):
         return str(obj.organization_id) if obj.organization_id else None
+
+    def get_enabledFeatures(self, obj):
+        return enabled_features_for_org(obj.organization_id)
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -41,6 +50,11 @@ class UserSerializer(serializers.ModelSerializer):
     account = serializers.CharField(source='username')
     password = serializers.CharField(write_only=True, required=False, min_length=6)
     displayName = serializers.CharField(source='first_name')
+    # Deactivated accounts can't log in and any live token stops working
+    # immediately (simplejwt re-checks is_active on every request).
+    # Read-only here — changed only through the `set_active` action so the
+    # last-admin / not-yourself guards always run.
+    isActive = serializers.BooleanField(source='is_active', read_only=True)
     branchId = serializers.PrimaryKeyRelatedField(
         source='branch', queryset=Branch.objects.none(), allow_null=True, required=False,
     )
@@ -50,7 +64,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'account', 'password', 'displayName', 'role', 'branchId', 'staffMemberId']
+        fields = ['id', 'account', 'password', 'displayName', 'role', 'branchId', 'staffMemberId', 'isActive']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

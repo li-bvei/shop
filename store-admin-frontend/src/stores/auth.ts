@@ -10,6 +10,8 @@ interface MeResponse {
   role: UserRole
   branchId: string | null
   staffMemberId: string | null
+  isSuperuser: boolean
+  enabledFeatures: string[]
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -20,7 +22,14 @@ export const useAuthStore = defineStore('auth', {
     role: 'branch' as UserRole,
     branchId: null as string | null,
     staffMemberId: null as string | null,
+    isSuperuser: false,
+    // Module keys this account's Organization is entitled to. Empty until
+    // loadMe() runs; the router gate and sidebar read it.
+    enabledFeatures: [] as string[],
   }),
+  getters: {
+    hasFeature: (state) => (feature: string) => state.enabledFeatures.includes(feature),
+  },
   actions: {
     async login(account: string, password: string) {
       try {
@@ -48,6 +57,8 @@ export const useAuthStore = defineStore('auth', {
       this.role = me.role
       this.branchId = me.branchId
       this.staffMemberId = me.staffMemberId
+      this.isSuperuser = me.isSuperuser ?? false
+      this.enabledFeatures = me.enabledFeatures ?? []
     },
     /** Called once at app boot — restores the session from a stored token
      * (survives a page reload) instead of forcing a fresh login every time. */
@@ -67,6 +78,8 @@ export const useAuthStore = defineStore('auth', {
       this.role = 'branch'
       this.branchId = null
       this.staffMemberId = null
+      this.isSuperuser = false
+      this.enabledFeatures = []
     },
   },
 })

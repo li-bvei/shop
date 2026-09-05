@@ -29,9 +29,9 @@ from .serializers import (
 )
 from .services import (
     GUEST_COOKIE_MAX_AGE, GUEST_COOKIE_NAME, AmbiguousGuestLookup, adjust_points, campaign_is_open,
-    delete_customer_by_phone, draw_lottery, guest_redeem_voucher, load_store_token, recover_card,
-    redeem_points, redeem_voucher, register_customer, set_customer_pin, staff_can,
-    touch_customer_seen, verify_spend, void_spend_verification,
+    delete_customer_by_phone, draw_lottery, guest_redeem_voucher, load_store_token, record_checkin,
+    recover_card, redeem_points, redeem_voucher, register_customer, resolve_active_campaign,
+    set_customer_pin, staff_can, touch_customer_seen, verify_spend, void_spend_verification,
 )
 from .throttling import GuestReadThrottle, GuestWriteThrottle, StaffVerifyThrottle
 from .utils import client_ip, normalize_birthday_md, normalize_phone
@@ -721,7 +721,7 @@ class SpendVerificationViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'head', 'options']
 
     def get_throttles(self):
-        return [StaffVerifyThrottle()] if self.action == 'create' else []
+        return [StaffVerifyThrottle()] if self.action in ('create', 'checkin') else []
 
     def get_queryset(self):
         user = self.request.user
@@ -770,12 +770,41 @@ class SpendVerificationViewSet(viewsets.ModelViewSet):
             'risk_level': verification.risk_level,
         }, status=201)
 
+    @action(detail=False, methods=['post'])
+    def checkin(self, request):
+        """Standalone "customer showed their QR" with no purchase — records
+        the visit and issues the daily check-in reward (if the campaign has
+        one). Same account rules as a spend confirmation."""
+        user = request.user
+        if user.role not in STAFF_ROLES:
+            raise PermissionDenied('not-available-for-this-role')
+        if user.role == user.Role.STAFF and not staff_can(user, 'verify_spend'):
+            raise PermissionDenied('verify-spend-disabled-for-this-account')
+
+        branch = self._resolve_branch(request, user)
+        campaign = self._resolve_campaign(request, branch)
+        customer = self._resolve_customer(request, user.organization_id)
+
+        result = record_checkin(
+            campaign=campaign, branch=branch, customer=customer,
+            verified_by=user, ip=client_ip(request),
+        )
+        voucher = result['reward_voucher']
+        return Response({
+            'already_checked_in': result['already_checked_in'],
+            'reward_voucher': VoucherSerializer(voucher).data if voucher else None,
+        }, status=200 if result['already_checked_in'] else 201)
+
     @staticmethod
     def _resolve_branch(request, user):
         if user.role == user.Role.ADMIN:
             branch_id = request.data.get('branch')
             if not branch_id:
-                raise ValidationError({'branch': ['This field is required for admin accounts.']})
+                # The counter kiosk has no branch picker, so a head-office
+                # (admin / 本部) account can't be attributed to a store.
+                # Coded so the frontend can show the "use a branch account"
+                # message in Japanese.
+                raise ValidationError({'branch': ['head-office-account-cannot-scan']})
             branch = Branch.objects.filter(id=branch_id).first()
             if not branch or branch.organization_id != user.organization_id:
                 raise ValidationError({'branch': ['branch-outside-organization']})
@@ -787,11 +816,13 @@ class SpendVerificationViewSet(viewsets.ModelViewSet):
     @staticmethod
     def _resolve_campaign(request, branch):
         campaign_id = request.data.get('campaign')
-        campaigns = Campaign.objects.filter(branch=branch)
-        campaign = (
-            campaigns.filter(pk=campaign_id).first() if campaign_id
-            else campaigns.filter(status=Campaign.Status.ACTIVE).order_by('-created_at').first()
-        )
+        if campaign_id:
+            campaign = Campaign.objects.filter(branch=branch, pk=campaign_id).first()
+        else:
+            # Several ACTIVE campaigns can coexist (weekday / weekend /
+            # Golden Week) — pick the one whose weekday+date rules cover
+            # today, highest priority first.
+            campaign = resolve_active_campaign(branch)
         if not campaign:
             raise ValidationError({'campaign': ['no-active-campaign-for-branch']})
         return campaign
@@ -1031,7 +1062,11 @@ class VoucherViewSet(viewsets.ReadOnlyModelViewSet):
 
         branch = user.branch if user.role != user.Role.ADMIN else None
         if branch is None:
-            branch_id = request.data.get('branch') or voucher.campaign.branch_id
+            branch_id = request.data.get('branch')
+            if not branch_id:
+                # Same rule as spend-verification: a head-office (本部)
+                # account can't redeem at the counter — use a branch login.
+                raise ValidationError({'branch': ['head-office-account-cannot-scan']})
             branch = Branch.objects.filter(id=branch_id).first()
         if not branch or branch.organization_id != user.organization_id:
             raise ValidationError({'branch': ['branch-required']})

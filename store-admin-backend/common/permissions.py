@@ -54,6 +54,16 @@ class IsAdminRole(BasePermission):
         return bool(user and user.is_authenticated and user.role == user.Role.ADMIN)
 
 
+class IsPlatformSuperuser(BasePermission):
+    """Platform operator only — Django's own `is_superuser`, not the
+    business `admin` role. Guards the cross-tenant feature-entitlement
+    endpoints (see common.features)."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_superuser)
+
+
 class DenyStaffRole(BasePermission):
     """Project-wide default (see REST_FRAMEWORK.DEFAULT_PERMISSION_CLASSES):
     blocks the staff role from every endpoint except the explicit

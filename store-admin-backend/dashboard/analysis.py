@@ -7,14 +7,14 @@ it's auditable rather than a black box.
 
 Terminology guardrails (do not relax these without the user's explicit
 sign-off — see the project spec this module was built against):
-  - "暂定经营差额" is revenue minus purchasing minus expenses minus hourly/
-    temp wages. It is NOT profit (it excludes rent, utilities, regular-
-    salaried payroll, depreciation, tax, etc.) and must never be labeled
-    "利润" anywhere in the API or the frontend that renders it.
+  - "暂定经营差额" is revenue minus purchasing minus expenses. It is NOT
+    profit (it excludes rent, utilities, payroll, depreciation, tax, etc.)
+    and must never be labeled "利润" anywhere in the API or the frontend
+    that renders it. (Hourly/temp wages used to be subtracted here too;
+    that line was removed at the user's request — payroll now lives only
+    in the dedicated 工资 feature.)
   - The purchasing/revenue ratio is not "毛利率" (gross margin) — it only
     covers ingredient/goods purchasing, not all cost of goods sold.
-  - The wages/revenue ratio is not a full labor-cost ratio — it only
-    covers hourly/temporary wages, excluding regular-salaried payroll.
   - Anomaly findings use neutral wording ("建议确认" / "与通常数据差异较
     大") — never words implying wrongdoing.
 
@@ -29,7 +29,6 @@ from decimal import Decimal
 from dailyreports.models import DailyReport, DailyReportHistory
 from paymentmethods.models import PaymentMethodDef
 from purchasing.models import PurchaseRecord
-from wages.models import WageEmployeeResult, WageMonthlyClosing
 
 # ---- Centralized, retunable thresholds -------------------------------------
 
@@ -127,29 +126,9 @@ def build_monthly_analysis(*, branch_ids, year, month, is_admin_all_branches):
 
     expense_total = _expense_total(reports)
 
-    # Wages: whichever WageMonthlyClosing exists for this month/branch set —
-    # locked uses the frozen numbers, anything else is shown as tentative.
-    closings = list(
-        WageMonthlyClosing.objects.filter(branch_id__in=branch_ids, month=month_start)
-        .prefetch_related('employee_results')
-    )
-    wage_total = Decimal('0')
-    wage_status = 'not_generated'
-    if closings:
-        statuses = {c.status for c in closings}
-        if statuses == {WageMonthlyClosing.Status.LOCKED}:
-            wage_status = 'locked'
-        elif WageMonthlyClosing.Status.LOCKED in statuses:
-            wage_status = 'partially_locked'
-        elif WageMonthlyClosing.Status.CONFIRMED in statuses:
-            wage_status = 'confirmed'
-        else:
-            wage_status = 'draft'
-        for closing in closings:
-            for result in closing.employee_results.all():
-                wage_total += _d(result.estimated_total)
-
-    tentative_operating_gap = revenue - purchasing_total - expense_total - wage_total
+    # Payroll is deliberately NOT part of this figure — it lives only in the
+    # dedicated 工资 feature (removed here at the user's request).
+    tentative_operating_gap = revenue - purchasing_total - expense_total
 
     reports_by_date = {r.date: _d(r.total_revenue) for r in reports}
     customers_by_date = {r.date: (r.total_customers or 0) for r in reports}
@@ -226,7 +205,6 @@ def build_monthly_analysis(*, branch_ids, year, month, is_admin_all_branches):
         'purchasing': str(purchasing_total), 'previousPurchasing': str(prev_purchasing_total),
         'purchasingDeltaPct': _pct_delta(purchasing_total, prev_purchasing_total),
         'expenses': str(expense_total),
-        'wageTotal': str(wage_total), 'wageStatus': wage_status,
         'tentativeOperatingGap': str(tentative_operating_gap),
         'daysWithReports': days_with_reports,
         'dailyAverageRevenue': str(daily_average_revenue),
@@ -247,7 +225,7 @@ def build_monthly_analysis(*, branch_ids, year, month, is_admin_all_branches):
     }
     result['insights'] = build_insights(
         result, reports_by_date, customers_by_date, branch_comparison, payment_breakdown, supplier_ranking,
-        history_counts, revenue, purchasing_total, wage_total, payment_method_names,
+        history_counts, revenue, purchasing_total, payment_method_names,
     )
     return result
 
@@ -281,7 +259,7 @@ def _branch_comparison(branch_ids, month_start, month_end, prev_start, prev_end)
 
 
 def build_insights(summary, reports_by_date, customers_by_date, branch_comparison,
-                    payment_breakdown, supplier_ranking, history_counts, revenue, purchasing_total, wage_total,
+                    payment_breakdown, supplier_ranking, history_counts, revenue, purchasing_total,
                     payment_method_names=None):
     """Deterministic, rule-based findings only — no external AI. Each
     finding carries the rule name, the threshold used, and the actual
@@ -352,13 +330,6 @@ def build_insights(summary, reports_by_date, customers_by_date, branch_compariso
             'message': f'本月进货额占营业额约{purchasing_ratio}%',
             'threshold': None, 'value': purchasing_ratio,
         })
-        if wage_total > 0:
-            wage_ratio = round(float(wage_total / revenue * 100), 1)
-            insights.append({
-                'rule': 'hourly_wage_to_revenue_ratio', 'severity': 'info',
-                'message': f'本月临时工/时薪工资占营业额约{wage_ratio}%',
-                'threshold': None, 'value': wage_ratio,
-            })
 
     if branch_comparison:
         with_revenue = [r for r in branch_comparison if Decimal(r['revenue']) > 0]

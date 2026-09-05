@@ -35,10 +35,13 @@ class CampaignSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'branch', 'branch_name_zh', 'branch_name_ja', 'name', 'description', 'status',
             'starts_at', 'ends_at',
+            'active_weekdays', 'active_date_from', 'active_date_to', 'priority',
             'points_per_1000yen', 'points_per_draw', 'points_per_voucher', 'voucher_yen_per_unit',
             'points_expire_months', 'direct_draw_threshold_yen',
             'max_draws_per_verification', 'max_draws_per_customer_per_day',
             'stamp_target', 'business_day_cutover',
+            'checkin_reward_enabled', 'checkin_reward_type', 'checkin_reward_config',
+            'checkin_reward_expires_after_days',
             'created_by_name', 'updated_by_name', 'created_at', 'updated_at', 'store_token',
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -56,11 +59,39 @@ class CampaignSerializer(serializers.ModelSerializer):
             return ''
         return make_store_token(obj)
 
+    def validate_active_weekdays(self, value):
+        value = (value or '').strip()
+        if not value:
+            return '1234567'
+        if not set(value) <= set('1234567'):
+            raise serializers.ValidationError('weekdays-must-be-digits-1-7')
+        # de-dupe + keep Mon..Sun order
+        return ''.join(d for d in '1234567' if d in value)
+
+    def validate_checkin_reward_type(self, value):
+        value = (value or '').strip()
+        if value and value not in RewardType.values:
+            raise serializers.ValidationError('unknown-reward-type')
+        return value
+
+    def _attr(self, attrs, name):
+        return attrs.get(name, getattr(self.instance, name, None))
+
     def validate(self, attrs):
-        starts_at = attrs.get('starts_at', getattr(self.instance, 'starts_at', None))
-        ends_at = attrs.get('ends_at', getattr(self.instance, 'ends_at', None))
+        starts_at = self._attr(attrs, 'starts_at')
+        ends_at = self._attr(attrs, 'ends_at')
         if starts_at and ends_at and ends_at < starts_at:
             raise serializers.ValidationError({'ends_at': ['ends-before-starts']})
+
+        date_from = self._attr(attrs, 'active_date_from')
+        date_to = self._attr(attrs, 'active_date_to')
+        if date_from and date_to and date_to < date_from:
+            raise serializers.ValidationError({'active_date_to': ['ends-before-starts']})
+
+        if self._attr(attrs, 'checkin_reward_enabled') and not self._attr(attrs, 'checkin_reward_type'):
+            raise serializers.ValidationError(
+                {'checkin_reward_type': ['required-when-checkin-reward-enabled']},
+            )
         return attrs
 
 

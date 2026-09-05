@@ -11,6 +11,7 @@ from common.permissions import IsAdminRole
 
 from .models import User, UserPreference
 from .serializers import MeSerializer, UserPreferenceSerializer, UserSerializer
+from .services import guard_account_deactivation
 
 
 class MeView(RetrieveAPIView):
@@ -112,6 +113,17 @@ class UserViewSet(viewsets.ModelViewSet):
         user.set_password(new_password)
         user.save()
         return Response({'status': 'ok'})
+
+    @action(detail=True, methods=['post'])
+    def set_active(self, request, pk=None):
+        """Enable / disable an account. A disabled account can't log in and
+        its live tokens stop working right away."""
+        user = self.get_object()
+        is_active = bool(request.data.get('is_active'))
+        guard_account_deactivation(user, is_active, acting_user=request.user)
+        user.is_active = is_active
+        user.save(update_fields=['is_active'])
+        return Response(UserSerializer(user, context={'request': request}).data)
 
 
 class ChangePasswordView(APIView):

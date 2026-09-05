@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer,
   Document,
@@ -17,6 +17,7 @@ import {
   Close,
   Present,
   Postcard,
+  Switch as SwitchIcon,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
@@ -25,38 +26,71 @@ defineProps<{ open?: boolean }>()
 defineEmits<{ close: [] }>()
 
 const route = useRoute()
+const router = useRouter()
 const auth = useAuthStore()
 const branchStore = useBranchStore()
 onMounted(() => branchStore.ensureLoaded())
 
-const adminBranchNavItems = [
+interface NavItem {
+  path: string
+  icon: unknown
+  labelKey: string
+  // Opens in a new browser tab instead of navigating the admin shell —
+  // the counter-reception kiosk is a separate workstation surface, so
+  // clicking it must not replace whatever the manager was looking at.
+  external?: boolean
+  // Hidden unless the account's Organization is entitled to this module
+  // (common.features on the backend).
+  feature?: string
+}
+
+const adminBranchNavItems: NavItem[] = [
   { path: '/dashboard', icon: Odometer, labelKey: 'nav.dashboard' },
   { path: '/monthly-analysis', icon: TrendCharts, labelKey: 'nav.monthlyAnalysis' },
   { path: '/daily-report', icon: Document, labelKey: 'nav.dailyReport' },
-  { path: '/purchasing', icon: Box, labelKey: 'nav.purchasing' },
-  { path: '/suppliers', icon: OfficeBuilding, labelKey: 'nav.suppliers' },
-  { path: '/products', icon: Goods, labelKey: 'nav.products' },
-  { path: '/inventory', icon: Files, labelKey: 'nav.inventory' },
+  { path: '/purchasing', icon: Box, labelKey: 'nav.purchasing', feature: 'purchasing' },
+  { path: '/suppliers', icon: OfficeBuilding, labelKey: 'nav.suppliers', feature: 'suppliers' },
+  { path: '/products', icon: Goods, labelKey: 'nav.products', feature: 'products' },
+  { path: '/inventory', icon: Files, labelKey: 'nav.inventory', feature: 'inventory' },
   { path: '/staff', icon: User, labelKey: 'nav.staff' },
-  { path: '/scheduling', icon: Calendar, labelKey: 'nav.scheduling' },
-  { path: '/wages', icon: Money, labelKey: 'nav.wages' },
-  { path: '/promotions', icon: Present, labelKey: 'nav.promotions' },
-  { path: '/kiosk/verify', icon: Postcard, labelKey: 'nav.promoVerify' },
+  { path: '/scheduling', icon: Calendar, labelKey: 'nav.scheduling', feature: 'scheduling' },
+  { path: '/wages', icon: Money, labelKey: 'nav.wages', feature: 'wages' },
+  { path: '/promotions', icon: Present, labelKey: 'nav.promotions', feature: 'promotions' },
+  { path: '/kiosk/verify', icon: Postcard, labelKey: 'nav.promoVerify', external: true, feature: 'promotions' },
 ]
 
-const staffNavItems = [
+const staffNavItems: NavItem[] = [
   { path: '/my-availability', icon: Calendar, labelKey: 'nav.myAvailability' },
-  { path: '/my-shifts', icon: Document, labelKey: 'nav.myShifts' },
-  { path: '/my-wages', icon: Money, labelKey: 'nav.myWages' },
-  { path: '/kiosk/verify', icon: Postcard, labelKey: 'nav.promoVerify' },
+  { path: '/my-shifts', icon: Document, labelKey: 'nav.myShifts', feature: 'scheduling' },
+  { path: '/my-wages', icon: Money, labelKey: 'nav.myWages', feature: 'wages' },
+  { path: '/kiosk/verify', icon: Postcard, labelKey: 'nav.promoVerify', external: true, feature: 'promotions' },
 ]
 
-const navItems = computed(() => (auth.role === 'staff' ? staffNavItems : adminBranchNavItems))
-const systemItems = computed(() =>
-  auth.role === 'staff'
+// A platform super admin never touches the per-chain operational screens —
+// their whole world is the /platform console.
+const platformNavItems: NavItem[] = [
+  { path: '/platform/overview', icon: TrendCharts, labelKey: 'nav.platformOverview' },
+  { path: '/platform/manage', icon: SwitchIcon, labelKey: 'nav.platformManage' },
+]
+
+function externalHref(path: string) {
+  return router.resolve(path).href
+}
+
+function visible(items: NavItem[]) {
+  return items.filter((i) => !i.feature || auth.enabledFeatures.includes(i.feature))
+}
+
+const navItems = computed(() => {
+  if (auth.isSuperuser) return platformNavItems
+  return visible(auth.role === 'staff' ? staffNavItems : adminBranchNavItems)
+})
+const systemItems = computed<NavItem[]>(() => {
+  if (auth.isSuperuser) return []
+  return auth.role === 'staff'
     ? [{ path: '/my-password', icon: Lock, labelKey: 'nav.myPassword' }]
-    : [{ path: '/settings', icon: Setting, labelKey: 'nav.settings' }],
-)
+    : [{ path: '/settings', icon: Setting, labelKey: 'nav.settings' }]
+})
 </script>
 
 <template>
@@ -73,16 +107,31 @@ const systemItems = computed(() =>
     </div>
 
     <el-menu :default-active="route.path" router class="sidebar-menu">
-      <el-menu-item v-for="item in navItems" :key="item.path" :index="item.path">
-        <el-icon><component :is="item.icon" /></el-icon>
-        <span>{{ $t(item.labelKey) }}</span>
-      </el-menu-item>
+      <template v-for="item in navItems" :key="item.path">
+        <a
+          v-if="item.external"
+          :href="externalHref(item.path)"
+          target="_blank"
+          rel="noopener"
+          class="el-menu-item external-menu-item"
+          @click="$emit('close')"
+        >
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ $t(item.labelKey) }}</span>
+        </a>
+        <el-menu-item v-else :index="item.path">
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ $t(item.labelKey) }}</span>
+        </el-menu-item>
+      </template>
 
-      <div class="nav-group-label">{{ $t('nav.system') }}</div>
-      <el-menu-item v-for="item in systemItems" :key="item.path" :index="item.path">
-        <el-icon><component :is="item.icon" /></el-icon>
-        <span>{{ $t(item.labelKey) }}</span>
-      </el-menu-item>
+      <template v-if="systemItems.length">
+        <div class="nav-group-label">{{ $t('nav.system') }}</div>
+        <el-menu-item v-for="item in systemItems" :key="item.path" :index="item.path">
+          <el-icon><component :is="item.icon" /></el-icon>
+          <span>{{ $t(item.labelKey) }}</span>
+        </el-menu-item>
+      </template>
     </el-menu>
   </aside>
 </template>
@@ -139,6 +188,17 @@ const systemItems = computed(() =>
   padding: 14px 10px 6px;
   font-weight: 600;
   letter-spacing: 0.03em;
+}
+
+/* The counter-reception link is a real <a target="_blank">, not an
+   el-menu-item — borrow the menu-item look but drop the anchor defaults. */
+.external-menu-item {
+  text-decoration: none;
+  color: var(--el-menu-text-color);
+}
+
+.external-menu-item:hover {
+  color: var(--el-menu-hover-text-color, var(--el-menu-text-color));
 }
 
 .close-btn {

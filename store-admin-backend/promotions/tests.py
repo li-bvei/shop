@@ -1493,3 +1493,138 @@ class CampaignReportTests(ApiTestCase):
         self.assertEqual(resp.data['draws']['total'], 1)
         self.assertGreaterEqual(resp.data['vouchers']['issued'], 1)
         self.assertEqual(len(resp.data['staff_stats']), 1)
+
+
+# ---------------------------------------------------------------------------
+# Campaign scheduling (weekday / date window / priority) + daily check-in reward
+# ---------------------------------------------------------------------------
+
+class CampaignScheduleTests(ApiTestCase):
+    def test_campaign_applies_on_weekday_and_date_window(self):
+        from datetime import date
+
+        from .services import campaign_applies_on
+
+        weekdays_only = make_campaign(self.branch_a, active_weekdays='12345')
+        self.assertTrue(campaign_applies_on(weekdays_only, date(2026, 9, 7)))   # Monday
+        self.assertFalse(campaign_applies_on(weekdays_only, date(2026, 9, 6)))  # Sunday
+
+        golden_week = make_campaign(
+            self.branch_a, active_date_from=date(2026, 5, 1), active_date_to=date(2026, 5, 6),
+        )
+        self.assertTrue(campaign_applies_on(golden_week, date(2026, 5, 3)))
+        self.assertFalse(campaign_applies_on(golden_week, date(2026, 5, 7)))
+
+        blank_mask = make_campaign(self.branch_a, active_weekdays='')
+        self.assertTrue(campaign_applies_on(blank_mask, date(2026, 9, 6)))
+
+    def test_resolve_active_campaign_prefers_highest_priority_match(self):
+        from datetime import datetime, timezone as tz
+
+        from .services import resolve_active_campaign
+
+        sunday_noon = datetime(2026, 9, 6, 12, 0, tzinfo=tz.utc)  # a Sunday
+        weekday = make_campaign(self.branch_a, name='平日', active_weekdays='12345', priority=0)
+        weekend = make_campaign(self.branch_a, name='週末', active_weekdays='67', priority=5)
+
+        self.assertEqual(resolve_active_campaign(self.branch_a, now=sunday_noon), weekend)
+
+        # On a weekday only the weekday campaign matches.
+        monday_noon = datetime(2026, 9, 7, 12, 0, tzinfo=tz.utc)
+        self.assertEqual(resolve_active_campaign(self.branch_a, now=monday_noon), weekday)
+
+
+class CheckinRewardTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.campaign = make_campaign(
+            self.branch_a, checkin_reward_enabled=True, checkin_reward_type=RewardType.DRINK,
+            checkin_reward_config={'label': 'ドリンク券'}, checkin_reward_expires_after_days=1,
+        )
+        self.customer = register_customer(organization=self.org, phone='09011112222', name='田中')
+
+    def test_first_spend_of_day_issues_one_checkin_voucher(self):
+        verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                     amount_yen=2000, verified_by=self.staff_user)
+        vouchers = Voucher.objects.filter(customer=self.customer, source=Voucher.Source.CHECKIN)
+        self.assertEqual(vouchers.count(), 1)
+        self.assertEqual(vouchers.first().config_snapshot['label'], 'ドリンク券')
+        self.assertEqual(CheckInRecord.objects.get(customer=self.customer).reward_voucher_id, vouchers.first().id)
+
+    def test_second_spend_same_day_does_not_issue_another(self):
+        verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                     amount_yen=2000, verified_by=self.staff_user)
+        verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                     amount_yen=3000, verified_by=self.staff_user)
+        self.assertEqual(
+            Voucher.objects.filter(customer=self.customer, source=Voucher.Source.CHECKIN).count(), 1,
+        )
+
+    def test_disabled_campaign_issues_nothing(self):
+        self.campaign.checkin_reward_enabled = False
+        self.campaign.save(update_fields=['checkin_reward_enabled'])
+        verify_spend(campaign=self.campaign, branch=self.branch_a, customer=self.customer,
+                     amount_yen=2000, verified_by=self.staff_user)
+        self.assertFalse(Voucher.objects.filter(source=Voucher.Source.CHECKIN).exists())
+
+    def test_record_checkin_service_is_idempotent_per_day(self):
+        from .services import record_checkin
+
+        first = record_checkin(campaign=self.campaign, branch=self.branch_a, customer=self.customer)
+        self.assertFalse(first['already_checked_in'])
+        self.assertIsNotNone(first['reward_voucher'])
+
+        again = record_checkin(campaign=self.campaign, branch=self.branch_a, customer=self.customer)
+        self.assertTrue(again['already_checked_in'])
+        self.assertIsNone(again['reward_voucher'])
+        self.assertEqual(Voucher.objects.filter(source=Voucher.Source.CHECKIN).count(), 1)
+
+    def test_checkin_api_endpoint_and_head_office_block(self):
+        # branch account: works
+        self.login_as(self.branch_a_user)
+        resp = self.client.post(
+            '/api/promotions/spend-verifications/checkin/',
+            {'card_token': self.customer.card_token}, format='json',
+        )
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertIsNotNone(resp.data['reward_voucher'])
+
+        # head-office (admin, no branch): coded rejection
+        self.login_as(self.admin)
+        resp = self.client.post(
+            '/api/promotions/spend-verifications/checkin/',
+            {'card_token': self.customer.card_token}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('head-office-account-cannot-scan', str(resp.data))
+
+
+class CampaignSerializerScheduleTests(ApiTestCase):
+    def test_admin_creates_campaign_with_weekdays_and_checkin_reward(self):
+        self.login_as(self.admin)
+        resp = self.client.post('/api/promotions/campaigns/', {
+            'branch': self.branch_a.id, 'name': '週末キャンペーン', 'status': 'active',
+            'active_weekdays': '67', 'priority': 5,
+            'checkin_reward_enabled': True, 'checkin_reward_type': 'dessert',
+            'checkin_reward_config': {'label': 'デザート券'}, 'checkin_reward_expires_after_days': 2,
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        self.assertEqual(resp.data['active_weekdays'], '67')
+        self.assertEqual(resp.data['checkin_reward_type'], 'dessert')
+
+    def test_checkin_reward_type_required_when_enabled(self):
+        self.login_as(self.admin)
+        resp = self.client.post('/api/promotions/campaigns/', {
+            'branch': self.branch_a.id, 'name': 'x', 'status': 'draft',
+            'checkin_reward_enabled': True,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('checkin_reward_type', resp.data)
+
+    def test_bad_weekday_mask_rejected(self):
+        self.login_as(self.admin)
+        resp = self.client.post('/api/promotions/campaigns/', {
+            'branch': self.branch_a.id, 'name': 'x', 'status': 'draft', 'active_weekdays': '89',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('active_weekdays', resp.data)

@@ -24,3 +24,38 @@ class Organization(models.Model):
 
     def __str__(self):
         return self.name_zh
+
+
+class OrganizationFeature(models.Model):
+    """One row per (organization, feature module) the platform super admin
+    has explicitly switched OFF (or back on). **No row = the feature is
+    enabled** — so an existing tenant keeps everything until the operator
+    touches it, and the future "pay per module" model is just a matter of
+    inserting `enabled=False` rows. Every account in the organization
+    (admin / branch / staff) inherits this — a branch can never re-enable
+    what the platform turned off for its chain.
+
+    The set of valid `feature` keys lives in common.features.FEATURE_REGISTRY,
+    not as DB choices, so adding a module doesn't need a migration here."""
+
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE, related_name='features',
+    )
+    feature = models.CharField(max_length=32)
+    enabled = models.BooleanField(default=True)
+    note = models.CharField(max_length=255, blank=True, default='')
+    updated_by = models.ForeignKey(
+        'accounts.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['organization', 'feature']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'feature'], name='unique_org_feature',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.organization_id}/{self.feature}={self.enabled}'

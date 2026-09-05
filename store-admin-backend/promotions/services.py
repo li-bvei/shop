@@ -57,6 +57,38 @@ def campaign_is_open(campaign, now=None) -> bool:
     return True
 
 
+def campaign_applies_on(campaign, local_date) -> bool:
+    """Does this campaign cover `local_date` (a business day)? Checks the
+    weekday mask and the optional seasonal date window. Independent of
+    `campaign_is_open` (status + go-live datetime) — the counter needs
+    both to be true. A blank/malformed `active_weekdays` falls back to
+    "every day" so an older row keeps working."""
+    weekdays = campaign.active_weekdays or '1234567'
+    if str(local_date.isoweekday()) not in weekdays:
+        return False
+    if campaign.active_date_from and local_date < campaign.active_date_from:
+        return False
+    if campaign.active_date_to and local_date > campaign.active_date_to:
+        return False
+    return True
+
+
+def resolve_active_campaign(branch, now=None):
+    """The one campaign the counter should use for a sale happening now at
+    `branch`: ACTIVE, inside its go-live window, and whose weekday/date
+    rules cover its own business day (each campaign's cutover decides which
+    day "now" falls in). Highest `priority` wins, then newest. None if
+    nothing matches."""
+    now = now or timezone.now()
+    candidates = [
+        c for c in Campaign.objects.filter(branch=branch, status=Campaign.Status.ACTIVE)
+        if campaign_is_open(c, now)
+        and campaign_applies_on(c, business_local_date(now, c.business_day_cutover))
+    ]
+    candidates.sort(key=lambda c: (c.priority, c.created_at), reverse=True)
+    return candidates[0] if candidates else None
+
+
 # ---------------------------------------------------------------------------
 # Store QR token (printed sticker -> campaign + branch)
 # ---------------------------------------------------------------------------
@@ -330,6 +362,9 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
         if ci_created:
             check_in.spend_verification = verification
             check_in.save(update_fields=['spend_verification'])
+            # First scan of the business day — even a paid checkout counts
+            # as "showed the QR today", so the check-in perk fires here too.
+            _issue_checkin_reward(customer=locked, campaign=campaign, branch=branch, check_in=check_in)
 
         update_fields = ['last_seen_at']
         locked.last_seen_at = now
@@ -357,6 +392,43 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
     verification.refresh_from_db()
     risk.evaluate_spend_verification(verification)
     return verification
+
+
+def record_checkin(*, campaign, branch, customer, verified_by=None, ip=None) -> dict:
+    """A standalone "the customer showed their QR" event with no purchase —
+    logs the visit for the business day and, if the campaign has the
+    check-in reward on, issues the free drink/dessert voucher. Idempotent
+    per business day: a second tap the same day just returns
+    `already_checked_in=True` with no new voucher. Mirrors verify_spend's
+    locking shape."""
+    if not campaign_is_open(campaign):
+        raise ValidationError({'campaign': ['campaign-not-active']})
+    if campaign.branch_id != branch.id:
+        raise ValidationError({'campaign': ['campaign-branch-mismatch']})
+    if customer.organization_id != branch.organization_id:
+        raise ValidationError({'customer': ['customer-outside-organization']})
+
+    now = timezone.now()
+    local_date = business_local_date(now, campaign.business_day_cutover)
+
+    with transaction.atomic():
+        locked = Customer.objects.select_for_update().get(pk=customer.pk)
+        if locked.status == Customer.Status.BLOCKED:
+            raise ValidationError({'customer': ['customer-blocked']})
+
+        check_in, created = CheckInRecord.objects.get_or_create(
+            customer=locked, campaign=campaign, local_date=local_date,
+            defaults={'branch': branch, 'checked_in_at': now, 'result': 'checkin_only'},
+        )
+        reward = None
+        if created:
+            reward = _issue_checkin_reward(
+                customer=locked, campaign=campaign, branch=branch, check_in=check_in,
+            )
+            locked.last_seen_at = now
+            locked.save(update_fields=['last_seen_at'])
+
+    return {'check_in': check_in, 'reward_voucher': reward, 'already_checked_in': not created}
 
 
 # ---------------------------------------------------------------------------
@@ -535,6 +607,27 @@ def _issue_voucher(*, customer, campaign, branch, reward_type, config, expires_d
         redeem_request_id=redeem_request_id,
         expires_at=timezone.now() + timedelta(days=expires_days or 30),
     )
+
+
+def _issue_checkin_reward(*, customer, campaign, branch, check_in):
+    """One free drink/dessert voucher for the first visit of the business
+    day, if the campaign has the check-in reward switched on. Idempotent by
+    construction: only ever called on a freshly-created CheckInRecord, and
+    that record is unique per (customer, campaign, local_date). Returns the
+    Voucher, or None when the reward is off / mis-configured. Assumes
+    `customer` is row-locked."""
+    if not campaign.checkin_reward_enabled or not campaign.checkin_reward_type:
+        return None
+    voucher = _issue_voucher(
+        customer=customer, campaign=campaign, branch=branch,
+        reward_type=campaign.checkin_reward_type,
+        config=campaign.checkin_reward_config,
+        expires_days=campaign.checkin_reward_expires_after_days or 1,
+        source=Voucher.Source.CHECKIN,
+    )
+    check_in.reward_voucher = voucher
+    check_in.save(update_fields=['reward_voucher'])
+    return voucher
 
 
 def _apply_milestones(*, customer, campaign, now) -> list:

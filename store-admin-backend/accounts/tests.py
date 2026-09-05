@@ -113,6 +113,58 @@ class UserViewSetTests(ApiTestCase):
         self.assertEqual(User.objects.filter(role=User.Role.ADMIN).count(), 1)
 
 
+class AccountDeactivationTests(ApiTestCase):
+    def test_admin_disables_and_re_enables_a_branch_account(self):
+        self.login_as(self.admin)
+        resp = self.client.post(f'/api/users/{self.branch_a_user.id}/set_active/', {'is_active': False}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data['isActive'])
+        self.branch_a_user.refresh_from_db()
+        self.assertFalse(self.branch_a_user.is_active)
+
+        # a disabled account can't obtain a token
+        got = self.client.post('/api/token/', {'username': self.branch_a_user.username, 'password': TEST_PASSWORD})
+        self.assertEqual(got.status_code, 401)
+
+        self.client.credentials()
+        self.login_as(self.admin)
+        self.client.post(f'/api/users/{self.branch_a_user.id}/set_active/', {'is_active': True}, format='json')
+        self.branch_a_user.refresh_from_db()
+        self.assertTrue(self.branch_a_user.is_active)
+
+    def test_a_live_access_token_stops_working_once_disabled(self):
+        self.login_as(self.branch_a_user)
+        self.assertEqual(self.client.get('/api/auth/me/').status_code, 200)
+        branch_creds = self.client._credentials
+        self.client.credentials()
+        self.login_as(self.admin)
+        self.client.post(f'/api/users/{self.branch_a_user.id}/set_active/', {'is_active': False}, format='json')
+        self.client.credentials(**branch_creds)
+        self.assertEqual(self.client.get('/api/auth/me/').status_code, 401)
+
+    def test_cannot_disable_self_or_last_admin(self):
+        self.login_as(self.admin)
+        resp = self.client.post(f'/api/users/{self.admin.id}/set_active/', {'is_active': False}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+        second_admin = User.objects.create_user(
+            username='test-admin-2', password=TEST_PASSWORD, role=User.Role.ADMIN, organization=self.org,
+        )
+        # disabling one of two admins is fine
+        resp = self.client.post(f'/api/users/{second_admin.id}/set_active/', {'is_active': False}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        # now `admin` is the last active admin — self-disable still blocked, and
+        # if we try to disable it via another (there is none) it would block too
+        self.assertEqual(
+            User.objects.filter(role=User.Role.ADMIN, organization=self.org, is_active=True).count(), 1,
+        )
+
+    def test_branch_role_cannot_reach_set_active(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.post(f'/api/users/{self.staff_user.id}/set_active/', {'is_active': False}, format='json')
+        self.assertEqual(resp.status_code, 403)
+
+
 class StaffAccountCreationTests(ApiTestCase):
     def test_admin_can_create_staff_account_linked_to_employee(self):
         employee = StaffMember.objects.create(name='新员工', branch=self.branch_a)

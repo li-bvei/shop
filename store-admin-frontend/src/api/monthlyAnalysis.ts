@@ -52,8 +52,6 @@ export interface Insight {
   value: number | null
 }
 
-export type WageStatus = 'not_generated' | 'draft' | 'confirmed' | 'partially_locked' | 'locked'
-
 export interface MonthlyAnalysis {
   month: string
   revenue: number
@@ -69,8 +67,6 @@ export interface MonthlyAnalysis {
   previousPurchasing: number
   purchasingDeltaPct: number | null
   expenses: number
-  wageTotal: number
-  wageStatus: WageStatus
   tentativeOperatingGap: number
   daysWithReports: number
   dailyAverageRevenue: number
@@ -88,7 +84,7 @@ export interface MonthlyAnalysis {
 interface MonthlyAnalysisDto extends Omit<
   MonthlyAnalysis,
   'revenue' | 'previousRevenue' | 'avgSpend' | 'previousAvgSpend' | 'purchasing' | 'previousPurchasing' |
-  'expenses' | 'wageTotal' | 'tentativeOperatingGap' | 'dailyAverageRevenue' | 'highestRevenueDay' |
+  'expenses' | 'tentativeOperatingGap' | 'dailyAverageRevenue' | 'highestRevenueDay' |
   'lowestRevenueDay' | 'dailyTrend' | 'paymentMethodBreakdown' | 'supplierRanking' | 'weekdayAverages' |
   'branchComparison'
 > {
@@ -99,7 +95,6 @@ interface MonthlyAnalysisDto extends Omit<
   purchasing: string
   previousPurchasing: string
   expenses: string
-  wageTotal: string
   tentativeOperatingGap: string
   dailyAverageRevenue: string
   highestRevenueDay: { date: string; revenue: string } | null
@@ -121,7 +116,6 @@ function fromDto(dto: MonthlyAnalysisDto): MonthlyAnalysis {
     purchasing: Number(dto.purchasing),
     previousPurchasing: Number(dto.previousPurchasing),
     expenses: Number(dto.expenses),
-    wageTotal: Number(dto.wageTotal),
     tentativeOperatingGap: Number(dto.tentativeOperatingGap),
     dailyAverageRevenue: Number(dto.dailyAverageRevenue),
     highestRevenueDay: dto.highestRevenueDay

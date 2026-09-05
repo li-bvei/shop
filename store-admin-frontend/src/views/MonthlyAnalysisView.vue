@@ -85,7 +85,6 @@ const secondaryStats = computed(() => {
   const a = analysis.value
   return [
     { label: t('monthlyAnalysis.expenses'), value: formatCurrency(a.expenses) },
-    { label: t('monthlyAnalysis.wageTotal'), value: formatCurrency(a.wageTotal) },
     { label: t('monthlyAnalysis.tentativeOperatingGap'), value: formatCurrency(a.tentativeOperatingGap) },
     { label: t('monthlyAnalysis.daysWithReports'), value: String(a.daysWithReports) },
     { label: t('monthlyAnalysis.dailyAverageRevenue'), value: formatCurrency(a.dailyAverageRevenue) },
@@ -166,7 +165,6 @@ async function handleDownload() {
         [t('monthlyAnalysis.avgSpend'), a.avgSpend],
         [t('monthlyAnalysis.purchasing'), a.purchasing],
         [t('monthlyAnalysis.expenses'), a.expenses],
-        [t('monthlyAnalysis.wageTotal'), a.wageTotal],
         [t('monthlyAnalysis.tentativeOperatingGap'), a.tentativeOperatingGap],
         [t('monthlyAnalysis.daysWithReports'), a.daysWithReports],
       ]
@@ -227,10 +225,6 @@ async function handleDownload() {
         <div v-for="s in secondaryStats" :key="s.label" class="secondary-card">
           <span class="label">{{ s.label }}</span>
           <span class="value">{{ s.value }}</span>
-        </div>
-        <div class="secondary-card">
-          <span class="label">{{ t('wages.closingStatus.locked') }}</span>
-          <el-tag size="small" round>{{ t(`monthlyAnalysis.wageStatus.${analysis.wageStatus}`) }}</el-tag>
         </div>
       </div>
       <p class="gap-hint">{{ t('monthlyAnalysis.tentativeOperatingGapHint') }}</p>

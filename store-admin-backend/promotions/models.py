@@ -26,6 +26,25 @@ class Campaign(models.Model):
     starts_at = models.DateTimeField(null=True, blank=True)
     ends_at = models.DateTimeField(null=True, blank=True)
 
+    # --- Which business days this campaign applies to -------------------
+    # A branch can run several ACTIVE campaigns at once — a weekday one, a
+    # weekend one, a Golden-Week one — and the counter picks whichever one
+    # matches the sale's business day (services.campaign_applies_on). These
+    # narrow *within* the [starts_at, ends_at] go-live window; they don't
+    # replace it.
+    #   active_weekdays: ISO weekday digits the campaign runs on
+    #     (1=Mon … 7=Sun). '1234567' = every day (the default, = old
+    #     behaviour).
+    #   active_date_from / active_date_to: an inclusive business-day window
+    #     (both null = no date restriction). Used for seasonal campaigns
+    #     like Golden Week.
+    #   priority: when more than one campaign matches a day, the highest
+    #     priority wins (Golden Week > weekend > weekday).
+    active_weekdays = models.CharField(max_length=7, default='1234567')
+    active_date_from = models.DateField(null=True, blank=True)
+    active_date_to = models.DateField(null=True, blank=True)
+    priority = models.PositiveIntegerField(default=0)
+
     # Points economy (phase 0 starting values — calibrated with real data
     # later, see 打卡与抽奖实施方案.md §5). `points_per_draw` /
     # `points_per_voucher` / `voucher_yen_per_unit` are stored now but only
@@ -46,6 +65,20 @@ class Campaign(models.Model):
     # null = the visit-count stamp card is off; otherwise the number of
     # confirmed visits that completes one stamp card.
     stamp_target = models.PositiveIntegerField(null=True, blank=True)
+
+    # --- Daily check-in reward (来店打卡) -------------------------------
+    # When enabled, the customer's first QR scan of the business day (a
+    # staff-confirmed spend, or a standalone "check-in only" tap) issues
+    # one voucher automatically — a free drink / dessert for simply
+    # visiting. Once per business day, guaranteed by CheckInRecord's
+    # (customer, campaign, local_date) unique constraint.
+    checkin_reward_enabled = models.BooleanField(default=False)
+    # A RewardType value (drink / dessert / side_dish in practice). Not
+    # declared as `choices=` here only because RewardType is defined lower
+    # in this module — the serializer validates it against RewardType.
+    checkin_reward_type = models.CharField(max_length=16, blank=True, default='')
+    checkin_reward_config = models.JSONField(default=dict, blank=True)
+    checkin_reward_expires_after_days = models.PositiveIntegerField(default=1)
 
     # A sale at 02:00 belongs to the previous business day for a store that
     # trades past midnight. See promotions.utils.business_local_date.
@@ -204,6 +237,12 @@ class CheckInRecord(models.Model):
     campaign = models.ForeignKey(Campaign, on_delete=models.PROTECT, related_name='checkins')
     spend_verification = models.ForeignKey(
         'promotions.SpendVerification', on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    # The free drink/dessert voucher issued for this being the first visit
+    # of the business day (Campaign.checkin_reward_*). Null = the reward was
+    # off, or this row predates the feature.
+    reward_voucher = models.ForeignKey(
+        'promotions.Voucher', on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
     )
     checked_in_at = models.DateTimeField()
     local_date = models.DateField(help_text='Business day, per Campaign.business_day_cutover.')
@@ -423,6 +462,7 @@ class Voucher(models.Model):
         LOTTERY = 'lottery', 'Lottery win'
         MILESTONE = 'milestone', 'Milestone'
         POINTS_REDEEM = 'points_redeem', 'Points redemption'
+        CHECKIN = 'checkin', 'Daily check-in'
 
     class Status(models.TextChoices):
         ACTIVE = 'active', 'Active'

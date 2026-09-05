@@ -79,6 +79,10 @@ const blankCampaign = (): CampaignPayload => ({
   status: 'draft',
   startsAt: null,
   endsAt: null,
+  activeWeekdays: '1234567',
+  activeDateFrom: null,
+  activeDateTo: null,
+  priority: 0,
   pointsPer1000yen: 10,
   pointsPerDraw: 100,
   pointsPerVoucher: 100,
@@ -89,8 +93,31 @@ const blankCampaign = (): CampaignPayload => ({
   maxDrawsPerCustomerPerDay: 10,
   stampTarget: 5,
   businessDayCutover: '05:00',
+  checkinRewardEnabled: false,
+  checkinRewardType: 'drink',
+  checkinRewardConfig: {},
+  checkinRewardExpiresAfterDays: 1,
 })
 const campaignForm = reactive<CampaignPayload>(blankCampaign())
+
+// ISO weekday digits (1=Mon..7=Sun) <-> a checkbox array
+const WEEKDAY_KEYS = ['1', '2', '3', '4', '5', '6', '7'] as const
+const weekdayLabelKeys: Record<(typeof WEEKDAY_KEYS)[number], string> = {
+  '1': 'promotions.wdMon', '2': 'promotions.wdTue', '3': 'promotions.wdWed',
+  '4': 'promotions.wdThu', '5': 'promotions.wdFri', '6': 'promotions.wdSat', '7': 'promotions.wdSun',
+}
+const activeWeekdayArray = computed<string[]>({
+  get: () => WEEKDAY_KEYS.filter((d) => campaignForm.activeWeekdays.includes(d)),
+  set: (arr) => {
+    const next = WEEKDAY_KEYS.filter((d) => arr.includes(d)).join('')
+    campaignForm.activeWeekdays = next || '1234567'
+  },
+})
+const checkinRewardLabel = computed<string>({
+  get: () => String((campaignForm.checkinRewardConfig as Record<string, unknown>).label ?? ''),
+  set: (v) => { campaignForm.checkinRewardConfig = { ...campaignForm.checkinRewardConfig, label: v } },
+})
+const rewardTypeOptions = ['drink', 'dessert', 'side_dish'] as const
 
 const campaignRules = computed<FormRules>(() => ({
   name: [{ required: true, message: t('promotions.validateName'), trigger: 'blur' }],
@@ -116,6 +143,10 @@ function openCampaignEdit(row: Campaign) {
     status: row.status,
     startsAt: row.startsAt,
     endsAt: row.endsAt,
+    activeWeekdays: row.activeWeekdays || '1234567',
+    activeDateFrom: row.activeDateFrom,
+    activeDateTo: row.activeDateTo,
+    priority: row.priority,
     pointsPer1000yen: row.pointsPer1000yen,
     pointsPerDraw: row.pointsPerDraw,
     pointsPerVoucher: row.pointsPerVoucher,
@@ -126,6 +157,10 @@ function openCampaignEdit(row: Campaign) {
     maxDrawsPerCustomerPerDay: row.maxDrawsPerCustomerPerDay,
     stampTarget: row.stampTarget,
     businessDayCutover: row.businessDayCutover?.slice(0, 5) ?? '05:00',
+    checkinRewardEnabled: row.checkinRewardEnabled,
+    checkinRewardType: row.checkinRewardType || 'drink',
+    checkinRewardConfig: row.checkinRewardConfig ?? {},
+    checkinRewardExpiresAfterDays: row.checkinRewardExpiresAfterDays,
   })
   campaignDialog.value = true
 }
@@ -786,6 +821,59 @@ onMounted(async () => {
               style="width: 100%"
             />
           </el-form-item>
+
+          <el-form-item :label="t('promotions.activeWeekdays')" class="span-2">
+            <el-checkbox-group v-model="activeWeekdayArray">
+              <el-checkbox v-for="d in WEEKDAY_KEYS" :key="d" :value="d">{{ t(weekdayLabelKeys[d]) }}</el-checkbox>
+            </el-checkbox-group>
+            <span class="field-hint">{{ t('promotions.activeWeekdaysHint') }}</span>
+          </el-form-item>
+          <el-form-item :label="t('promotions.activeDateFrom')">
+            <el-date-picker
+              v-model="campaignForm.activeDateFrom"
+              type="date"
+              value-format="YYYY-MM-DD"
+              :placeholder="t('promotions.activeDateAny')"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item :label="t('promotions.activeDateTo')">
+            <el-date-picker
+              v-model="campaignForm.activeDateTo"
+              type="date"
+              value-format="YYYY-MM-DD"
+              :placeholder="t('promotions.activeDateAny')"
+              style="width: 100%"
+            />
+          </el-form-item>
+          <el-form-item :label="t('promotions.priority')">
+            <el-input v-model.number="campaignForm.priority" type="number" min="0" />
+            <span class="field-hint">{{ t('promotions.priorityHint') }}</span>
+          </el-form-item>
+
+          <el-form-item :label="t('promotions.checkinReward')" class="span-2">
+            <el-switch v-model="campaignForm.checkinRewardEnabled" />
+            <span class="field-hint">{{ t('promotions.checkinRewardHint') }}</span>
+          </el-form-item>
+          <template v-if="campaignForm.checkinRewardEnabled">
+            <el-form-item :label="t('promotions.checkinRewardType')">
+              <el-select v-model="campaignForm.checkinRewardType" style="width: 100%">
+                <el-option
+                  v-for="rt in rewardTypeOptions"
+                  :key="rt"
+                  :value="rt"
+                  :label="t(`promotions.rewardType_${rt}`)"
+                />
+              </el-select>
+            </el-form-item>
+            <el-form-item :label="t('promotions.checkinRewardExpiresDays')">
+              <el-input v-model.number="campaignForm.checkinRewardExpiresAfterDays" type="number" min="1" />
+            </el-form-item>
+            <el-form-item :label="t('promotions.checkinRewardLabel')" class="span-2">
+              <el-input v-model="checkinRewardLabel" :placeholder="t('promotions.checkinRewardLabelPlaceholder')" />
+            </el-form-item>
+          </template>
+
           <el-form-item :label="t('promotions.earnRateLabel')">
             <el-input v-model.number="campaignForm.pointsPer1000yen" type="number" />
           </el-form-item>
@@ -945,6 +1033,17 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 14px;
+}
+
+.form-grid .span-2 {
+  grid-column: 1 / -1;
+}
+
+.field-hint {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  line-height: 1.4;
+  margin-top: 2px;
 }
 
 .phase-note {

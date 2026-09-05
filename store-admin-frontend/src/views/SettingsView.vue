@@ -17,6 +17,7 @@ import {
   updateAccount,
   deleteAccount,
   adminResetPassword,
+  setAccountActive,
   changeOwnPassword,
   fetchOrganization,
   updateOrganization,
@@ -416,6 +417,34 @@ async function handleDeleteAccount(record: AccountRecord) {
   }
 }
 
+async function handleToggleActive(record: AccountRecord, nextActive: boolean) {
+  if (!nextActive) {
+    try {
+      await ElMessageBox.confirm(
+        t('settings.disableAccountConfirm', { account: record.account }),
+        t('common.confirm'),
+        { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') },
+      )
+    } catch {
+      return
+    }
+  }
+  try {
+    await setAccountActive(record.id, nextActive)
+    ElMessage.success(nextActive ? t('settings.accountEnabled') : t('settings.accountDisabled'))
+    await loadAccounts()
+  } catch (err) {
+    if (err instanceof Error && err.message === 'cannot-disable-self') {
+      ElMessage.warning(t('settings.cannotDisableSelf'))
+    } else if (err instanceof Error && err.message === 'cannot-disable-last-admin') {
+      ElMessage.warning(t('settings.cannotDisableLastAdmin'))
+    } else {
+      ElMessage.error(t('common.saveFailed'))
+    }
+    await loadAccounts()
+  }
+}
+
 async function handleResetPassword(record: AccountRecord) {
   try {
     const { value } = await ElMessageBox.prompt(
@@ -569,6 +598,17 @@ async function handleChangePassword() {
           <template #default="{ row }">
             {{ accountBranchLabel(row.branchId) }}
             <span v-if="row.role === 'staff'" class="staff-member-hint">（{{ staffMemberLabel(row.staffMemberId) }}）</span>
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('settings.accountStatus')" width="110">
+          <template #default="{ row }">
+            <el-switch
+              :model-value="row.isActive"
+              :active-text="t('settings.accountActive')"
+              :inactive-text="t('settings.accountInactive')"
+              inline-prompt
+              @update:model-value="(v: boolean) => handleToggleActive(row, v)"
+            />
           </template>
         </el-table-column>
         <el-table-column :label="t('common.actions')" width="140" fixed="right">

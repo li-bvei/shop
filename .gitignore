@@ -8,7 +8,11 @@ db_backups/
 # db_backups/, just JSON instead of SQL.
 store-admin-backend/branches/management/commands/seed_data/
 store-admin-backend/purchasing/management/commands/import_data/
-store-admin-backend/dailyreports/management/commands/import_data/
+# The parsed daily_reports_2026.json here holds real revenue/staff/expense
+# figures and stays out — but the parser script that produces it is code,
+# not data, and is worth keeping.
+store-admin-backend/dailyreports/management/commands/import_data/*
+!store-admin-backend/dailyreports/management/commands/import_data/parse_monthly_xlsm.py
 
 # OS cruft
 .DS_Store

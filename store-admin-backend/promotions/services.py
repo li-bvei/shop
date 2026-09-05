@@ -18,8 +18,8 @@ from rest_framework.exceptions import ValidationError
 
 from . import risk
 from .models import (
-    Campaign, CheckInRecord, Customer, LotteryDraw, Milestone, MilestoneClaim, PointsLedger, Prize,
-    RewardType, SpendVerification, Voucher,
+    Campaign, CheckInRecord, CheckinMilestone, CheckinMilestoneClaim, Customer, LotteryDraw, Milestone,
+    MilestoneClaim, PointsLedger, Prize, RewardType, SpendVerification, Voucher,
 )
 from .utils import business_local_date, normalize_birthday_md, normalize_phone, normalize_pin
 
@@ -363,8 +363,9 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
             check_in.spend_verification = verification
             check_in.save(update_fields=['spend_verification'])
             # First scan of the business day — even a paid checkout counts
-            # as "showed the QR today", so the check-in perk fires here too.
+            # as "showed the QR today", so the check-in perks fire here too.
             _issue_checkin_reward(customer=locked, campaign=campaign, branch=branch, check_in=check_in)
+            _apply_checkin_milestones(customer=locked, campaign=campaign, branch=branch)
 
         update_fields = ['last_seen_at']
         locked.last_seen_at = now
@@ -421,14 +422,23 @@ def record_checkin(*, campaign, branch, customer, verified_by=None, ip=None) -> 
             defaults={'branch': branch, 'checked_in_at': now, 'result': 'checkin_only'},
         )
         reward = None
+        milestone_vouchers = []
         if created:
             reward = _issue_checkin_reward(
                 customer=locked, campaign=campaign, branch=branch, check_in=check_in,
             )
+            milestone_vouchers = _apply_checkin_milestones(
+                customer=locked, campaign=campaign, branch=branch,
+            )
             locked.last_seen_at = now
             locked.save(update_fields=['last_seen_at'])
 
-    return {'check_in': check_in, 'reward_voucher': reward, 'already_checked_in': not created}
+    return {
+        'check_in': check_in,
+        'reward_voucher': reward,
+        'milestone_vouchers': milestone_vouchers,
+        'already_checked_in': not created,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +638,37 @@ def _issue_checkin_reward(*, customer, campaign, branch, check_in):
     check_in.reward_voucher = voucher
     check_in.save(update_fields=['reward_voucher'])
     return voucher
+
+
+def _apply_checkin_milestones(*, customer, campaign, branch) -> list:
+    """Issue a voucher for every check-in milestone the customer's total
+    visit count now covers and hasn't claimed (3 visits -> dessert, 5 ->
+    ¥100 voucher, …). Call right after a new CheckInRecord is created, with
+    `customer` row-locked."""
+    total_checkins = CheckInRecord.objects.filter(customer=customer).count()
+    claimed = set(
+        CheckinMilestoneClaim.objects.filter(customer=customer).values_list('milestone_id', flat=True)
+    )
+    due = (
+        CheckinMilestone.objects
+        .filter(campaign=campaign, active=True, checkin_threshold__lte=total_checkins)
+        .exclude(id__in=claimed)
+        .order_by('checkin_threshold')
+    )
+    issued = []
+    for milestone in due:
+        voucher = _issue_voucher(
+            customer=customer, campaign=campaign, branch=branch,
+            reward_type=milestone.reward_type, config=milestone.reward_config,
+            expires_days=milestone.voucher_expires_after_days,
+            source=Voucher.Source.CHECKIN,
+        )
+        CheckinMilestoneClaim.objects.create(
+            customer=customer, milestone=milestone, voucher=voucher,
+            checkins_at_claim=total_checkins,
+        )
+        issued.append(voucher)
+    return issued
 
 
 def _apply_milestones(*, customer, campaign, now) -> list:

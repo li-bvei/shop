@@ -1,24 +1,28 @@
-"""Turn on the daily "来店チェックイン" reward (a free drink voucher on the
-customer's first QR scan of the day) for a chain's active campaigns.
+"""Seed the 来店チェックイン ("visit and get rewarded") activity onto a
+chain's active campaigns.
 
-Unlike seed_promotions_demo this is NOT DEBUG-gated — it is meant to be run
-once on the server after deploying the check-in feature:
+By default it sets up two cumulative-visit tiers:
+  * 3 check-ins  -> dessert voucher
+  * 5 check-ins  -> ¥100 discount voucher
+each valid for 7 days. Optionally also turn on the per-day reward (a
+voucher on every first scan of the day).
+
+Not DEBUG-gated — meant to be run once on the server after deploying the
+check-in feature. Idempotent: re-running just re-asserts the tiers.
 
     python manage.py seed_checkin_reward --org 1
-    python manage.py seed_checkin_reward --branch shinsaibashi --reward-type dessert
-
-It is idempotent: every run just re-asserts the reward config on each
-active campaign it finds. A branch with no active campaign gets a minimal
-one created so the reward has somewhere to live.
+    python manage.py seed_checkin_reward --branch shinsaibashi --expires-days 10
+    python manage.py seed_checkin_reward --org 1 --dessert-at 3 --voucher-at 5 --voucher-yen 200
+    python manage.py seed_checkin_reward --org 1 --daily-reward drink   # + a drink every day
 """
 from django.core.management.base import BaseCommand, CommandError
 
 from branches.models import Branch
 from organizations.models import Organization
 
-from promotions.models import Campaign, RewardType
+from promotions.models import Campaign, CheckinMilestone, RewardType
 
-DEFAULT_LABELS = {
+DAILY_LABELS = {
     RewardType.DRINK: 'ご来店ドリンクサービス券',
     RewardType.DESSERT: 'ご来店デザートサービス券',
     RewardType.SIDE_DISH: 'ご来店小鉢サービス券',
@@ -26,55 +30,79 @@ DEFAULT_LABELS = {
 
 
 class Command(BaseCommand):
-    help = 'Enable the daily check-in reward (free drink/dessert voucher) on a chain\'s active campaigns.'
+    help = 'Seed the check-in reward tiers (3 visits -> dessert, 5 visits -> ¥100 voucher) on active campaigns.'
 
     def add_arguments(self, parser):
         parser.add_argument('--org', help='Organization id — every branch in it.')
         parser.add_argument('--branch', help='A single branch id.')
+        parser.add_argument('--expires-days', type=int, default=7, help='Voucher validity in days (default: 7).')
+        parser.add_argument('--dessert-at', type=int, default=3, help='Visit count for the dessert tier (default: 3).')
+        parser.add_argument('--voucher-at', type=int, default=5, help='Visit count for the cash tier (default: 5).')
+        parser.add_argument('--voucher-yen', type=int, default=100, help='Face value of the cash tier (default: 100).')
         parser.add_argument(
-            '--reward-type', default=RewardType.DRINK,
+            '--daily-reward', default=None,
             choices=[RewardType.DRINK, RewardType.DESSERT, RewardType.SIDE_DISH],
-            help='What the check-in voucher is for (default: drink).',
+            help='Also issue this on every first scan of the day (default: off).',
         )
-        parser.add_argument('--label', default=None, help='Voucher label (default: a JA phrase per reward type).')
-        parser.add_argument('--expires-days', type=int, default=1, help='Voucher validity in days (default: 1).')
 
     def handle(self, *args, **options):
         branches = self._resolve_branches(options)
-        reward_type = options['reward_type']
-        label = options['label'] or DEFAULT_LABELS[reward_type]
-        expires_days = max(1, options['expires_days'])
+        expires = max(1, options['expires_days'])
+        dessert_at = max(1, options['dessert_at'])
+        voucher_at = max(1, options['voucher_at'])
+        voucher_yen = max(1, options['voucher_yen'])
+        daily = options['daily_reward']
 
-        config = {
-            'checkin_reward_enabled': True,
-            'checkin_reward_type': reward_type,
-            'checkin_reward_config': {'label': label},
-            'checkin_reward_expires_after_days': expires_days,
-        }
+        tiers = [
+            (dessert_at, RewardType.DESSERT, {'label': f'{dessert_at}回来店：デザートサービス券'}, f'{dessert_at}回来店特典'),
+            (voucher_at, RewardType.CASH_VOUCHER, {'face_yen': voucher_yen}, f'{voucher_at}回来店特典'),
+        ]
 
-        touched = 0
-        for branch in branches:
-            campaigns = list(Campaign.objects.filter(branch=branch, status=Campaign.Status.ACTIVE))
-            if not campaigns:
-                campaigns = [Campaign.objects.create(
-                    branch=branch, name='来店チェックインキャンペーン',
-                    description='seed_checkin_reward — daily check-in drink voucher',
-                    status=Campaign.Status.ACTIVE, active_weekdays='1234567', priority=0,
-                    **config,
-                )]
-                self.stdout.write(f'  {branch.id}: created campaign {campaigns[0].id}')
-            else:
-                for campaign in campaigns:
-                    for field, value in config.items():
-                        setattr(campaign, field, value)
-                    campaign.save(update_fields=list(config))
-                    self.stdout.write(f'  {branch.id}: updated campaign {campaign.id} ({campaign.name})')
-            touched += len(campaigns)
+        campaigns = self._target_campaigns(branches)
+        for campaign in campaigns:
+            for threshold, rtype, config, label in tiers:
+                CheckinMilestone.objects.update_or_create(
+                    campaign=campaign, checkin_threshold=threshold,
+                    defaults={
+                        'reward_type': rtype, 'reward_config': config,
+                        'voucher_expires_after_days': expires, 'display_label': label, 'active': True,
+                    },
+                )
+            # drop any tiers no longer in the seed so re-running is clean
+            campaign.checkin_milestones.exclude(
+                checkin_threshold__in=[t[0] for t in tiers],
+            ).delete()
+
+            if daily:
+                campaign.checkin_reward_enabled = True
+                campaign.checkin_reward_type = daily
+                campaign.checkin_reward_config = {'label': DAILY_LABELS[daily]}
+                campaign.checkin_reward_expires_after_days = expires
+                campaign.save(update_fields=[
+                    'checkin_reward_enabled', 'checkin_reward_type',
+                    'checkin_reward_config', 'checkin_reward_expires_after_days',
+                ])
+            self.stdout.write(f'  {campaign.branch_id}: campaign {campaign.id} ({campaign.name})')
 
         self.stdout.write(self.style.SUCCESS(
-            f'check-in reward on: {reward_type} "{label}", {expires_days}d validity — '
-            f'{touched} campaign(s) across {len(branches)} branch(es)'
+            f'check-in tiers: {dessert_at}→dessert, {voucher_at}→¥{voucher_yen:,} voucher, {expires}d validity'
+            + (f'; daily {daily}' if daily else '')
+            + f' — {len(campaigns)} campaign(s) across {len(branches)} branch(es)'
         ))
+
+    def _target_campaigns(self, branches):
+        campaigns = []
+        for branch in branches:
+            active = list(Campaign.objects.filter(branch=branch, status=Campaign.Status.ACTIVE))
+            if not active:
+                active = [Campaign.objects.create(
+                    branch=branch, name='来店チェックインキャンペーン',
+                    description='seed_checkin_reward',
+                    status=Campaign.Status.ACTIVE, active_weekdays='1234567', priority=0,
+                )]
+                self.stdout.write(f'  {branch.id}: created campaign {active[0].id}')
+            campaigns.extend(active)
+        return campaigns
 
     def _resolve_branches(self, options):
         if options.get('branch'):

@@ -47,6 +47,7 @@ _PATH_FEATURE_PREFIXES = (
     ('promotions/spend-verifications', 'promotions'),
     ('promotions/prizes', 'promotions'),
     ('promotions/milestones', 'promotions'),
+    ('promotions/checkin-milestones', 'promotions'),
     ('promotions/vouchers', 'promotions'),
     ('promotions/risk-events', 'promotions'),
     ('promotions/staff-permissions', 'promotions'),

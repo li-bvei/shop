@@ -325,10 +325,21 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
         <div class="check-mark">✓</div>
         <h1>{{ t('promoVerify.checkinDoneTitle') }}</h1>
         <p v-if="checkinResult.alreadyCheckedIn" class="done-detail">{{ t('promoVerify.checkinAlready') }}</p>
-        <p v-else-if="checkinResult.rewardVoucher" class="done-detail">
-          {{ t('promoVerify.checkinVoucher', { label: checkinResult.rewardVoucher.label }) }}
-        </p>
-        <p v-else class="done-detail">{{ t('promoVerify.checkinNoReward') }}</p>
+        <template v-else>
+          <p v-if="checkinResult.rewardVoucher" class="done-detail">
+            {{ t('promoVerify.checkinVoucher', { label: checkinResult.rewardVoucher.label }) }}
+          </p>
+          <p
+            v-for="mv in checkinResult.milestoneVouchers"
+            :key="mv.redemptionCode"
+            class="done-detail milestone"
+          >
+            🎉 {{ t('promoVerify.checkinVoucher', { label: mv.label }) }}
+          </p>
+          <p v-if="!checkinResult.rewardVoucher && !checkinResult.milestoneVouchers.length" class="done-detail">
+            {{ t('promoVerify.checkinNoReward') }}
+          </p>
+        </template>
         <button type="button" class="primary-btn" @click="resetToScan">{{ t('promoVerify.next') }}</button>
       </section>
     </main>

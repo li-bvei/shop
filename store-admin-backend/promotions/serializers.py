@@ -3,8 +3,8 @@ from rest_framework import serializers
 from branches.models import Branch
 
 from .models import (
-    Campaign, CheckInRecord, Customer, LotteryDraw, Milestone, PointsLedger, Prize, RewardType,
-    RiskEvent, SpendVerification, StaffPermission, Voucher,
+    Campaign, CheckinMilestone, CheckInRecord, Customer, LotteryDraw, Milestone, PointsLedger, Prize,
+    RewardType, RiskEvent, SpendVerification, StaffPermission, Voucher,
 )
 from .services import make_store_token
 
@@ -304,6 +304,27 @@ class MilestoneSerializer(serializers.ModelSerializer):
         reward_type = attrs.get('reward_type', getattr(self.instance, 'reward_type', None))
         if reward_type == RewardType.POINTS_REFUND:
             raise serializers.ValidationError({'reward_type': ['milestone-cannot-be-points-refund']})
+        config = attrs.get('reward_config', getattr(self.instance, 'reward_config', {}))
+        attrs['reward_config'] = validate_reward_config(reward_type, config)
+        return attrs
+
+
+class CheckinMilestoneSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CheckinMilestone
+        fields = [
+            'id', 'campaign', 'checkin_threshold', 'reward_type', 'reward_config',
+            'voucher_expires_after_days', 'display_label', 'active',
+        ]
+        read_only_fields = ['campaign']
+
+    def validate(self, attrs):
+        reward_type = attrs.get('reward_type', getattr(self.instance, 'reward_type', None))
+        if reward_type == RewardType.POINTS_REFUND:
+            raise serializers.ValidationError({'reward_type': ['checkin-milestone-cannot-be-points-refund']})
+        threshold = attrs.get('checkin_threshold', getattr(self.instance, 'checkin_threshold', 0))
+        if threshold < 1:
+            raise serializers.ValidationError({'checkin_threshold': ['must-be-at-least-1']})
         config = attrs.get('reward_config', getattr(self.instance, 'reward_config', {}))
         attrs['reward_config'] = validate_reward_config(reward_type, config)
         return attrs

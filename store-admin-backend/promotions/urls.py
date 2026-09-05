@@ -2,8 +2,8 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    CampaignViewSet, CustomerViewSet, GuestCardPulseView, GuestCardView, GuestDrawView,
-    GuestLoginView, GuestPrizesView, GuestRecoverView, GuestRedeemView, GuestRegisterView,
+    CampaignViewSet, CheckinMilestoneViewSet, CustomerViewSet, GuestCardPulseView, GuestCardView,
+    GuestDrawView, GuestLoginView, GuestPrizesView, GuestRecoverView, GuestRedeemView, GuestRegisterView,
     GuestSetPinView, GuestStoreContextView, GuestVoucherRedeemView, MilestoneViewSet, PrizeViewSet,
     RiskEventViewSet, SpendVerificationViewSet, StaffPermissionViewSet, VoucherViewSet,
 )
@@ -14,6 +14,7 @@ router.register('promotions/customers', CustomerViewSet, basename='promo-custome
 router.register('promotions/spend-verifications', SpendVerificationViewSet, basename='promo-spend-verification')
 router.register('promotions/prizes', PrizeViewSet, basename='promo-prize')
 router.register('promotions/milestones', MilestoneViewSet, basename='promo-milestone')
+router.register('promotions/checkin-milestones', CheckinMilestoneViewSet, basename='promo-checkin-milestone')
 router.register('promotions/vouchers', VoucherViewSet, basename='promo-voucher')
 router.register('promotions/risk-events', RiskEventViewSet, basename='promo-risk-event')
 router.register('promotions/staff-permissions', StaffPermissionViewSet, basename='promo-staff-permission')

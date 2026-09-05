@@ -6,8 +6,9 @@ from rest_framework.exceptions import ValidationError
 from common.test_utils import ApiTestCase, TwoOrganizationApiTestCase
 
 from .models import (
-    Campaign, CheckInRecord, Customer, LotteryDraw, Milestone, MilestoneClaim, PointsLedger, Prize,
-    RewardType, RiskEvent, SpendVerification, StaffPermission, Voucher,
+    Campaign, CheckinMilestone, CheckinMilestoneClaim, CheckInRecord, Customer, LotteryDraw, Milestone,
+    MilestoneClaim, PointsLedger, Prize, RewardType, RiskEvent, SpendVerification, StaffPermission,
+    Voucher,
 )
 from .retention import purge_stale_customers
 from .services import (
@@ -1597,6 +1598,66 @@ class CheckinRewardTests(ApiTestCase):
         )
         self.assertEqual(resp.status_code, 400)
         self.assertIn('head-office-account-cannot-scan', str(resp.data))
+
+
+class CheckinMilestoneTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.campaign = make_campaign(self.branch_a)
+        self.customer = register_customer(organization=self.org, phone='09011112222', name='田中')
+        CheckinMilestone.objects.create(
+            campaign=self.campaign, checkin_threshold=3, reward_type=RewardType.DESSERT,
+            reward_config={'label': '3回来店：デザート券'}, voucher_expires_after_days=7,
+        )
+        CheckinMilestone.objects.create(
+            campaign=self.campaign, checkin_threshold=5, reward_type=RewardType.CASH_VOUCHER,
+            reward_config={'face_yen': 100}, voucher_expires_after_days=7,
+        )
+
+    def _checkin_on(self, day):
+        """One check-in on a distinct business day via record_checkin."""
+        from unittest import mock
+
+        from .services import record_checkin
+
+        with mock.patch('promotions.services.business_local_date', return_value=day):
+            return record_checkin(campaign=self.campaign, branch=self.branch_a, customer=self.customer)
+
+    def test_tiers_fire_once_at_their_visit_count(self):
+        from datetime import date
+
+        for i in range(1, 6):
+            res = self._checkin_on(date(2026, 9, i))
+            cash = Voucher.objects.filter(customer=self.customer, reward_type=RewardType.CASH_VOUCHER)
+            dessert = Voucher.objects.filter(customer=self.customer, reward_type=RewardType.DESSERT)
+            if i < 3:
+                self.assertEqual(dessert.count(), 0)
+            elif i >= 3:
+                self.assertEqual(dessert.count(), 1)
+            if i < 5:
+                self.assertEqual(cash.count(), 0)
+            else:
+                self.assertEqual(cash.count(), 1)
+            self.assertEqual(len(res['milestone_vouchers']), 1 if i in (3, 5) else 0)
+
+        # a 6th visit issues nothing new
+        res = self._checkin_on(date(2026, 9, 6))
+        self.assertEqual(len(res['milestone_vouchers']), 0)
+        self.assertEqual(CheckinMilestoneClaim.objects.filter(customer=self.customer).count(), 2)
+
+    def test_seed_command_sets_up_the_default_tiers(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        self.campaign.checkin_milestones.all().delete()
+        call_command('seed_checkin_reward', '--branch', self.branch_a.id, stdout=StringIO())
+        tiers = list(
+            self.campaign.checkin_milestones.order_by('checkin_threshold')
+            .values_list('checkin_threshold', 'reward_type')
+        )
+        self.assertEqual(tiers, [(3, RewardType.DESSERT), (5, RewardType.CASH_VOUCHER)])
+        self.assertEqual(self.campaign.checkin_milestones.first().voucher_expires_after_days, 7)
 
 
 class CampaignSerializerScheduleTests(ApiTestCase):

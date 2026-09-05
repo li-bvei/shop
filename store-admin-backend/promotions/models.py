@@ -551,6 +551,51 @@ class MilestoneClaim(models.Model):
         ]
 
 
+class CheckinMilestone(models.Model):
+    """A cumulative *visit-count* threshold that hands out a bonus voucher
+    the first time a customer's total check-ins reaches it (e.g. 3 visits ->
+    dessert, 5 visits -> ¥100 voucher). Parallel to Milestone, but keyed on
+    CheckInRecord count rather than lifetime points, so a customer who just
+    turns up (no minimum spend) still progresses."""
+
+    campaign = models.ForeignKey(Campaign, on_delete=models.CASCADE, related_name='checkin_milestones')
+    checkin_threshold = models.PositiveIntegerField(help_text='Total check-ins that unlocks this reward.')
+    reward_type = models.CharField(max_length=16, choices=RewardType.choices)
+    reward_config = models.JSONField(default=dict, blank=True)
+    voucher_expires_after_days = models.PositiveIntegerField(default=7)
+    display_label = models.CharField(max_length=120, blank=True)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['campaign', 'checkin_threshold']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['campaign', 'checkin_threshold'], name='unique_promo_checkin_milestone_threshold',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.campaign_id} @ {self.checkin_threshold} visits'
+
+
+class CheckinMilestoneClaim(models.Model):
+    """One row the first time a customer reaches a check-in milestone."""
+
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='checkin_milestone_claims')
+    milestone = models.ForeignKey(CheckinMilestone, on_delete=models.CASCADE, related_name='claims')
+    voucher = models.ForeignKey(Voucher, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    checkins_at_claim = models.PositiveIntegerField()
+    claimed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-claimed_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['customer', 'milestone'], name='unique_promo_checkin_milestone_claim',
+            ),
+        ]
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — anti-fraud
 # ---------------------------------------------------------------------------

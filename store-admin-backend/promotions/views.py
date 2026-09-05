@@ -16,16 +16,16 @@ from branches.models import Branch
 from common.permissions import BranchScopedQuerysetMixin
 
 from .models import (
-    Campaign, CheckInRecord, Customer, LotteryDraw, Milestone, Prize, RiskEvent, SpendVerification,
-    StaffPermission, Voucher,
+    Campaign, CheckinMilestone, CheckInRecord, Customer, LotteryDraw, Milestone, Prize, RiskEvent,
+    SpendVerification, StaffPermission, Voucher,
 )
 from .reports import build_campaign_report
 from .serializers import (
-    CampaignSerializer, CheckInRecordSerializer, CustomerDetailSerializer, CustomerSerializer,
-    GuestDrawSerializer, GuestLoginSerializer, GuestRecoverSerializer, GuestRedeemSerializer,
-    GuestRegisterSerializer, GuestSetPinSerializer, GuestVoucherSerializer, LotteryDrawSerializer,
-    MilestoneSerializer, PointsLedgerSerializer, PrizeSerializer, RiskEventSerializer,
-    SpendVerificationSerializer, StaffPermissionSerializer, VoucherSerializer,
+    CampaignSerializer, CheckInRecordSerializer, CheckinMilestoneSerializer, CustomerDetailSerializer,
+    CustomerSerializer, GuestDrawSerializer, GuestLoginSerializer, GuestRecoverSerializer,
+    GuestRedeemSerializer, GuestRegisterSerializer, GuestSetPinSerializer, GuestVoucherSerializer,
+    LotteryDrawSerializer, MilestoneSerializer, PointsLedgerSerializer, PrizeSerializer,
+    RiskEventSerializer, SpendVerificationSerializer, StaffPermissionSerializer, VoucherSerializer,
 )
 from .services import (
     GUEST_COOKIE_MAX_AGE, GUEST_COOKIE_NAME, AmbiguousGuestLookup, adjust_points, campaign_is_open,
@@ -790,9 +790,11 @@ class SpendVerificationViewSet(viewsets.ModelViewSet):
             verified_by=user, ip=client_ip(request),
         )
         voucher = result['reward_voucher']
+        milestone_vouchers = result.get('milestone_vouchers') or []
         return Response({
             'already_checked_in': result['already_checked_in'],
             'reward_voucher': VoucherSerializer(voucher).data if voucher else None,
+            'milestone_vouchers': VoucherSerializer(milestone_vouchers, many=True).data,
         }, status=200 if result['already_checked_in'] else 201)
 
     @staticmethod
@@ -970,6 +972,11 @@ class PrizeViewSet(_CampaignChildViewSet):
 class MilestoneViewSet(_CampaignChildViewSet):
     model = Milestone
     serializer_class = MilestoneSerializer
+
+
+class CheckinMilestoneViewSet(_CampaignChildViewSet):
+    model = CheckinMilestone
+    serializer_class = CheckinMilestoneSerializer
 
 
 # ---------------------------------------------------------------------------

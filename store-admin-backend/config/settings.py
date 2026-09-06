@@ -21,6 +21,16 @@ DEBUG = env('DEBUG')
 
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1'])
 
+# Served behind an outer nginx (宝塔) that terminates TLS and proxies plain
+# HTTP inward — trust its X-Forwarded-Proto so request.is_secure(),
+# SECURE_SSL_REDIRECT and the CSRF Origin check know the request was HTTPS.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Django admin (session + CSRF) over HTTPS needs the site's own https://
+# origin listed here. The JWT API doesn't use CSRF, so this only matters
+# for /admin/. Empty in local dev.
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
+
 
 # Application definition
 

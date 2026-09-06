@@ -147,6 +147,9 @@ export default {
     noPhone: '未登记电话号码', noBatchHint: '请先建立一个抽选批次，再开始录入中奖者。', completeEntry: '请先完成日期、店铺和姓名的选择',
     validateName: '请输入姓名', validateDate: '请选择日期', personSaved: '资料已保存', recordSaved: '记录已保存', batchSaved: '抽选批次已保存', duplicateRecord: '这条记录已经存在',
     deleteRecordConfirm: '确定删除这条记录吗？', batchLabel: '批次名称（可选）', batchLabelPlaceholder: '如：8月中旬抽奖',
+    viewToday: '今日', viewBrowse: '浏览', viewThisBatch: '本批次', viewAll: '全部',
+    searchNamePlaceholder: '搜索姓名或电话', recentPeople: '最近录入', dayCount: '天数', browseEmpty: '该范围内没有记录',
+    rangeLast2w: '最近两周', rangeThisMonth: '本月', rangeLastMonth: '上月',
   },
   dailyReport: {
     pageTitle: '每日报表录入',

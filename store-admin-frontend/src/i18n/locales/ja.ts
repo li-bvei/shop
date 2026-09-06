@@ -147,6 +147,9 @@ export default {
     noPhone: '電話番号未登録', noBatchHint: '先に抽選期間を作成してください。', completeEntry: '日付・店舗・氏名を入力してください',
     validateName: '氏名を入力してください', validateDate: '日付を選択してください', personSaved: '人物情報を保存しました', recordSaved: '記録を保存しました', batchSaved: '抽選期間を保存しました', duplicateRecord: 'この記録はすでに存在します',
     deleteRecordConfirm: 'この記録を削除しますか？', batchLabel: '期間名（任意）', batchLabelPlaceholder: '例：8月中旬抽選',
+    viewToday: '本日', viewBrowse: '一覧', viewThisBatch: 'この期間', viewAll: 'すべて',
+    searchNamePlaceholder: '氏名・電話で検索', recentPeople: '最近の入力', dayCount: '日数', browseEmpty: 'この範囲に記録はありません',
+    rangeLast2w: '直近2週間', rangeThisMonth: '今月', rangeLastMonth: '先月',
   },
   dailyReport: {
     pageTitle: '日報入力',

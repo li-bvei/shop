@@ -130,10 +130,15 @@ export async function createDabingPerson(payload: Omit<DabingPerson, 'id' | 'pho
   return fromDabingPerson(dto)
 }
 
-export async function fetchDabingRecords(filters: { date?: string; storeId?: string } = {}): Promise<DabingRecord[]> {
+export async function fetchDabingRecords(
+  filters: { date?: string; storeId?: string; dateFrom?: string; dateTo?: string; search?: string } = {},
+): Promise<DabingRecord[]> {
   const query = new URLSearchParams()
   if (filters.date) query.set('draw_date', filters.date)
   if (filters.storeId) query.set('store', filters.storeId)
+  if (filters.dateFrom) query.set('date_from', filters.dateFrom)
+  if (filters.dateTo) query.set('date_to', filters.dateTo)
+  if (filters.search) query.set('search', filters.search)
   const suffix = query.toString() ? `?${query.toString()}` : ''
   const rows = await http.get<DabingRecordDto[]>(`/lottery/dabing-records/${suffix}`)
   return rows.map(fromDabingRecord)
@@ -170,8 +175,15 @@ export async function createKyotoBatch(payload: { drawStartDate: string; drawEnd
   return fromKyotoBatch(dto)
 }
 
-export async function fetchKyotoRecords(batchId?: string): Promise<KyotoRecord[]> {
-  const suffix = batchId ? `?${new URLSearchParams({ batch: batchId }).toString()}` : ''
+export async function fetchKyotoRecords(
+  filters: { batchId?: string; publishFrom?: string; publishTo?: string; search?: string } = {},
+): Promise<KyotoRecord[]> {
+  const query = new URLSearchParams()
+  if (filters.batchId) query.set('batch', filters.batchId)
+  if (filters.publishFrom) query.set('publish_from', filters.publishFrom)
+  if (filters.publishTo) query.set('publish_to', filters.publishTo)
+  if (filters.search) query.set('search', filters.search)
+  const suffix = query.toString() ? `?${query.toString()}` : ''
   const rows = await http.get<KyotoRecordDto[]>(`/lottery/kyoto-records/${suffix}`)
   return rows.map(fromKyotoRecord)
 }

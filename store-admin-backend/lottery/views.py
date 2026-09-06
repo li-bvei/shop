@@ -1,3 +1,5 @@
+import django_filters
+from django.db.models import Q
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -60,10 +62,30 @@ class DabingPersonViewSet(OrganizationScopedViewSet):
         return qs
 
 
+class DabingRecordFilter(django_filters.FilterSet):
+    """Exact `draw_date` keeps the single-day "today" view; `date_from` /
+    `date_to` power the browse-by-range and month views; `search` matches a
+    person name or the phone snapshot for cross-day history lookups."""
+
+    date_from = django_filters.DateFilter(field_name='draw_date', lookup_expr='gte')
+    date_to = django_filters.DateFilter(field_name='draw_date', lookup_expr='lte')
+    search = django_filters.CharFilter(method='filter_search')
+
+    class Meta:
+        model = DabingRecord
+        fields = ['store', 'draw_date', 'person']
+
+    def filter_search(self, queryset, name, value):
+        value = (value or '').strip()
+        if not value:
+            return queryset
+        return queryset.filter(Q(person__name__icontains=value) | Q(phone_snapshot__icontains=value))
+
+
 class DabingRecordViewSet(OrganizationScopedViewSet):
     serializer_class = DabingRecordSerializer
     queryset = DabingRecord.objects.select_related('store', 'person', 'created_by').all()
-    filterset_fields = ['store', 'draw_date', 'person']
+    filterset_class = DabingRecordFilter
 
     def perform_create(self, serializer):
         person = serializer.validated_data['person']
@@ -122,10 +144,30 @@ class KyotoDrawBatchViewSet(OrganizationScopedViewSet):
     filterset_fields = ['is_active', 'publish_date']
 
 
+class KyotoRecordFilter(django_filters.FilterSet):
+    """`batch` keeps the single-batch view; `publish_from` / `publish_to`
+    (against the batch publish date) and `search` power the cross-batch
+    "all" view."""
+
+    publish_from = django_filters.DateFilter(field_name='batch__publish_date', lookup_expr='gte')
+    publish_to = django_filters.DateFilter(field_name='batch__publish_date', lookup_expr='lte')
+    search = django_filters.CharFilter(method='filter_search')
+
+    class Meta:
+        model = KyotoRecord
+        fields = ['batch', 'person']
+
+    def filter_search(self, queryset, name, value):
+        value = (value or '').strip()
+        if not value:
+            return queryset
+        return queryset.filter(Q(person__name__icontains=value) | Q(phone_snapshot__icontains=value))
+
+
 class KyotoRecordViewSet(OrganizationScopedViewSet):
     serializer_class = KyotoRecordSerializer
     queryset = KyotoRecord.objects.select_related('batch', 'person', 'created_by').all()
-    filterset_fields = ['batch', 'person']
+    filterset_class = KyotoRecordFilter
 
     def perform_create(self, serializer):
         person = serializer.validated_data['person']

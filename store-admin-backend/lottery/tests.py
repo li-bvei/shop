@@ -56,6 +56,48 @@ class LotteryWorkflowTests(ApiTestCase):
         duplicate = self.client.post('/api/lottery/kyoto-records/', {'batch': batch.id, 'person': person.id}, format='json')
         self.assertEqual(duplicate.status_code, 400)
 
+    def test_dabing_records_filter_by_date_range_and_name_search(self):
+        store = DabingStore.objects.create(organization=self.org, name='梅田', sort_order=1)
+        alice = DabingPerson.objects.create(organization=self.org, name='DEMO Alice', phone='09011112222')
+        bob = DabingPerson.objects.create(organization=self.org, name='DEMO Bob', phone='09033334444')
+        DabingRecord.objects.create(organization=self.org, store=store, person=alice, draw_date=date(2026, 8, 1))
+        DabingRecord.objects.create(organization=self.org, store=store, person=bob, draw_date=date(2026, 8, 20), phone_snapshot='09033334444')
+        DabingRecord.objects.create(organization=self.org, store=store, person=alice, draw_date=date(2026, 9, 5))
+
+        ranged = self.client.get('/api/lottery/dabing-records/?date_from=2026-08-01&date_to=2026-08-31')
+        self.assertEqual(ranged.status_code, 200)
+        self.assertEqual(len(ranged.data), 2)
+
+        searched = self.client.get('/api/lottery/dabing-records/?date_from=2026-01-01&date_to=2026-12-31&search=alice')
+        self.assertEqual([row['person_name'] for row in searched.data], ['DEMO Alice', 'DEMO Alice'])
+
+        by_tail = self.client.get('/api/lottery/dabing-records/?search=3333')
+        self.assertEqual(len(by_tail.data), 1)
+        self.assertEqual(by_tail.data[0]['person_name'], 'DEMO Bob')
+
+    def test_kyoto_records_filter_across_batches_by_publish_date_and_name(self):
+        early = KyotoDrawBatch.objects.create(
+            organization=self.org, draw_start_date=date(2026, 7, 1), draw_end_date=date(2026, 7, 3), publish_date=date(2026, 7, 15),
+        )
+        late = KyotoDrawBatch.objects.create(
+            organization=self.org, draw_start_date=date(2026, 8, 1), draw_end_date=date(2026, 8, 3), publish_date=date(2026, 8, 27),
+        )
+        carol = KyotoPerson.objects.create(organization=self.org, name='DEMO Carol', phone='09055556666')
+        dave = KyotoPerson.objects.create(organization=self.org, name='DEMO Dave', phone='09077778888')
+        KyotoRecord.objects.create(organization=self.org, batch=early, person=carol)
+        KyotoRecord.objects.create(organization=self.org, batch=late, person=carol)
+        KyotoRecord.objects.create(organization=self.org, batch=late, person=dave)
+
+        all_rows = self.client.get('/api/lottery/kyoto-records/')
+        self.assertEqual(len(all_rows.data), 3)
+
+        windowed = self.client.get('/api/lottery/kyoto-records/?publish_from=2026-08-01&publish_to=2026-08-31')
+        self.assertEqual(len(windowed.data), 2)
+
+        by_name = self.client.get('/api/lottery/kyoto-records/?search=carol')
+        self.assertEqual(len(by_name.data), 2)
+        self.assertTrue(all(row['person_name'] == 'DEMO Carol' for row in by_name.data))
+
     def test_staff_account_can_use_shared_lottery_workspace(self):
         self.login_as(self.staff_user)
         store = DabingStore.objects.create(organization=self.org, name='共享店铺')

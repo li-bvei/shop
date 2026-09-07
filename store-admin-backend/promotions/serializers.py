@@ -4,7 +4,7 @@ from branches.models import Branch
 
 from .models import (
     Campaign, CheckinMilestone, CheckInRecord, Customer, LotteryDraw, Milestone, PointsLedger, Prize,
-    RewardType, RiskEvent, SpendVerification, StaffPermission, Voucher,
+    RedemptionOption, RewardType, RiskEvent, SpendVerification, StaffPermission, Voucher,
 )
 from .services import make_store_token
 
@@ -225,8 +225,14 @@ class GuestSetPinSerializer(serializers.Serializer):
 
 
 class GuestRedeemSerializer(serializers.Serializer):
-    type = serializers.ChoiceField(choices=['draw', 'voucher'])
+    type = serializers.ChoiceField(choices=['draw', 'voucher', 'option'])
     request_id = serializers.CharField(max_length=64)
+    option_id = serializers.IntegerField(required=False)
+
+    def validate(self, attrs):
+        if attrs['type'] == 'option' and not attrs.get('option_id'):
+            raise serializers.ValidationError({'option_id': ['required-for-type-option']})
+        return attrs
 
 
 class GuestDrawSerializer(serializers.Serializer):
@@ -286,6 +292,31 @@ class PrizeSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         reward_type = attrs.get('reward_type', getattr(self.instance, 'reward_type', None))
+        config = attrs.get('reward_config', getattr(self.instance, 'reward_config', {}))
+        attrs['reward_config'] = validate_reward_config(reward_type, config)
+        return attrs
+
+
+class RedemptionOptionSerializer(serializers.ModelSerializer):
+    sold_out = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = RedemptionOption
+        fields = [
+            'id', 'campaign', 'name', 'points_cost', 'reward_type', 'reward_config',
+            'voucher_expires_after_days', 'voucher_min_spend_yen',
+            'total_stock', 'remaining_stock', 'display_order', 'active', 'sold_out',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['campaign', 'remaining_stock', 'sold_out', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        reward_type = attrs.get('reward_type', getattr(self.instance, 'reward_type', None))
+        if reward_type == RewardType.POINTS_REFUND:
+            raise serializers.ValidationError({'reward_type': ['redemption-cannot-be-points-refund']})
+        cost = attrs.get('points_cost', getattr(self.instance, 'points_cost', 0))
+        if cost < 1:
+            raise serializers.ValidationError({'points_cost': ['must-be-at-least-1']})
         config = attrs.get('reward_config', getattr(self.instance, 'reward_config', {}))
         attrs['reward_config'] = validate_reward_config(reward_type, config)
         return attrs

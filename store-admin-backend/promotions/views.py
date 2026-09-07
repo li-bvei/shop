@@ -16,8 +16,8 @@ from branches.models import Branch
 from common.permissions import BranchScopedQuerysetMixin
 
 from .models import (
-    Campaign, CheckinMilestone, CheckInRecord, Customer, LotteryDraw, Milestone, Prize, RiskEvent,
-    SpendVerification, StaffPermission, Voucher,
+    Campaign, CheckinMilestone, CheckInRecord, Customer, LotteryDraw, Milestone, Prize,
+    RedemptionOption, RiskEvent, SpendVerification, StaffPermission, Voucher,
 )
 from .reports import build_campaign_report
 from .serializers import (
@@ -25,13 +25,15 @@ from .serializers import (
     CustomerSerializer, GuestDrawSerializer, GuestLoginSerializer, GuestRecoverSerializer,
     GuestRedeemSerializer, GuestRegisterSerializer, GuestSetPinSerializer, GuestVoucherSerializer,
     LotteryDrawSerializer, MilestoneSerializer, PointsLedgerSerializer, PrizeSerializer,
-    RiskEventSerializer, SpendVerificationSerializer, StaffPermissionSerializer, VoucherSerializer,
+    RedemptionOptionSerializer, RiskEventSerializer, SpendVerificationSerializer,
+    StaffPermissionSerializer, VoucherSerializer,
 )
 from .services import (
     GUEST_COOKIE_MAX_AGE, GUEST_COOKIE_NAME, AmbiguousGuestLookup, adjust_points, campaign_is_open,
     delete_customer_by_phone, draw_lottery, guest_redeem_voucher, load_store_token, record_checkin,
-    recover_card, redeem_points, redeem_voucher, register_customer, resolve_active_campaign,
-    set_customer_pin, staff_can, touch_customer_seen, verify_spend, void_spend_verification,
+    recover_card, redeem_catalog_option, redeem_points, redeem_voucher, register_customer,
+    resolve_active_campaign, set_customer_pin, staff_can, touch_customer_seen, verify_spend,
+    void_spend_verification,
 )
 from .throttling import GuestReadThrottle, GuestWriteThrottle, StaffVerifyThrottle
 from .utils import client_ip, normalize_birthday_md, normalize_phone
@@ -408,6 +410,32 @@ class GuestPrizesView(APIView):
         ])
 
 
+class GuestRedemptionsView(APIView):
+    """The campaign's ポイント交換所 — items the customer can buy outright with
+    balance points. Names / costs / types only (never internal config)."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestReadThrottle]
+
+    def get(self, request):
+        customer = _resolve_guest_customer(request)
+        if not customer:
+            raise NotFound('card-not-found')
+        campaign = _active_campaign_for(customer)
+        options = campaign.redemption_options.filter(active=True).order_by('display_order', 'id')
+        return Response([
+            {
+                'id': o.id,
+                'name': o.name,
+                'points_cost': o.points_cost,
+                'reward_type': o.reward_type,
+                'sold_out': o.sold_out,
+            }
+            for o in options
+        ])
+
+
 def _draw_result_body(draw):
     voucher = draw.vouchers.first()
     return {
@@ -422,7 +450,8 @@ def _draw_result_body(draw):
 
 class GuestRedeemView(APIView):
     """Spend points: `type=draw` runs a lottery draw, `type=voucher` issues
-    a fixed ¥N next-visit voucher. Idempotent on `request_id`."""
+    the fixed ¥N voucher, `type=option` buys a ポイント交換所 item (needs
+    `option_id`). Idempotent on `request_id`."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -434,12 +463,26 @@ class GuestRedeemView(APIView):
             raise NotFound('card-not-found')
         serializer = GuestRedeemSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
         campaign = _active_campaign_for(customer)
+
+        if data['type'] == 'option':
+            option = campaign.redemption_options.filter(pk=data['option_id']).first()
+            if not option:
+                raise ValidationError({'option_id': ['option-not-found']})
+            voucher = redeem_catalog_option(
+                customer=customer, campaign=campaign, branch=campaign.branch,
+                option=option, request_id=data['request_id'],
+            )
+            customer.refresh_from_db()
+            return Response({
+                'points_balance': customer.points_balance,
+                'voucher': GuestVoucherSerializer(voucher).data,
+            }, status=201)
 
         result = redeem_points(
             customer=customer, campaign=campaign, branch=campaign.branch,
-            kind=serializer.validated_data['type'],
-            request_id=serializer.validated_data['request_id'],
+            kind=data['type'], request_id=data['request_id'],
         )
         customer.refresh_from_db()
         body = {'points_balance': customer.points_balance}
@@ -987,6 +1030,30 @@ class MilestoneViewSet(_CampaignChildViewSet):
 class CheckinMilestoneViewSet(_CampaignChildViewSet):
     model = CheckinMilestone
     serializer_class = CheckinMilestoneSerializer
+
+
+class RedemptionOptionViewSet(_CampaignChildViewSet):
+    model = RedemptionOption
+    serializer_class = RedemptionOptionSerializer
+
+    def perform_create(self, serializer):
+        self._require_admin()
+        campaign = _campaign_in_scope(self.request.user, self.request.data.get('campaign'))
+        total = serializer.validated_data.get('total_stock')
+        serializer.save(campaign=campaign, remaining_stock=total)
+
+    def perform_update(self, serializer):
+        self._require_admin()
+        opt = serializer.instance
+        new_total = serializer.validated_data.get('total_stock', opt.total_stock)
+        extra = {'campaign': opt.campaign}
+        if new_total != opt.total_stock:
+            if new_total is None:
+                extra['remaining_stock'] = None
+            else:
+                consumed = max(0, (opt.total_stock or 0) - (opt.remaining_stock or 0))
+                extra['remaining_stock'] = max(0, new_total - consumed)
+        serializer.save(**extra)
 
 
 # ---------------------------------------------------------------------------

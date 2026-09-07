@@ -2,7 +2,8 @@ from django.contrib import admin
 
 from .models import (
     Campaign, CheckinMilestone, CheckinMilestoneClaim, CheckInRecord, Customer, LotteryDraw, Milestone,
-    MilestoneClaim, PointsLedger, Prize, RiskEvent, SpendVerification, StaffPermission, Voucher,
+    MilestoneClaim, PointsLedger, Prize, RedemptionOption, RiskEvent, SpendVerification, StaffPermission,
+    Voucher,
 )
 
 
@@ -21,12 +22,17 @@ class CheckinMilestoneInline(admin.TabularInline):
     extra = 0
 
 
+class RedemptionOptionInline(admin.TabularInline):
+    model = RedemptionOption
+    extra = 0
+
+
 @admin.register(Campaign)
 class CampaignAdmin(admin.ModelAdmin):
     list_display = ['name', 'branch', 'status', 'points_per_1000yen', 'stamp_target', 'created_at']
     list_filter = ['status', 'branch']
     search_fields = ['name']
-    inlines = [PrizeInline, MilestoneInline, CheckinMilestoneInline]
+    inlines = [PrizeInline, MilestoneInline, CheckinMilestoneInline, RedemptionOptionInline]
 
 
 @admin.register(CheckinMilestone)

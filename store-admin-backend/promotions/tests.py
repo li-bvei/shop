@@ -7,13 +7,14 @@ from common.test_utils import ApiTestCase, TwoOrganizationApiTestCase
 
 from .models import (
     Campaign, CheckinMilestone, CheckinMilestoneClaim, CheckInRecord, Customer, LotteryDraw, Milestone,
-    MilestoneClaim, PointsLedger, Prize, RewardType, RiskEvent, SpendVerification, StaffPermission,
-    Voucher,
+    MilestoneClaim, PointsLedger, Prize, RedemptionOption, RewardType, RiskEvent, SpendVerification,
+    StaffPermission, Voucher,
 )
 from .retention import purge_stale_customers
 from .services import (
     adjust_points, delete_customer_by_phone, draw_lottery, expire_stale_points, make_store_token,
-    redeem_points, redeem_voucher, register_customer, verify_spend, void_spend_verification,
+    redeem_catalog_option, redeem_points, redeem_voucher, register_customer, verify_spend,
+    void_spend_verification,
 )
 from .utils import business_local_date, client_ip, normalize_birthday_md, normalize_phone
 
@@ -1763,3 +1764,131 @@ class PrizePoolPresetTests(ApiTestCase):
         # the ended campaign is skipped
         ended = Campaign.objects.get(branch=self.branch_b, status=Campaign.Status.ENDED)
         self.assertEqual(ended.prizes.count(), 0)
+
+    def test_apply_redemption_catalog_and_seed_command(self):
+        from django.core.management import call_command
+
+        from .prize_presets import REDEMPTION_CATALOG, apply_redemption_catalog
+
+        RedemptionOption.objects.create(
+            campaign=self.campaign, name='古い交換品', points_cost=100,
+            reward_type=RewardType.DRINK, reward_config={},
+        )
+        created, updated, removed = apply_redemption_catalog(self.campaign)
+        self.assertEqual(created, len(REDEMPTION_CATALOG))
+        self.assertEqual(removed, 1)
+        self.assertEqual(self.campaign.redemption_options.count(), len(REDEMPTION_CATALOG))
+
+        call_command('seed_prize_pool', '--campaign', str(self.campaign.id), '--catalog-only')
+        self.assertEqual(self.campaign.redemption_options.count(), len(REDEMPTION_CATALOG))
+        self.assertEqual(self.campaign.prizes.count(), 0)  # --catalog-only skipped the wheel
+
+
+class RedemptionCatalogTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.campaign = make_campaign(self.branch_a)
+        self.customer = register_customer(organization=self.org, phone='09011112222')
+        adjust_points(customer=self.customer, delta=400, note='seed', operator=self.admin)
+        self.customer.refresh_from_db()
+        self.opt = RedemptionOption.objects.create(
+            campaign=self.campaign, name='¥300 割引券', points_cost=300,
+            reward_type=RewardType.CASH_VOUCHER, reward_config={'face_yen': 300},
+        )
+
+    def test_redeem_option_deducts_points_and_issues_voucher(self):
+        v = redeem_catalog_option(
+            customer=self.customer, campaign=self.campaign, option=self.opt, request_id='r1',
+        )
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.points_balance, 100)
+        self.assertEqual(v.reward_type, RewardType.CASH_VOUCHER)
+        self.assertEqual(v.config_snapshot['face_yen'], 300)
+        self.assertTrue(PointsLedger.objects.filter(customer=self.customer, delta=-300).exists())
+
+    def test_redeem_option_is_idempotent(self):
+        v1 = redeem_catalog_option(
+            customer=self.customer, campaign=self.campaign, option=self.opt, request_id='same',
+        )
+        v2 = redeem_catalog_option(
+            customer=self.customer, campaign=self.campaign, option=self.opt, request_id='same',
+        )
+        self.assertEqual(v1.pk, v2.pk)
+        self.customer.refresh_from_db()
+        self.assertEqual(self.customer.points_balance, 100)  # charged once
+
+    def test_redeem_option_insufficient_points(self):
+        pricey = RedemptionOption.objects.create(
+            campaign=self.campaign, name='¥600 券', points_cost=500,
+            reward_type=RewardType.CASH_VOUCHER, reward_config={'face_yen': 600},
+        )
+        with self.assertRaises(ValidationError):
+            redeem_catalog_option(
+                customer=self.customer, campaign=self.campaign, option=pricey, request_id='r2',
+            )
+
+    def test_redeem_option_respects_stock(self):
+        self.opt.total_stock = self.opt.remaining_stock = 1
+        self.opt.save()
+        redeem_catalog_option(
+            customer=self.customer, campaign=self.campaign, option=self.opt, request_id='a',
+        )
+        adjust_points(customer=self.customer, delta=400, note='top up', operator=self.admin)
+        self.customer.refresh_from_db()
+        self.opt.refresh_from_db()
+        self.assertEqual(self.opt.remaining_stock, 0)
+        with self.assertRaises(ValidationError):
+            redeem_catalog_option(
+                customer=self.customer, campaign=self.campaign, option=self.opt, request_id='b',
+            )
+
+    def test_guest_lists_and_redeems_options(self):
+        card = register_customer(organization=self.org, phone='09022223333', campaign=self.campaign)
+        adjust_points(customer=card, delta=400, note='seed', operator=self.admin)
+        headers = {'HTTP_X_GUEST_TOKEN': card.card_token}
+
+        listed = self.client.get('/api/guest/redemptions/', **headers)
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data[0]['name'], '¥300 割引券')
+        self.assertEqual(listed.data[0]['points_cost'], 300)
+
+        redeemed = self.client.post('/api/guest/redeem/', {
+            'type': 'option', 'option_id': self.opt.id, 'request_id': 'g1',
+        }, format='json', **headers)
+        self.assertEqual(redeemed.status_code, 201, redeemed.content)
+        self.assertEqual(redeemed.data['points_balance'], 100)
+        self.assertIn('voucher', redeemed.data)
+
+    def test_guest_redeem_option_needs_option_id(self):
+        card = register_customer(organization=self.org, phone='09044445555', campaign=self.campaign)
+        adjust_points(customer=card, delta=400, note='seed', operator=self.admin)
+        resp = self.client.post('/api/guest/redeem/', {
+            'type': 'option', 'request_id': 'g2',
+        }, format='json', HTTP_X_GUEST_TOKEN=card.card_token)
+        self.assertEqual(resp.status_code, 400)
+
+    def test_admin_crud_is_campaign_scoped_and_admin_only(self):
+        self.login_as(self.branch_a_user)
+        self.assertEqual(
+            self.client.post('/api/promotions/redemption-options/', {
+                'campaign': self.campaign.id, 'name': 'x', 'points_cost': 100, 'reward_type': 'drink',
+            }, format='json').status_code, 403,
+        )
+        self.login_as(self.admin)
+        made = self.client.post('/api/promotions/redemption-options/', {
+            'campaign': self.campaign.id, 'name': 'ドリンク券', 'points_cost': 150,
+            'reward_type': 'drink', 'reward_config': {'label': 'ドリンク'}, 'total_stock': 20,
+        }, format='json')
+        self.assertEqual(made.status_code, 201, made.content)
+        self.assertEqual(made.data['remaining_stock'], 20)
+
+        listed = self.client.get(f'/api/promotions/redemption-options/?campaign={self.campaign.id}')
+        self.assertEqual(len(listed.data), 2)
+
+    def test_admin_rejects_points_refund_option(self):
+        self.login_as(self.admin)
+        resp = self.client.post('/api/promotions/redemption-options/', {
+            'campaign': self.campaign.id, 'name': 'x', 'points_cost': 100,
+            'reward_type': 'points_refund', 'reward_config': {'points': 30},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)

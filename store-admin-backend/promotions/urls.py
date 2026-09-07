@@ -3,9 +3,10 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     CampaignViewSet, CheckinMilestoneViewSet, CustomerViewSet, GuestCardPulseView, GuestCardView,
-    GuestDrawView, GuestLoginView, GuestPrizesView, GuestRecoverView, GuestRedeemView, GuestRegisterView,
-    GuestSetPinView, GuestStoreContextView, GuestVoucherRedeemView, MilestoneViewSet, PrizeViewSet,
-    RiskEventViewSet, SpendVerificationViewSet, StaffPermissionViewSet, VoucherViewSet,
+    GuestDrawView, GuestLoginView, GuestPrizesView, GuestRecoverView, GuestRedeemView, GuestRedemptionsView,
+    GuestRegisterView, GuestSetPinView, GuestStoreContextView, GuestVoucherRedeemView, MilestoneViewSet,
+    PrizeViewSet, RedemptionOptionViewSet, RiskEventViewSet, SpendVerificationViewSet,
+    StaffPermissionViewSet, VoucherViewSet,
 )
 
 router = DefaultRouter()
@@ -15,6 +16,7 @@ router.register('promotions/spend-verifications', SpendVerificationViewSet, base
 router.register('promotions/prizes', PrizeViewSet, basename='promo-prize')
 router.register('promotions/milestones', MilestoneViewSet, basename='promo-milestone')
 router.register('promotions/checkin-milestones', CheckinMilestoneViewSet, basename='promo-checkin-milestone')
+router.register('promotions/redemption-options', RedemptionOptionViewSet, basename='promo-redemption-option')
 router.register('promotions/vouchers', VoucherViewSet, basename='promo-voucher')
 router.register('promotions/risk-events', RiskEventViewSet, basename='promo-risk-event')
 router.register('promotions/staff-permissions', StaffPermissionViewSet, basename='promo-staff-permission')
@@ -28,6 +30,7 @@ urlpatterns = [
     path('guest/card/', GuestCardView.as_view(), name='promo-guest-card'),
     path('guest/card/pulse/', GuestCardPulseView.as_view(), name='promo-guest-card-pulse'),
     path('guest/prizes/', GuestPrizesView.as_view(), name='promo-guest-prizes'),
+    path('guest/redemptions/', GuestRedemptionsView.as_view(), name='promo-guest-redemptions'),
     path('guest/redeem/', GuestRedeemView.as_view(), name='promo-guest-redeem'),
     path('guest/draw/', GuestDrawView.as_view(), name='promo-guest-draw'),
     path('guest/voucher/redeem/', GuestVoucherRedeemView.as_view(), name='promo-guest-voucher-redeem'),

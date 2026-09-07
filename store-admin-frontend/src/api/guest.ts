@@ -265,21 +265,52 @@ export interface RedeemResult {
   voucher?: GuestVoucher
 }
 
-/** Spend points: kind 'draw' runs a lottery draw, 'voucher' issues a ¥N voucher. */
-export async function redeem(kind: 'draw' | 'voucher', requestId: string): Promise<RedeemResult> {
+/** Spend points: 'draw' runs a lottery draw, 'voucher' issues the fixed ¥N
+ * voucher, 'option' buys a ポイント交換所 item (pass its id). */
+export async function redeem(
+  kind: 'draw' | 'voucher' | 'option',
+  requestId: string,
+  optionId?: number,
+): Promise<RedeemResult> {
   const dto = await guestRequest<{
     points_balance: number
     result?: DrawResultDto
     voucher?: VoucherDto
   }>('/guest/redeem/', {
     method: 'POST',
-    body: JSON.stringify({ type: kind, request_id: requestId }),
+    body: JSON.stringify({
+      type: kind,
+      request_id: requestId,
+      ...(kind === 'option' ? { option_id: optionId } : {}),
+    }),
   })
   return {
     pointsBalance: dto.points_balance,
     result: dto.result ? fromDrawResultDto(dto.result) : undefined,
     voucher: dto.voucher ? fromVoucherDto(dto.voucher) : undefined,
   }
+}
+
+export interface RedemptionItem {
+  id: number
+  name: string
+  pointsCost: number
+  rewardType: string
+  soldOut: boolean
+}
+
+/** The campaign's ポイント交換所 — items bought outright with balance points. */
+export async function fetchRedemptions(): Promise<RedemptionItem[]> {
+  const d = await guestRequest<
+    Array<{ id: number; name: string; points_cost: number; reward_type: string; sold_out: boolean }>
+  >('/guest/redemptions/')
+  return d.map((o) => ({
+    id: o.id,
+    name: o.name,
+    pointsCost: o.points_cost,
+    rewardType: o.reward_type,
+    soldOut: o.sold_out,
+  }))
 }
 
 /** Use one free draw chance (from the spend-threshold dual track). */

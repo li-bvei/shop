@@ -596,6 +596,43 @@ class CheckinMilestoneClaim(models.Model):
         ]
 
 
+class RedemptionOption(models.Model):
+    """One item in a campaign's ポイント交換所 — the customer spends *balance*
+    points on it right away (Prize is won by lottery; Milestone auto-unlocks
+    on *lifetime* points). Winning it issues the same kind of next-visit
+    Voucher. points_refund makes no sense here and is rejected by the
+    serializer."""
+
+    campaign = models.ForeignKey(
+        Campaign, on_delete=models.CASCADE, related_name='redemption_options',
+    )
+    name = models.CharField(max_length=120)
+    points_cost = models.PositiveIntegerField()
+    reward_type = models.CharField(max_length=16, choices=RewardType.choices)
+    reward_config = models.JSONField(default=dict, blank=True)
+    voucher_expires_after_days = models.PositiveIntegerField(default=45)
+    voucher_min_spend_yen = models.PositiveIntegerField(default=0)
+    # null = unlimited; total_stock is the lifetime cap, decremented on each
+    # redemption. daily_stock is not modelled here (交換所 items are usually
+    # unlimited or lifetime-capped, unlike the ¥5,000 wheel prize).
+    total_stock = models.PositiveIntegerField(null=True, blank=True)
+    remaining_stock = models.PositiveIntegerField(null=True, blank=True)
+    display_order = models.PositiveIntegerField(default=0)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['campaign', 'display_order', 'id']
+
+    def __str__(self):
+        return f'{self.campaign_id} / {self.name} ({self.points_cost}pt)'
+
+    @property
+    def sold_out(self):
+        return self.remaining_stock is not None and self.remaining_stock <= 0
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 — anti-fraud
 # ---------------------------------------------------------------------------

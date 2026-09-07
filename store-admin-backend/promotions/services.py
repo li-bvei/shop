@@ -19,7 +19,7 @@ from rest_framework.exceptions import ValidationError
 from . import risk
 from .models import (
     Campaign, CheckInRecord, CheckinMilestone, CheckinMilestoneClaim, Customer, LotteryDraw, Milestone,
-    MilestoneClaim, PointsLedger, Prize, RewardType, SpendVerification, Voucher,
+    MilestoneClaim, PointsLedger, Prize, RedemptionOption, RewardType, SpendVerification, Voucher,
 )
 from .utils import business_local_date, normalize_birthday_md, normalize_phone, normalize_pin
 
@@ -914,6 +914,56 @@ def redeem_points(*, customer, campaign, kind, request_id, branch=None) -> dict:
             source_ref=f'voucher:{voucher.pk}', balance_after=locked.points_balance,
         )
     return {'kind': 'voucher', 'voucher': voucher}
+
+
+def redeem_catalog_option(*, customer, campaign, option, request_id, branch=None) -> Voucher:
+    """Spend balance points on one ポイント交換所 item. Idempotent per
+    (customer, request_id): a retry returns the voucher the first call
+    issued instead of charging again."""
+    request_id = (request_id or '').strip()
+    if not request_id:
+        raise ValidationError({'request_id': ['request-id-required']})
+    if not campaign_is_open(campaign):
+        raise ValidationError({'campaign': ['campaign-not-active']})
+    if not option.active or option.campaign_id != campaign.id:
+        raise ValidationError({'option': ['option-not-available']})
+
+    with transaction.atomic():
+        locked = Customer.objects.select_for_update().get(pk=customer.pk)
+        if locked.status == Customer.Status.BLOCKED:
+            raise ValidationError({'customer': ['customer-blocked']})
+
+        already = Voucher.objects.filter(
+            customer=locked, source=Voucher.Source.POINTS_REDEEM, redeem_request_id=request_id,
+        ).first()
+        if already:
+            return already
+
+        opt = RedemptionOption.objects.select_for_update().get(pk=option.pk)
+        if opt.remaining_stock is not None and opt.remaining_stock <= 0:
+            raise ValidationError({'option': ['option-sold-out']})
+        if locked.points_balance < opt.points_cost:
+            raise ValidationError({'points': ['insufficient-points']})
+
+        locked.points_balance -= opt.points_cost
+        locked.last_activity_at = timezone.now()
+        locked.save(update_fields=['points_balance', 'last_activity_at'])
+
+        if opt.remaining_stock is not None:
+            opt.remaining_stock -= 1
+            opt.save(update_fields=['remaining_stock'])
+
+        voucher = _issue_voucher(
+            customer=locked, campaign=campaign, branch=branch or campaign.branch,
+            reward_type=opt.reward_type, config=opt.reward_config,
+            expires_days=opt.voucher_expires_after_days, min_spend=opt.voucher_min_spend_yen,
+            source=Voucher.Source.POINTS_REDEEM, redeem_request_id=request_id,
+        )
+        PointsLedger.objects.create(
+            customer=locked, delta=-opt.points_cost, reason=PointsLedger.Reason.VOUCHER,
+            source_ref=f'voucher:{voucher.pk}', balance_after=locked.points_balance,
+        )
+    return voucher
 
 
 def redeem_voucher(*, voucher, branch, operator, spend_amount_yen=None, approved_by=None) -> Voucher:

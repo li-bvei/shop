@@ -4,7 +4,7 @@ from django.core.management.base import BaseCommand, CommandError
 from branches.models import Branch
 
 from promotions.models import Campaign, Milestone, RewardType
-from promotions.prize_presets import apply_prize_pool
+from promotions.prize_presets import apply_prize_pool, apply_redemption_catalog
 from promotions.services import make_store_token, register_customer, verify_spend
 
 # Milestones fire on lifetime (cumulative) points and don't consume the
@@ -59,10 +59,12 @@ class Command(BaseCommand):
                 setattr(campaign, field, value)
             campaign.save(update_fields=list(ECONOMY))
 
-        # The tiered lottery pool (特賞 ¥5,000 … 料理賞 … 参加賞). Shared with
-        # `manage.py seed_prize_pool`; matched by name so re-running keeps
-        # consumed stock and drops prizes no longer in the preset.
+        # The tiered lottery pool (特賞 ¥5,000 … 料理賞 … 参加賞) + the ポイント
+        # 交換所 catalog (¥100/¥300/¥600 券, drink, side dish, dessert). Shared
+        # with `manage.py seed_prize_pool`; matched by name so re-running keeps
+        # consumed stock and drops rows no longer in the preset.
         apply_prize_pool(campaign)
+        apply_redemption_catalog(campaign)
 
         for threshold, rtype, config, exp, label in DEMO_MILESTONES:
             Milestone.objects.update_or_create(

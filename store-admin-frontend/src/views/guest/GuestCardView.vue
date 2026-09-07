@@ -7,6 +7,7 @@ import {
   SELF_SERVE_REWARD_TYPES,
   fetchCard,
   fetchPrizes,
+  fetchRedemptions,
   guestLogin,
   pulseCard,
   redeem,
@@ -16,6 +17,7 @@ import {
   type DrawResult,
   type GuestCard,
   type GuestVoucher,
+  type RedemptionItem,
   type WheelPrize,
 } from '@/api/guest'
 import QrCanvas from '@/components/QrCanvas.vue'
@@ -84,6 +86,9 @@ const wheelModal = ref(false)
 const wheelSource = ref<'points' | 'chance'>('points')
 const wheelPrizes = ref<WheelPrize[]>([])
 const wheelRef = ref<InstanceType<typeof WheelOfFortune>>()
+
+// ポイント交換所 catalog
+const redemptions = ref<RedemptionItem[]>([])
 
 // One-time "set a recovery PIN" prompt, shown on a full card that has none.
 const pinPromptDismissed = ref(false)
@@ -169,6 +174,11 @@ async function load() {
       card.value = r.card
     } else {
       card.value = await fetchCard()
+    }
+    if (!readonly.value && card.value) {
+      fetchRedemptions()
+        .then((items) => (redemptions.value = items))
+        .catch(() => {})
     }
     if (!readonly.value && card.value && route.query.welcome === '1' && !hasOnboarded()) {
       showOnboarding.value = true
@@ -257,6 +267,29 @@ async function redeemVoucher() {
   busy.value = true
   try {
     const res = await redeem('voucher', newRequestId())
+    await load()
+    if (res.voucher) voucherModal.value = res.voucher
+  } catch (err) {
+    handleError(err)
+  } finally {
+    busy.value = false
+  }
+}
+
+function canAfford(cost: number) {
+  return (card.value?.pointsBalance ?? 0) >= cost
+}
+
+async function redeemOption(opt: RedemptionItem) {
+  if (busy.value || readonly.value || opt.soldOut) return
+  if (!canAfford(opt.pointsCost)) {
+    window.alert(t('guest.errInsufficientPoints'))
+    return
+  }
+  if (!window.confirm(t('guest.redeemOptionConfirm', { name: opt.name, pts: opt.pointsCost }))) return
+  busy.value = true
+  try {
+    const res = await redeem('option', newRequestId(), opt.id)
     await load()
     if (res.voucher) voucherModal.value = res.voucher
   } catch (err) {
@@ -485,34 +518,71 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- Spend points -->
-      <div v-if="!readonly && (canDrawWithPoints || canRedeemVoucher || card.drawChances > 0)" class="card spend-card">
-        <h2>{{ t('guest.spendTitle') }}</h2>
+      <!-- 大抽選会 — the headline way to spend points -->
+      <div v-if="!readonly && c.hasPrizes" class="card lottery-hero">
+        <div class="lottery-hero-top">
+          <span class="lottery-hero-badge">{{ t('guest.lotteryBadge') }}</span>
+          <span class="lottery-hero-spark" aria-hidden="true">🎊</span>
+        </div>
+        <h2 class="lottery-hero-title">{{ t('guest.lotteryHeroTitle') }}</h2>
+        <p class="lottery-hero-sub">{{ t('guest.lotteryHeroSub') }}</p>
+        <div class="lottery-hero-actions">
+          <button
+            v-if="card.drawChances > 0"
+            type="button"
+            class="lottery-cta free"
+            :disabled="busy"
+            @click="openWheel('chance')"
+          >
+            🎁 {{ t('guest.drawFree') }}
+            <small>{{ t('guest.drawChancesLeft', { n: card.drawChances }) }}</small>
+          </button>
+          <button
+            v-if="canDrawWithPoints"
+            type="button"
+            class="lottery-cta"
+            :disabled="busy"
+            @click="openWheel('points')"
+          >
+            {{ t('guest.drawWithPoints') }}
+            <small>{{ c.pointsPerDraw }} {{ t('guest.points') }}</small>
+          </button>
+          <p
+            v-if="card.drawChances === 0 && !canDrawWithPoints && c.pointsPerDraw"
+            class="lottery-hero-locked"
+          >
+            {{ t('guest.drawNeedMore', { n: c.pointsPerDraw - card.pointsBalance }) }}
+          </p>
+        </div>
+      </div>
+
+      <!-- ポイント交換所 -->
+      <div v-if="!readonly && (redemptions.length || canRedeemVoucher)" class="card spend-card">
+        <h2>{{ t('guest.exchangeTitle') }}</h2>
+        <p class="spend-hint">{{ t('guest.exchangeHint') }}</p>
+
+        <ul v-if="redemptions.length" class="exchange-list">
+          <li
+            v-for="opt in redemptions"
+            :key="opt.id"
+            class="exchange-row"
+            :class="{ dim: opt.soldOut || !canAfford(opt.pointsCost) }"
+          >
+            <span class="exchange-name">{{ opt.name }}</span>
+            <span class="exchange-cost">{{ opt.pointsCost }}<small>{{ t('guest.pt') }}</small></span>
+            <button
+              type="button"
+              class="exchange-btn"
+              :disabled="busy || opt.soldOut || !canAfford(opt.pointsCost)"
+              @click="redeemOption(opt)"
+            >
+              {{ opt.soldOut ? t('guest.soldOut') : t('guest.exchange') }}
+            </button>
+          </li>
+        </ul>
 
         <button
-          v-if="card.drawChances > 0"
-          type="button"
-          class="spend-btn accent"
-          :disabled="busy"
-          @click="openWheel('chance')"
-        >
-          <span class="spend-btn-main">{{ t('guest.drawFree') }}</span>
-          <span class="spend-btn-sub">{{ t('guest.drawChancesLeft', { n: card.drawChances }) }}</span>
-        </button>
-
-        <button
-          v-if="canDrawWithPoints"
-          type="button"
-          class="spend-btn"
-          :disabled="busy"
-          @click="openWheel('points')"
-        >
-          <span class="spend-btn-main">{{ t('guest.drawWithPoints') }}</span>
-          <span class="spend-btn-sub">{{ c.pointsPerDraw }} {{ t('guest.points') }}</span>
-        </button>
-
-        <button
-          v-if="canRedeemVoucher"
+          v-else-if="canRedeemVoucher"
           type="button"
           class="spend-btn"
           :disabled="busy"
@@ -1157,6 +1227,172 @@ h2 {
 .spend-btn-sub {
   font-size: 11.5px;
   color: var(--guest-muted);
+}
+
+.spend-hint {
+  font-size: 11.5px;
+  color: var(--guest-muted);
+  margin: -4px 0 4px;
+}
+
+/* ---- 大抽選会 hero ----------------------------------------------------------- */
+
+.lottery-hero {
+  background: linear-gradient(135deg, #fff4d6 0%, #ffe0c2 45%, #ffd1e6 100%);
+  border: none;
+  text-align: center;
+  overflow: hidden;
+}
+
+.lottery-hero-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.lottery-hero-badge {
+  display: inline-block;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: #e2483d;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.lottery-hero-spark {
+  font-size: 20px;
+}
+
+.lottery-hero-title {
+  font-size: 20px;
+  font-weight: 900;
+  color: #7a3b12;
+  margin: 10px 0 2px;
+}
+
+.lottery-hero-sub {
+  font-size: 12px;
+  color: #9a5a2e;
+  margin: 0 0 14px;
+}
+
+.lottery-hero-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lottery-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 50px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 14px;
+  background: #fff;
+  color: var(--guest-ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(226, 72, 61, 0.18);
+}
+
+.lottery-cta small {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--guest-muted);
+}
+
+.lottery-cta.free {
+  background: #e2483d;
+  color: #fff;
+}
+
+.lottery-cta.free small {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.lottery-cta:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.lottery-hero-locked {
+  font-size: 12px;
+  color: #9a5a2e;
+  margin: 2px 0 0;
+}
+
+/* ---- ポイント交換所 -------------------------------------------------------- */
+
+.exchange-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.exchange-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--guest-rule);
+}
+
+.exchange-row:last-child {
+  border-bottom: none;
+}
+
+.exchange-row.dim {
+  opacity: 0.5;
+}
+
+.exchange-name {
+  flex: 1;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--guest-ink);
+}
+
+.exchange-cost {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--guest-green-dark);
+  white-space: nowrap;
+}
+
+.exchange-cost small {
+  font-size: 10px;
+  font-weight: 700;
+  margin-left: 1px;
+}
+
+.exchange-btn {
+  min-width: 58px;
+  padding: 7px 12px;
+  border: 1px solid var(--guest-green);
+  border-radius: 999px;
+  background: var(--guest-mint);
+  color: var(--guest-green-dark);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.exchange-btn:disabled {
+  border-color: var(--guest-field-border);
+  background: var(--guest-soft);
+  color: var(--guest-muted);
+  cursor: not-allowed;
 }
 
 /* ---- milestones --------------------------------------------------------- */

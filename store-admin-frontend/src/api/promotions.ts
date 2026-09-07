@@ -788,6 +788,118 @@ export async function deleteMilestone(id: string): Promise<void> {
 }
 
 // ===========================================================================
+// ポイント交換所 — items bought outright with balance points
+// ===========================================================================
+
+export interface RedemptionOption {
+  id: string
+  campaignId: string
+  name: string
+  pointsCost: number
+  rewardType: RewardType
+  rewardConfig: Record<string, unknown>
+  voucherExpiresAfterDays: number
+  voucherMinSpendYen: number
+  totalStock: number | null
+  remainingStock: number | null
+  displayOrder: number
+  active: boolean
+}
+
+interface RedemptionOptionDto {
+  id: number
+  campaign: number
+  name: string
+  points_cost: number
+  reward_type: RewardType
+  reward_config: Record<string, unknown>
+  voucher_expires_after_days: number
+  voucher_min_spend_yen: number
+  total_stock: number | null
+  remaining_stock: number | null
+  display_order: number
+  active: boolean
+}
+
+function fromRedemptionOptionDto(d: RedemptionOptionDto): RedemptionOption {
+  return {
+    id: String(d.id),
+    campaignId: String(d.campaign),
+    name: d.name,
+    pointsCost: d.points_cost,
+    rewardType: d.reward_type,
+    rewardConfig: d.reward_config ?? {},
+    voucherExpiresAfterDays: d.voucher_expires_after_days,
+    voucherMinSpendYen: d.voucher_min_spend_yen,
+    totalStock: d.total_stock,
+    remainingStock: d.remaining_stock,
+    displayOrder: d.display_order,
+    active: d.active,
+  }
+}
+
+export interface RedemptionOptionPayload {
+  campaignId: string
+  name: string
+  pointsCost: number
+  rewardType: RewardType
+  rewardConfig: Record<string, unknown>
+  voucherExpiresAfterDays: number
+  voucherMinSpendYen: number
+  totalStock: number | null
+  displayOrder: number
+  active: boolean
+}
+
+function toRedemptionOptionDto(p: RedemptionOptionPayload) {
+  return {
+    name: p.name,
+    points_cost: p.pointsCost,
+    reward_type: p.rewardType,
+    reward_config: p.rewardConfig,
+    voucher_expires_after_days: p.voucherExpiresAfterDays,
+    voucher_min_spend_yen: p.voucherMinSpendYen,
+    total_stock: p.totalStock,
+    display_order: p.displayOrder,
+    active: p.active,
+  }
+}
+
+export async function fetchRedemptionOptions(campaignId: string): Promise<RedemptionOption[]> {
+  const rows = await http.get<RedemptionOptionDto[]>(
+    `/promotions/redemption-options/?campaign=${encodeURIComponent(campaignId)}`,
+  )
+  return rows.map(fromRedemptionOptionDto)
+}
+
+export async function createRedemptionOption(
+  p: RedemptionOptionPayload,
+): Promise<RedemptionOption> {
+  return fromRedemptionOptionDto(
+    await http.post<RedemptionOptionDto>('/promotions/redemption-options/', {
+      campaign: Number(p.campaignId),
+      ...toRedemptionOptionDto(p),
+    }),
+  )
+}
+
+export async function updateRedemptionOption(
+  id: string,
+  p: RedemptionOptionPayload,
+): Promise<RedemptionOption> {
+  return fromRedemptionOptionDto(
+    await http.patch<RedemptionOptionDto>(
+      `/promotions/redemption-options/${id}/`,
+      toRedemptionOptionDto(p),
+    ),
+  )
+}
+
+export async function deleteRedemptionOption(id: string): Promise<void> {
+  await http.delete(`/promotions/redemption-options/${id}/`)
+}
+
+// ===========================================================================
 // Lottery draw & voucher records + staff redemption
 // ===========================================================================
 

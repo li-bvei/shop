@@ -8,16 +8,22 @@ import { ApiError } from '@/api/http'
 import {
   createMilestone,
   createPrize,
+  createRedemptionOption,
   deleteMilestone,
   deletePrize,
+  deleteRedemptionOption,
   fetchMilestones,
   fetchPrizes,
+  fetchRedemptionOptions,
   updateMilestone,
   updatePrize,
+  updateRedemptionOption,
   type Milestone,
   type MilestonePayload,
   type Prize,
   type PrizePayload,
+  type RedemptionOption,
+  type RedemptionOptionPayload,
   type RewardType,
 } from '@/api/promotions'
 
@@ -41,6 +47,7 @@ const rewardTypes: RewardType[] = [
 
 const prizes = ref<Prize[]>([])
 const milestones = ref<Milestone[]>([])
+const options = ref<RedemptionOption[]>([])
 const loading = ref(false)
 
 const totalWeight = computed(() => prizes.value.filter((p) => p.active).reduce((s, p) => s + p.weight, 0))
@@ -49,9 +56,10 @@ async function load() {
   if (!props.campaignId) return
   loading.value = true
   try {
-    ;[prizes.value, milestones.value] = await Promise.all([
+    ;[prizes.value, milestones.value, options.value] = await Promise.all([
       fetchPrizes(props.campaignId),
       fetchMilestones(props.campaignId),
+      fetchRedemptionOptions(props.campaignId),
     ])
   } finally {
     loading.value = false
@@ -255,6 +263,101 @@ async function removeMs(m: Milestone) {
   await load()
 }
 
+// ---- ポイント交換所 dialog --------------------------------------------------
+
+const optDialog = ref(false)
+const editingOptId = ref<string | null>(null)
+const savingOpt = ref(false)
+const optForm = reactive({
+  name: '',
+  pointsCost: 300,
+  rewardType: 'cash_voucher' as RewardType,
+  faceYen: 300,
+  minSpendYen: 0,
+  label: '',
+  totalStock: null as number | null,
+  voucherExpiresAfterDays: 45,
+  active: true,
+})
+const optRewardTypes: RewardType[] = ['cash_voucher', 'drink', 'dessert', 'side_dish', 'chef_special']
+
+function openOptCreate() {
+  editingOptId.value = null
+  Object.assign(optForm, {
+    name: '', pointsCost: 300, rewardType: 'cash_voucher', faceYen: 300, minSpendYen: 0,
+    label: '', totalStock: null, voucherExpiresAfterDays: 45, active: true,
+  })
+  optDialog.value = true
+}
+
+function openOptEdit(o: RedemptionOption) {
+  editingOptId.value = o.id
+  const cfg = o.rewardConfig as Record<string, number | string>
+  Object.assign(optForm, {
+    name: o.name,
+    pointsCost: o.pointsCost,
+    rewardType: o.rewardType,
+    faceYen: Number(cfg.face_yen ?? 300),
+    minSpendYen: Number(cfg.min_spend_yen ?? o.voucherMinSpendYen ?? 0),
+    label: String(cfg.label ?? ''),
+    totalStock: o.totalStock,
+    voucherExpiresAfterDays: o.voucherExpiresAfterDays,
+    active: o.active,
+  })
+  optDialog.value = true
+}
+
+async function saveOpt() {
+  if (!props.campaignId || !optForm.name.trim()) {
+    ElMessage.warning(t('promotions.validateName'))
+    return
+  }
+  savingOpt.value = true
+  try {
+    const config =
+      optForm.rewardType === 'cash_voucher'
+        ? { face_yen: optForm.faceYen, min_spend_yen: optForm.minSpendYen }
+        : optForm.label
+          ? { label: optForm.label }
+          : {}
+    const payload: RedemptionOptionPayload = {
+      campaignId: props.campaignId,
+      name: optForm.name.trim(),
+      pointsCost: optForm.pointsCost,
+      rewardType: optForm.rewardType,
+      rewardConfig: config,
+      voucherExpiresAfterDays: optForm.voucherExpiresAfterDays,
+      voucherMinSpendYen: optForm.rewardType === 'cash_voucher' ? optForm.minSpendYen : 0,
+      totalStock: optForm.totalStock,
+      displayOrder: editingOptId.value
+        ? (options.value.find((o) => o.id === editingOptId.value)?.displayOrder ?? 0)
+        : options.value.length,
+      active: optForm.active,
+    }
+    if (editingOptId.value) await updateRedemptionOption(editingOptId.value, payload)
+    else await createRedemptionOption(payload)
+    optDialog.value = false
+    ElMessage.success(t('common.savedSuccess'))
+    await load()
+  } catch (err) {
+    ElMessage.error(err instanceof ApiError ? err.messages()[0] || t('common.unexpectedError') : t('common.unexpectedError'))
+  } finally {
+    savingOpt.value = false
+  }
+}
+
+async function removeOpt(o: RedemptionOption) {
+  try {
+    await ElMessageBox.confirm(t('promotions.deleteOptionConfirm'), t('common.confirm'), {
+      type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'),
+    })
+  } catch {
+    return
+  }
+  await deleteRedemptionOption(o.id)
+  await load()
+}
+
 function pct(p: Prize) {
   return `${(p.probability * 100).toFixed(1)}%`
 }
@@ -308,6 +411,29 @@ function pct(p: Prize) {
           <template #default="{ row }">
             <el-button size="small" text @click="openMsEdit(row)">{{ t('common.edit') }}</el-button>
             <el-button size="small" text type="danger" @click="removeMs(row)">{{ t('common.delete') }}</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="section-head">
+        <h4>{{ t('promotions.redemptionOptions') }}</h4>
+        <el-button v-if="canEdit" size="small" type="primary" :icon="Plus" @click="openOptCreate">{{ t('promotions.addRedemptionOption') }}</el-button>
+      </div>
+      <el-table :data="options" size="small" :empty-text="t('promotions.noRedemptionOptions')">
+        <el-table-column prop="name" :label="t('promotions.name')" min-width="150" />
+        <el-table-column :label="t('promotions.pointsCost')" width="90">
+          <template #default="{ row }">{{ row.pointsCost }}</template>
+        </el-table-column>
+        <el-table-column :label="t('promotions.prizeType')" width="110">
+          <template #default="{ row }">{{ t(`promotions.rewardType.${row.rewardType}`) }}</template>
+        </el-table-column>
+        <el-table-column :label="t('promotions.stock')" width="80">
+          <template #default="{ row }">{{ row.remainingStock ?? '∞' }}</template>
+        </el-table-column>
+        <el-table-column v-if="canEdit" width="110" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" text @click="openOptEdit(row)">{{ t('common.edit') }}</el-button>
+            <el-button size="small" text type="danger" @click="removeOpt(row)">{{ t('common.delete') }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -416,6 +542,56 @@ function pct(p: Prize) {
       <template #footer>
         <el-button @click="msDialog = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="savingMs" @click="saveMs">{{ t('common.save') }}</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ポイント交換所 dialog -->
+    <el-dialog
+      v-model="optDialog"
+      :title="editingOptId ? t('promotions.editRedemptionOption') : t('promotions.addRedemptionOption')"
+      width="460px"
+      append-to-body
+    >
+      <el-form label-position="top">
+        <el-form-item :label="t('promotions.name')">
+          <el-input v-model="optForm.name" />
+        </el-form-item>
+        <div class="form-grid">
+          <el-form-item :label="t('promotions.pointsCost')">
+            <el-input v-model.number="optForm.pointsCost" type="number" />
+          </el-form-item>
+          <el-form-item :label="t('promotions.prizeType')">
+            <el-select v-model="optForm.rewardType" style="width: 100%">
+              <el-option v-for="rt in optRewardTypes" :key="rt" :value="rt" :label="t(`promotions.rewardType.${rt}`)" />
+            </el-select>
+          </el-form-item>
+        </div>
+        <div v-if="optForm.rewardType === 'cash_voucher'" class="form-grid">
+          <el-form-item :label="t('promotions.faceYen')">
+            <el-input v-model.number="optForm.faceYen" type="number" />
+          </el-form-item>
+          <el-form-item :label="t('promotions.minSpendYen')">
+            <el-input v-model.number="optForm.minSpendYen" type="number" />
+          </el-form-item>
+        </div>
+        <el-form-item v-else :label="t('promotions.label')">
+          <el-input v-model="optForm.label" :placeholder="t('promotions.labelPlaceholder')" />
+        </el-form-item>
+        <div class="form-grid">
+          <el-form-item :label="t('promotions.totalStock')">
+            <el-input v-model.number="optForm.totalStock" type="number" :placeholder="t('promotions.unlimited')" />
+          </el-form-item>
+          <el-form-item :label="t('promotions.voucherExpiresAfterDays')">
+            <el-input v-model.number="optForm.voucherExpiresAfterDays" type="number" />
+          </el-form-item>
+        </div>
+        <el-form-item>
+          <el-checkbox v-model="optForm.active">{{ t('promotions.prizeActive') }}</el-checkbox>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="optDialog = false">{{ t('common.cancel') }}</el-button>
+        <el-button type="primary" :loading="savingOpt" @click="saveOpt">{{ t('common.save') }}</el-button>
       </template>
     </el-dialog>
   </el-drawer>

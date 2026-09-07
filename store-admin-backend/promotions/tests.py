@@ -1704,3 +1704,62 @@ class CampaignSerializerScheduleTests(ApiTestCase):
         }, format='json')
         self.assertEqual(resp.status_code, 400)
         self.assertIn('active_weekdays', resp.data)
+
+
+class PrizePoolPresetTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.campaign = make_campaign(self.branch_a)
+
+    def test_apply_prize_pool_is_idempotent_and_self_healing(self):
+        from django.core.management import call_command
+
+        from .prize_presets import RICH_POOL, apply_prize_pool
+
+        # a stray prize that isn't in the preset
+        Prize.objects.create(
+            campaign=self.campaign, name='古い景品', weight=10,
+            reward_type=RewardType.DRINK, reward_config={},
+        )
+        created, updated, removed = apply_prize_pool(self.campaign)
+        self.assertEqual(created, len(RICH_POOL))
+        self.assertEqual(removed, 1)  # the stray one
+        self.assertEqual(self.campaign.prizes.count(), len(RICH_POOL))
+        self.assertEqual(sum(p.weight for p in self.campaign.prizes.all()), 500)
+        # the ¥5,000 grand prize survives unchanged in name/value
+        top = self.campaign.prizes.order_by('display_order').first()
+        self.assertEqual(top.reward_config['face_yen'], 5000)
+
+        # re-run is a pure no-op on membership
+        created, updated, removed = apply_prize_pool(self.campaign)
+        self.assertEqual((created, removed), (0, 0))
+        self.assertEqual(updated, len(RICH_POOL))
+
+        call_command('seed_prize_pool', '--campaign', str(self.campaign.id))
+        self.assertEqual(self.campaign.prizes.count(), len(RICH_POOL))
+
+    def test_apply_prize_pool_preserves_consumed_stock_on_re_run(self):
+        from .prize_presets import apply_prize_pool
+
+        mini = [('限定10食', 5, RewardType.CHEF_SPECIAL, {}, 10, None, 30, 0, False)]
+        apply_prize_pool(self.campaign, mini)
+        p = self.campaign.prizes.get(name='限定10食')
+        self.assertEqual(p.remaining_stock, 10)
+        p.remaining_stock = 4  # 6 won
+        p.save(update_fields=['remaining_stock'])
+
+        apply_prize_pool(self.campaign, mini)
+        p.refresh_from_db()
+        self.assertEqual(p.remaining_stock, 4)  # 10 total - 6 consumed, not reset to 10
+
+    def test_seed_prize_pool_by_org_hits_active_campaigns_only(self):
+        from django.core.management import call_command
+
+        from .prize_presets import RICH_POOL
+
+        make_campaign(self.branch_b, status=Campaign.Status.ENDED)
+        call_command('seed_prize_pool', '--org', str(self.org.id))
+        self.assertEqual(self.campaign.prizes.count(), len(RICH_POOL))
+        # the ended campaign is skipped
+        ended = Campaign.objects.get(branch=self.branch_b, status=Campaign.Status.ENDED)
+        self.assertEqual(ended.prizes.count(), 0)

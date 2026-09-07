@@ -3,24 +3,9 @@ from django.core.management.base import BaseCommand, CommandError
 
 from branches.models import Branch
 
-from promotions.models import Campaign, Milestone, Prize, RewardType
+from promotions.models import Campaign, Milestone, RewardType
+from promotions.prize_presets import apply_prize_pool
 from promotions.services import make_store_token, register_customer, verify_spend
-
-# 打卡与抽奖实施方案.md §6 — weights sum to 500. Prize names are the
-# customer-facing wheel labels; the guest pages are JA-first so the demo
-# pool is written in Japanese (a real chain types its own names in the
-# admin — they're free text, not translated).
-DEMO_PRIZES = [
-    # (name, weight, reward_type, config, total_stock, daily_stock, expiry_days, min_spend, approval)
-    ('特賞 ¥5,000クーポン', 1, RewardType.CASH_VOUCHER, {'face_yen': 5000, 'min_spend_yen': 6000}, None, 1, 90, 6000, True),
-    ('2等賞 ¥1,000クーポン', 5, RewardType.CASH_VOUCHER, {'face_yen': 1000, 'min_spend_yen': 3000}, None, 3, 60, 3000, False),
-    ('3等賞 ¥500クーポン', 14, RewardType.CASH_VOUCHER, {'face_yen': 500, 'min_spend_yen': 1500}, None, 10, 45, 1500, False),
-    ('シェフのおまかせ一品', 15, RewardType.CHEF_SPECIAL, {'menu_value_cap_yen': 1200}, None, 5, 30, 0, False),
-    ('小鉢 1品', 45, RewardType.SIDE_DISH, {'label': '指定の小鉢 1品'}, None, None, 30, 0, False),
-    ('デザート 1品', 85, RewardType.DESSERT, {'label': 'デザート 1品'}, None, None, 30, 0, False),
-    ('ドリンク 1杯', 135, RewardType.DRINK, {'label': 'ソフトドリンク 1杯'}, None, None, 30, 0, False),
-    ('残念賞（30ポイント進呈）', 200, RewardType.POINTS_REFUND, {'points': 30}, None, None, 30, 0, False),
-]
 
 # Milestones fire on lifetime (cumulative) points and don't consume the
 # balance — a "the more you've spent with us, the more we thank you" bonus
@@ -74,21 +59,10 @@ class Command(BaseCommand):
                 setattr(campaign, field, value)
             campaign.save(update_fields=list(ECONOMY))
 
-        for order, (name, weight, rtype, config, total, daily, exp, minspend, approval) in enumerate(DEMO_PRIZES):
-            Prize.objects.update_or_create(
-                campaign=campaign, name=name,
-                defaults={
-                    'display_order': order, 'weight': weight, 'reward_type': rtype,
-                    'reward_config': config, 'total_stock': total, 'remaining_stock': total,
-                    'daily_stock': daily, 'voucher_expires_after_days': exp or 30,
-                    'voucher_min_spend_yen': minspend, 'requires_manual_approval': approval,
-                    'active': True,
-                },
-            )
-        # Self-heal: drop demo rows that no longer match the seed (e.g. a
-        # prize was renamed or a milestone threshold changed) so re-running
-        # the command doesn't leave stale segments on the wheel.
-        campaign.prizes.exclude(name__in=[p[0] for p in DEMO_PRIZES]).delete()
+        # The tiered lottery pool (特賞 ¥5,000 … 料理賞 … 参加賞). Shared with
+        # `manage.py seed_prize_pool`; matched by name so re-running keeps
+        # consumed stock and drops prizes no longer in the preset.
+        apply_prize_pool(campaign)
 
         for threshold, rtype, config, exp, label in DEMO_MILESTONES:
             Milestone.objects.update_or_create(

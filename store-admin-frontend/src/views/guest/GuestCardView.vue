@@ -19,6 +19,7 @@ import {
   type WheelPrize,
 } from '@/api/guest'
 import QrCanvas from '@/components/QrCanvas.vue'
+import GuestBottomSheet from '@/components/guest/GuestBottomSheet.vue'
 import GuestOnboarding from '@/components/GuestOnboarding.vue'
 import AnimatedNumber from '@/components/AnimatedNumber.vue'
 import WheelOfFortune from '@/components/WheelOfFortune.vue'
@@ -72,6 +73,9 @@ const loadError = ref(false)
 const readonly = ref(route.query.readonly === '1')
 
 const busy = ref(false)
+// The member QR lives behind a primary button in a mobile sheet (never for
+// readonly viewers, who must not be able to show a scannable member code).
+const memberSheet = ref(false)
 const drawResult = ref<DrawResult | null>(null)
 const voucherModal = ref<GuestVoucher | null>(null)
 
@@ -124,6 +128,15 @@ const orgLogo = computed(() => card.value?.orgLogoUrl ?? '')
 const orgName = computed(() =>
   card.value ? (locale.value === 'ja' ? card.value.orgNameJa : card.value.orgNameZh) : '',
 )
+const branchName = computed(() =>
+  card.value ? (locale.value === 'ja' ? card.value.branchNameJa : card.value.branchNameZh) : '',
+)
+/** What the customer recognises: "○○グループ 心斎橋店". With a logo the
+ *  chain is already shown visually, so just the branch is added. */
+const brandName = computed(() => {
+  if (!card.value) return ''
+  return orgLogo.value ? branchName.value : [orgName.value, branchName.value].filter(Boolean).join(' ')
+})
 const canDrawWithPoints = computed(
   () => !!c.value.hasPrizes && !!c.value.pointsPerDraw && (card.value?.pointsBalance ?? 0) >= c.value.pointsPerDraw,
 )
@@ -131,6 +144,7 @@ const canRedeemVoucher = computed(
   () => !!c.value.pointsPerVoucher && (card.value?.pointsBalance ?? 0) >= c.value.pointsPerVoucher,
 )
 const activeVouchers = computed(() => card.value?.vouchers.filter((v) => v.status === 'active') ?? [])
+const latestEntry = computed(() => card.value?.ledger[0] ?? null)
 
 const reasonLabel = (reason: string) => t(`guest.reason.${reason}`, reason)
 
@@ -337,40 +351,56 @@ onBeforeUnmount(() => {
   <div class="wrap">
     <div v-if="loading" class="card skeleton">{{ t('guest.loading') }}</div>
 
-    <div v-else-if="loadError" class="card">
+    <div v-else-if="loadError" class="card error-card">
       <h1>{{ t('guest.notFoundTitle') }}</h1>
       <p class="lead">{{ t('guest.notFoundBody') }}</p>
       <router-link :to="{ name: 'guest-login' }" class="btn-primary">{{ t('guest.goLogin') }}</router-link>
     </div>
 
     <template v-else-if="card">
-      <div class="card qr-card">
-        <div v-if="orgLogo || orgName" class="brand">
-          <img v-if="orgLogo" :src="orgLogo" alt="" class="brand-logo" />
-          <span v-else class="brand-name">{{ orgName }}</span>
+      <div v-if="bonusMsg" :key="`t${confettiKey}`" class="live-toast">{{ bonusMsg }}</div>
+
+      <section class="hero">
+        <div v-if="orgLogo || brandName" class="g-brand">
+          <img v-if="orgLogo" :src="orgLogo" alt="" class="g-brand-logo" />
+          <span v-if="brandName" class="g-brand-name">{{ brandName }}</span>
         </div>
+
         <div class="greeting">
           <span class="hello">{{ card.name ? t('guest.helloName', { name: card.name }) : t('guest.hello') }}</span>
           <span v-if="readonly" class="readonly-badge">{{ t('guest.readonlyBadge') }}</span>
         </div>
 
-        <div v-if="!readonly" class="qr-box">
-          <QrCanvas :value="card.cardToken" :size="200" />
-          <span class="short-code">{{ card.cardToken }}</span>
-          <p class="qr-hint">{{ t('guest.qrHint') }}</p>
+        <div class="hero-main">
+          <div class="points-block">
+            <p class="g-eyebrow">{{ t('guest.pointsNow') }}</p>
+            <div class="points" :class="{ bump: showGain }">
+              <span class="points-value"><AnimatedNumber :value="card.pointsBalance" /></span>
+              <span class="points-unit">{{ t('guest.points') }}</span>
+              <span v-if="showGain" :key="`g${confettiKey}`" class="points-gain">+{{ pointsGain }}</span>
+              <div v-if="showGain" :key="`c${confettiKey}`" class="confetti" aria-hidden="true">
+                <span v-for="n in 16" :key="n" :style="{ '--i': n }" />
+              </div>
+            </div>
+          </div>
+
+          <button
+            v-if="!readonly"
+            type="button"
+            class="g-btn-primary member-btn"
+            @click="memberSheet = true"
+          >
+            {{ t('guest.showMember') }}
+          </button>
         </div>
 
-        <div class="points" :class="{ bump: showGain }">
-          <span class="points-value"><AnimatedNumber :value="card.pointsBalance" /></span>
-          <span class="points-unit">{{ t('guest.points') }}</span>
-          <span v-if="showGain" :key="`g${confettiKey}`" class="points-gain">+{{ pointsGain }}</span>
-          <div v-if="showGain" :key="`c${confettiKey}`" class="confetti" aria-hidden="true">
-            <span v-for="n in 16" :key="n" :style="{ '--i': n }" />
-          </div>
-        </div>
+        <p v-if="readonly" class="readonly-hint">{{ t('guest.loginReadonlyNote') }}</p>
 
         <div v-if="card.stampTarget" class="stamps">
-          <span class="stamps-label">{{ t('guest.stampProgress', { count: stampFilled, target: card.stampTarget }) }}</span>
+          <div class="g-section-head">
+            <div><h2>{{ t('guest.stampsTitle') }}</h2></div>
+            <span class="g-count-pill">{{ stampFilled }} / {{ card.stampTarget }}</span>
+          </div>
           <div class="stamp-row">
             <span
               v-for="(filled, i) in stampCells"
@@ -380,9 +410,51 @@ onBeforeUnmount(() => {
             />
           </div>
         </div>
-      </div>
+      </section>
 
-      <div v-if="bonusMsg" :key="`t${confettiKey}`" class="live-toast">{{ bonusMsg }}</div>
+      <!-- Coupons available (summary; tap a row for the redemption detail) -->
+      <section v-if="activeVouchers.length" class="coupon-summary">
+        <div class="coupon-summary-head">
+          <span>{{ t('guest.couponsAvailable') }}</span>
+          <strong>{{ activeVouchers.length }}</strong>
+        </div>
+        <button
+          v-for="v in activeVouchers"
+          :key="v.redemptionCode"
+          type="button"
+          class="coupon-row"
+          @click="voucherModal = v"
+        >
+          <span class="coupon-copy">
+            <strong>{{ v.label }}</strong>
+            <small>
+              {{ t('guest.voucherExpires', { date: shortDate(v.expiresAt) }) }}
+              <template v-if="v.minSpendYen"> · {{ t('guest.voucherMinSpend', { yen: v.minSpendYen.toLocaleString('ja-JP') }) }}</template>
+            </small>
+          </span>
+          <span class="coupon-code">{{ v.redemptionCode }}</span>
+        </button>
+        <p class="coupon-hint">{{ t('guest.voucherHint') }}</p>
+      </section>
+
+      <!-- Most recent activity -->
+      <section v-if="latestEntry" class="recent">
+        <div class="g-section-head compact">
+          <h2>{{ t('guest.recentActivity') }}</h2>
+          <a href="#pc-ledger" class="g-link">{{ t('guest.viewAll') }}</a>
+        </div>
+        <div class="recent-row">
+          <div class="recent-main">
+            <span class="recent-reason">{{ reasonLabel(latestEntry.reason) }}</span>
+            <span class="recent-date">{{ shortDateTime(latestEntry.createdAt) }}</span>
+          </div>
+          <span
+            v-if="latestEntry.delta"
+            class="recent-delta"
+            :class="{ minus: latestEntry.delta < 0 }"
+          >{{ latestEntry.delta > 0 ? '+' : '' }}{{ latestEntry.delta }}</span>
+        </div>
+      </section>
 
       <!-- Set a recovery PIN -->
       <div v-if="showPinPrompt" class="card pin-card">
@@ -452,24 +524,6 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <!-- Vouchers -->
-      <div v-if="activeVouchers.length" class="card voucher-card">
-        <h2>{{ t('guest.vouchersTitle') }}</h2>
-        <ul class="vouchers">
-          <li v-for="v in activeVouchers" :key="v.redemptionCode" @click="voucherModal = v">
-            <div class="voucher-main">
-              <span class="voucher-label">{{ v.label }}</span>
-              <span class="voucher-meta">
-                {{ t('guest.voucherExpires', { date: shortDate(v.expiresAt) }) }}
-                <template v-if="v.minSpendYen"> · {{ t('guest.voucherMinSpend', { yen: v.minSpendYen.toLocaleString('ja-JP') }) }}</template>
-              </span>
-            </div>
-            <span class="voucher-code">{{ v.redemptionCode }}</span>
-          </li>
-        </ul>
-        <p class="voucher-hint">{{ t('guest.voucherHint') }}</p>
-      </div>
-
       <!-- Milestones -->
       <div v-if="card.milestones.length" class="card milestone-card">
         <h2>{{ t('guest.milestonesTitle') }}</h2>
@@ -494,7 +548,7 @@ onBeforeUnmount(() => {
         </ul>
       </div>
 
-      <div class="card ledger-card">
+      <div id="pc-ledger" class="card ledger-card">
         <h2>{{ t('guest.history') }}</h2>
         <ul v-if="card.ledger.length" class="ledger">
           <li v-for="row in card.ledger" :key="row.id">
@@ -517,6 +571,23 @@ onBeforeUnmount(() => {
     </template>
 
     <GuestOnboarding v-if="showOnboarding && card" :card="card" @close="closeOnboarding" />
+
+    <!-- Member QR — real QrCanvas, never shown for readonly viewers -->
+    <GuestBottomSheet
+      :open="memberSheet && !readonly && !!card"
+      :title="t('guest.memberSheetTitle')"
+      :description="t('guest.memberSheetDesc')"
+      @close="memberSheet = false"
+    >
+      <div v-if="card" class="member-sheet">
+        <div class="member-qr">
+          <QrCanvas :value="card.cardToken" :size="200" />
+        </div>
+        <span class="member-code">{{ card.cardToken }}</span>
+        <p class="member-hint">{{ t('guest.qrHint') }}</p>
+        <button type="button" class="g-btn-secondary" @click="memberSheet = false">{{ t('guest.close') }}</button>
+      </div>
+    </GuestBottomSheet>
 
     <!-- Lottery wheel -->
     <div v-if="wheelModal" class="modal-overlay wheel-overlay">
@@ -588,168 +659,138 @@ onBeforeUnmount(() => {
 .wrap {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  margin-top: 20px;
 }
 
+/* Generic block: a plain white section separated by a 1px rule rather than a
+   stacked shadow card (design brief §4). */
 .card {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  padding: 22px 20px;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--guest-rule);
 }
 
 .skeleton {
   text-align: center;
-  color: var(--text-tertiary);
+  color: var(--guest-muted);
   font-size: 13px;
-  padding: 40px 20px;
+  padding: 48px 0;
+  border: 0;
+}
+
+.error-card {
+  border-bottom: 0;
+  padding-top: 12px;
+}
+
+.error-card .btn-primary {
+  margin-top: 4px;
 }
 
 h1 {
-  font-size: 19px;
+  font-size: 22px;
   font-weight: 700;
-  color: var(--text-primary);
-  margin: 0 0 6px;
+  letter-spacing: -0.02em;
+  color: var(--guest-ink);
+  margin: 8px 0 8px;
 }
 
 h2 {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--guest-ink);
   margin: 0 0 12px;
 }
 
 .lead {
   font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  margin: 0 0 16px;
+  color: var(--guest-muted);
+  line-height: 1.65;
+  margin: 0 0 18px;
 }
 
-.qr-card {
-  text-align: center;
-}
+/* ---- hero ---------------------------------------------------------------- */
 
-.brand {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 10px;
-}
-
-.brand-logo {
-  max-height: 40px;
-  max-width: 60%;
-  object-fit: contain;
-}
-
-.brand-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-secondary);
+.hero {
+  padding: 4px 0 24px;
+  border-bottom: 1px solid var(--guest-rule);
 }
 
 .greeting {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin: 6px 0 22px;
 }
 
 .hello {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--guest-ink);
 }
 
 .readonly-badge {
+  flex: 0 0 auto;
   font-size: 10.5px;
+  font-weight: 700;
   color: var(--warning);
   background: var(--warning-light);
-  border-radius: 20px;
-  padding: 2px 8px;
+  border-radius: 999px;
+  padding: 3px 9px;
 }
 
-.qr-box {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 14px;
-  background: #fff;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
+.hero-main {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.short-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  word-break: break-all;
-}
-
-.qr-hint {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  margin: 2px 0 0;
+.points-block {
+  min-width: 0;
 }
 
 .points {
   position: relative;
-  margin-top: 18px;
   display: flex;
   align-items: baseline;
-  justify-content: center;
-  gap: 6px;
+  gap: 7px;
+  color: var(--guest-green);
   transition: transform 0.25s ease;
 }
 
 .points.bump {
-  transform: scale(1.08);
+  transform: scale(1.06);
 }
 
 .points-value {
-  font-size: 40px;
+  font-size: 50px;
+  line-height: 1;
   font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.02em;
+  letter-spacing: -0.04em;
 }
 
 .points-unit {
-  font-size: 14px;
-  color: var(--text-secondary);
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .points-gain {
   position: absolute;
   top: -6px;
-  left: 50%;
+  left: 0;
   font-size: 15px;
   font-weight: 700;
-  color: var(--success);
+  color: var(--guest-green-dark);
   pointer-events: none;
   white-space: nowrap;
   animation: gain-float 2.2s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
 }
 
 @keyframes gain-float {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, 14px);
-  }
-  15% {
-    opacity: 1;
-    transform: translate(-50%, -20px);
-  }
-  75% {
-    opacity: 1;
-    transform: translate(-50%, -30px);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -40px);
-  }
+  0% { opacity: 0; transform: translateY(14px); }
+  15% { opacity: 1; transform: translateY(-20px); }
+  75% { opacity: 1; transform: translateY(-30px); }
+  100% { opacity: 0; transform: translateY(-40px); }
 }
 
 .confetti {
@@ -762,7 +803,7 @@ h2 {
 .confetti span {
   position: absolute;
   top: 50%;
-  left: 50%;
+  left: 30%;
   width: 6px;
   height: 9px;
   border-radius: 1px;
@@ -771,14 +812,26 @@ h2 {
 }
 
 @keyframes confetti-fly {
-  0% {
-    opacity: 1;
-    transform: rotate(calc(var(--i) * 22.5deg)) translateY(0) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: rotate(calc(var(--i) * 22.5deg)) translateY(-66px) rotate(220deg) scale(0.35);
-  }
+  0% { opacity: 1; transform: rotate(calc(var(--i) * 22.5deg)) translateY(0) scale(1); }
+  100% { opacity: 0; transform: rotate(calc(var(--i) * 22.5deg)) translateY(-66px) rotate(220deg) scale(0.35); }
+}
+
+.member-btn {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 150px;
+  min-height: 50px;
+  padding: 0 18px;
+}
+
+.readonly-hint {
+  margin: 14px 0 0;
+  padding: 12px 13px;
+  border-radius: 10px;
+  background: var(--guest-soft);
+  color: var(--guest-muted);
+  font-size: 11.5px;
+  line-height: 1.55;
 }
 
 .live-toast {
@@ -786,58 +839,61 @@ h2 {
   top: 8px;
   z-index: 20;
   align-self: center;
-  background: var(--accent);
+  background: var(--guest-green);
   color: #fff;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   padding: 8px 16px;
   border-radius: 999px;
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 8px 18px rgba(6, 199, 85, 0.24);
   animation: toast-in 3.4s ease forwards;
 }
 
 @keyframes toast-in {
-  0% {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
-  8%,
-  90% {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
+  0% { opacity: 0; transform: translateY(-8px); }
+  8%, 90% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-8px); }
 }
+
+/* ---- stamps ------------------------------------------------------------- */
 
 .stamps {
-  margin-top: 16px;
-}
-
-.stamps-label {
-  font-size: 12px;
-  color: var(--text-secondary);
+  margin-top: 24px;
 }
 
 .stamp-row {
   display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 8px;
+  justify-content: space-between;
+  margin-top: 18px;
 }
 
 .stamp {
-  width: 22px;
-  height: 22px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
-  border: 2px solid var(--border);
+  border: 2px solid #dfe3e5;
+  display: grid;
+  place-items: center;
+}
+
+.stamp::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #e4e7e9;
 }
 
 .stamp.filled {
-  background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--guest-green);
+  background: #fff;
+  box-shadow: 0 4px 10px rgba(6, 199, 85, 0.12);
+}
+
+.stamp.filled::after {
+  width: 16px;
+  height: 16px;
+  background: var(--guest-green);
 }
 
 .stamp.pop {
@@ -845,67 +901,183 @@ h2 {
 }
 
 @keyframes stamp-pop {
-  0% {
-    transform: scale(0.4);
-  }
-  55% {
-    transform: scale(1.35);
-  }
-  100% {
-    transform: scale(1);
-  }
+  0% { transform: scale(0.4); }
+  55% { transform: scale(1.3); }
+  100% { transform: scale(1); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .points.bump,
-  .stamp.pop,
-  .confetti,
-  .points-gain,
-  .live-toast {
-    animation: none;
-    transition: none;
-  }
-  .points.bump {
-    transform: none;
-  }
+/* ---- coupon summary --------------------------------------------------------- */
+
+.coupon-summary {
+  margin: 0 -22px;
+  padding: 24px 22px 26px;
+  background: var(--guest-mint);
+  border-bottom: 1px solid var(--guest-mint-rule);
 }
 
-/* Set-PIN prompt */
+.coupon-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--guest-ink);
+}
+
+.coupon-summary-head strong {
+  min-width: 21px;
+  height: 21px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--guest-green);
+  color: #fff;
+  font-size: 11px;
+}
+
+.coupon-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 15px;
+  margin-bottom: 8px;
+  border: 1px solid var(--guest-mint-rule);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--guest-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.coupon-row:last-of-type {
+  margin-bottom: 0;
+}
+
+.coupon-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.coupon-copy strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.coupon-copy small {
+  color: var(--guest-muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.coupon-code {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--guest-green-dark);
+}
+
+.coupon-hint {
+  margin: 12px 0 0;
+  color: #5f7a69;
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+/* ---- recent activity -------------------------------------------------------- */
+
+.recent {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--guest-rule);
+}
+
+.g-section-head.compact {
+  align-items: center;
+}
+
+.recent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.recent-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recent-reason {
+  font-size: 13px;
+  color: var(--guest-ink);
+}
+
+.recent-date {
+  font-size: 11px;
+  color: var(--guest-muted);
+}
+
+.recent-delta {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--guest-green-dark);
+}
+
+.recent-delta.minus {
+  color: var(--guest-danger);
+}
+
+/* ---- set-PIN prompt ---------------------------------------------------------- */
+
 .pin-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin: 0 -22px;
+  padding: 22px;
+  border-bottom: 1px solid var(--guest-rule);
+  background: var(--guest-soft);
 }
 
 .pin-body {
   font-size: 12px;
-  color: var(--text-secondary);
-  line-height: 1.5;
+  color: var(--guest-muted);
+  line-height: 1.55;
   margin: 0;
 }
 
 .pin-input {
   width: 100%;
-  height: 46px;
+  height: 50px;
   padding: 0 14px;
   font-size: 20px;
   letter-spacing: 0.3em;
   text-align: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-alt);
-  color: var(--text-primary);
+  border: 1px solid var(--guest-field-border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--guest-ink);
   outline: none;
   box-sizing: border-box;
 }
 
 .pin-input:focus {
-  border-color: var(--accent);
+  border-color: var(--guest-green);
+  box-shadow: 0 0 0 3px rgba(6, 199, 85, 0.12);
 }
 
 .pin-error {
   font-size: 11.5px;
-  color: var(--danger);
+  color: var(--guest-danger);
   margin: 0;
 }
 
@@ -917,33 +1089,36 @@ h2 {
 .pin-skip {
   flex: 0 0 auto;
   padding: 0 16px;
-  height: 42px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text-secondary);
+  height: 46px;
+  border: 1px solid var(--guest-rule);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--guest-muted);
+  font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
 
 .pin-save {
   flex: 1;
-  height: 42px;
+  height: 46px;
   border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
+  border-radius: 12px;
+  background: var(--guest-green);
   color: #fff;
+  font: inherit;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
 }
 
 .pin-save:disabled {
-  opacity: 0.5;
+  background: #c8ccce;
   cursor: not-allowed;
 }
 
-/* Spend points */
+/* ---- spend points --------------------------------------------------------- */
+
 .spend-card {
   display: flex;
   flex-direction: column;
@@ -954,13 +1129,14 @@ h2 {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-alt);
-  cursor: pointer;
+  gap: 3px;
+  padding: 15px 16px;
+  border: 1px solid var(--guest-field-border);
+  border-radius: 14px;
+  background: var(--guest-soft);
+  font: inherit;
   text-align: left;
+  cursor: pointer;
 }
 
 .spend-btn:disabled {
@@ -969,90 +1145,30 @@ h2 {
 }
 
 .spend-btn.accent {
-  background: var(--accent-light);
-  border-color: var(--accent);
+  background: var(--guest-mint);
+  border-color: var(--guest-green);
 }
 
 .spend-btn-main {
   font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
+  font-weight: 700;
+  color: var(--guest-ink);
 }
 
 .spend-btn-sub {
   font-size: 11.5px;
-  color: var(--text-secondary);
+  color: var(--guest-muted);
 }
 
-/* Vouchers */
-.vouchers {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+/* ---- milestones --------------------------------------------------------- */
 
-.vouchers li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px dashed var(--accent);
-  border-radius: var(--radius-md);
-  background: var(--accent-light);
-  cursor: pointer;
-}
-
-.voucher-main {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.voucher-label {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.voucher-meta {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.voucher-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--accent);
-  white-space: nowrap;
-}
-
-.voucher-code.big {
-  font-size: 22px;
-  color: var(--text-primary);
-  margin: 8px 0;
-}
-
-.voucher-hint {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  margin: 10px 0 0;
-}
-
-/* Milestones */
 .milestones {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 11px;
 }
 
 .milestones li {
@@ -1060,24 +1176,24 @@ h2 {
   align-items: center;
   gap: 10px;
   font-size: 12.5px;
-  color: var(--text-tertiary);
+  color: var(--guest-muted);
 }
 
 .milestones li.reached {
-  color: var(--text-primary);
+  color: var(--guest-ink);
 }
 
 .ms-dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 2px solid var(--border);
+  border: 2px solid var(--guest-field-border);
   flex-shrink: 0;
 }
 
 .milestones li.reached .ms-dot {
-  background: var(--success);
-  border-color: var(--success);
+  background: var(--guest-green);
+  border-color: var(--guest-green);
 }
 
 .ms-label {
@@ -1090,9 +1206,11 @@ h2 {
 
 .ms-progress {
   font-size: 11.5px;
-  color: var(--text-tertiary);
+  color: var(--guest-muted);
   margin: 12px 0 0;
 }
+
+/* ---- campaign info ------------------------------------------------------- */
 
 .info-card ul {
   margin: 0;
@@ -1104,8 +1222,14 @@ h2 {
 
 .info-card li {
   font-size: 12.5px;
-  color: var(--text-secondary);
-  line-height: 1.5;
+  color: var(--guest-muted);
+  line-height: 1.55;
+}
+
+/* ---- full ledger ------------------------------------------------------------ */
+
+.ledger-card {
+  scroll-margin-top: 60px;
 }
 
 .ledger {
@@ -1120,8 +1244,8 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
+  padding: 11px 0;
+  border-bottom: 1px solid var(--guest-rule);
 }
 
 .ledger li:last-child {
@@ -1136,46 +1260,50 @@ h2 {
 
 .ledger-reason {
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--guest-ink);
 }
 
 .ledger-date {
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--guest-muted);
 }
 
 .ledger-delta {
   font-size: 15px;
-  font-weight: 600;
-  color: var(--success);
+  font-weight: 700;
+  color: var(--guest-green-dark);
 }
 
 .ledger-delta.minus {
-  color: var(--danger);
+  color: var(--guest-danger);
 }
 
 .empty {
   font-size: 12.5px;
-  color: var(--text-tertiary);
+  color: var(--guest-muted);
   text-align: center;
   padding: 12px 0;
   margin: 0;
 }
 
+/* ---- buttons / footnote ---------------------------------------------------- */
+
 .btn-primary {
-  display: block;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-decoration: none;
-  height: 46px;
-  line-height: 46px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
+  min-height: 52px;
+  border-radius: 12px;
+  background: var(--guest-green);
   color: #fff;
+  font: inherit;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
   border: none;
   cursor: pointer;
   width: 100%;
+  box-shadow: 0 8px 18px rgba(6, 199, 85, 0.18);
 }
 
 .btn-primary.inline {
@@ -1185,34 +1313,70 @@ h2 {
 .footnote {
   text-align: center;
   font-size: 11.5px;
-  color: var(--text-tertiary);
-  margin: 4px 0 0;
+  color: var(--guest-muted);
+  padding: 18px 0 0;
 }
 
 .link-btn {
   border: none;
   background: transparent;
-  color: var(--accent);
+  color: var(--guest-green-dark);
+  font: inherit;
   font-size: 11.5px;
+  font-weight: 700;
   padding: 0;
   cursor: pointer;
 }
 
-/* Modals */
+/* ---- member sheet ------------------------------------------------------------ */
+
+.member-sheet {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.member-qr {
+  padding: 14px;
+  background: #fff;
+  border: 1px solid var(--guest-rule);
+  border-radius: 14px;
+}
+
+.member-code {
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--guest-muted);
+  word-break: break-all;
+  text-align: center;
+}
+
+.member-hint {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  color: var(--guest-muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ---- modals (wheel + voucher detail) ------------------------------------- */
+
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(20, 23, 26, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px;
-  z-index: 100;
+  z-index: 130;
 }
 
 .modal {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
+  background: #fff;
+  border-radius: 20px;
   padding: 28px 24px;
   max-width: 320px;
   width: 100%;
@@ -1225,14 +1389,14 @@ h2 {
 .modal-title {
   font-size: 16px;
   font-weight: 700;
-  color: var(--text-primary);
+  color: var(--guest-ink);
   margin: 12px 0 0;
 }
 
 .modal-prize {
   font-size: 15px;
-  color: var(--accent);
-  font-weight: 600;
+  color: var(--guest-green-dark);
+  font-weight: 700;
   margin: 6px 0 0;
 }
 
@@ -1250,19 +1414,27 @@ h2 {
 
 .modal-voucher-note {
   font-size: 11.5px;
-  color: var(--text-secondary);
-  line-height: 1.5;
+  color: var(--guest-muted);
+  line-height: 1.55;
 }
 
-/* Lottery wheel sheet */
+.voucher-code.big {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--guest-ink);
+  margin: 8px 0;
+}
+
 .wheel-overlay {
   padding: 16px;
 }
 
 .wheel-sheet {
   position: relative;
-  background: var(--surface);
-  border-radius: var(--radius-lg);
+  background: #fff;
+  border-radius: 20px;
   padding: 26px 20px 22px;
   max-width: 360px;
   width: 100%;
@@ -1278,7 +1450,7 @@ h2 {
   right: 12px;
   border: none;
   background: transparent;
-  color: var(--text-tertiary);
+  color: var(--guest-muted);
   font-size: 16px;
   cursor: pointer;
 }
@@ -1286,19 +1458,19 @@ h2 {
 .wheel-heading {
   font-size: 16px;
   font-weight: 700;
-  color: var(--text-primary);
+  color: var(--guest-ink);
   margin: 0 0 18px;
 }
 
 .wheel-cost {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--guest-muted);
   margin: 18px 0 0;
 }
 
 .s2c-hint {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--guest-muted);
   line-height: 1.5;
   margin: 16px 0 8px;
   text-align: center;
@@ -1310,7 +1482,40 @@ h2 {
 
 .s2c-error {
   font-size: 11.5px;
-  color: var(--danger);
+  color: var(--guest-danger);
   margin: 8px 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .points.bump,
+  .stamp.pop,
+  .confetti,
+  .points-gain,
+  .live-toast {
+    animation: none;
+    transition: none;
+  }
+  .points.bump {
+    transform: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .coupon-summary,
+  .pin-card {
+    margin-inline: -18px;
+    padding-inline: 18px;
+  }
+  .points-value {
+    font-size: 44px;
+  }
+  .member-btn {
+    min-width: 132px;
+    padding-inline: 12px;
+  }
+  .stamp {
+    width: 40px;
+    height: 40px;
+  }
 }
 </style>

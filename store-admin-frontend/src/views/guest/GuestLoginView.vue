@@ -35,7 +35,11 @@ const canSubmit = computed(() => {
   return mode.value === 'pin' ? /^\d{6}$/.test(form.pin) : true
 })
 
-const orgName = (o: RecoveryOption) => (locale.value === 'ja' ? o.orgNameJa : o.orgNameZh)
+const orgName = (o: RecoveryOption) => {
+  const chain = locale.value === 'ja' ? o.orgNameJa : o.orgNameZh
+  const branch = locale.value === 'ja' ? o.branchNameJa : o.branchNameZh
+  return [chain, branch].filter(Boolean).join(' ')
+}
 
 function switchMode(next: 'pin' | 'view') {
   mode.value = next
@@ -88,13 +92,20 @@ function submit() {
 </script>
 
 <template>
-  <div class="card">
-    <h1>{{ t('guest.loginTitle') }}</h1>
-    <p v-if="cameFromExisting" class="notice notice-info">{{ t('guest.existingHint') }}</p>
+  <div class="login-view">
+    <section class="g-intro">
+      <p class="g-eyebrow">{{ t('guest.eyebrowRecover') }}</p>
+      <h1 class="g-title">{{ t('guest.loginTitle') }}</h1>
+      <p v-if="!pickerOptions" class="g-lead">
+        {{ mode === 'pin' ? t('guest.pinRecoverLead') : t('guest.loginLead') }}
+      </p>
+    </section>
+
+    <p v-if="cameFromExisting" class="g-notice is-info">{{ t('guest.existingHint') }}</p>
 
     <!-- merchant picker -->
     <template v-if="pickerOptions">
-      <p class="lead">{{ t('guest.pickCardLead') }}</p>
+      <p class="g-lead pick-lead">{{ t('guest.pickCardLead') }}</p>
       <div class="picker">
         <button
           v-for="o in pickerOptions"
@@ -108,11 +119,11 @@ function submit() {
           <span>{{ orgName(o) }}</span>
         </button>
       </div>
-      <button type="button" class="text-btn" @click="pickerOptions = null">{{ t('common.back') }}</button>
+      <button type="button" class="g-link" @click="pickerOptions = null">{{ t('common.back') }}</button>
     </template>
 
     <template v-else>
-      <div class="mode-toggle">
+      <div class="g-modeswitch">
         <button type="button" :class="{ active: mode === 'pin' }" @click="switchMode('pin')">
           {{ t('guest.modePin') }}
         </button>
@@ -120,13 +131,13 @@ function submit() {
           {{ t('guest.modeView') }}
         </button>
       </div>
-      <p class="lead">{{ mode === 'pin' ? t('guest.pinRecoverLead') : t('guest.loginLead') }}</p>
 
-      <form class="form" @submit.prevent="submit">
-        <label class="field">
-          <span class="label">{{ t('guest.phone') }}</span>
+      <form class="g-form" @submit.prevent="submit">
+        <label class="g-field">
+          <span class="g-field-label">{{ t('guest.phone') }}</span>
           <input
             v-model="form.phone"
+            class="g-input"
             type="tel"
             inputmode="numeric"
             autocomplete="tel"
@@ -134,24 +145,27 @@ function submit() {
           />
         </label>
 
-        <div class="field">
-          <span class="label">{{ t('guest.birthday') }}</span>
-          <div class="birthday-row">
-            <select v-model="form.birthdayMonth">
+        <div class="g-field">
+          <span class="g-field-label">{{ t('guest.birthday') }}</span>
+          <div class="g-date-row">
+            <select v-model="form.birthdayMonth" class="g-select">
               <option value="">{{ t('guest.month') }}</option>
               <option v-for="m in months" :key="m" :value="m">{{ m }}</option>
             </select>
-            <select v-model="form.birthdayDay">
+            <span>{{ t('guest.month') }}</span>
+            <select v-model="form.birthdayDay" class="g-select">
               <option value="">{{ t('guest.day') }}</option>
               <option v-for="dd in days" :key="dd" :value="dd">{{ dd }}</option>
             </select>
+            <span>{{ t('guest.day') }}</span>
           </div>
         </div>
 
-        <label v-if="mode === 'pin'" class="field">
-          <span class="label">{{ t('guest.pin') }}</span>
+        <label v-if="mode === 'pin'" class="g-field">
+          <span class="g-field-label">{{ t('guest.pin') }}</span>
           <input
             v-model="form.pin"
+            class="g-input"
             type="text"
             inputmode="numeric"
             autocomplete="off"
@@ -161,191 +175,76 @@ function submit() {
           />
         </label>
 
-        <div v-if="errorMsg" class="notice notice-error">{{ errorMsg }}</div>
+        <div class="g-privacy">{{ mode === 'pin' ? t('guest.pinRecoverNote') : t('guest.loginReadonlyNote') }}</div>
 
-        <button type="submit" class="btn-primary" :disabled="!canSubmit">
+        <div v-if="errorMsg" class="g-notice is-error">{{ errorMsg }}</div>
+
+        <button type="submit" class="g-btn-primary" :disabled="!canSubmit">
           {{ submitting ? t('guest.submitting') : mode === 'pin' ? t('guest.pinRecoverSubmit') : t('guest.loginSubmit') }}
         </button>
-        <p class="readonly-note">
-          {{ mode === 'pin' ? t('guest.pinRecoverNote') : t('guest.loginReadonlyNote') }}
-        </p>
       </form>
     </template>
   </div>
 </template>
 
 <style scoped>
-.card {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  padding: 28px 24px 24px;
-  margin-top: 24px;
+.login-view {
+  padding-top: 4px;
 }
 
-h1 {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0 0 6px;
+.pick-lead {
+  margin-bottom: 14px;
 }
 
-.lead {
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  margin: 0 0 20px;
-}
-
-.mode-toggle {
+.g-privacy {
   display: flex;
   gap: 8px;
-  margin: 14px 0 12px;
-}
-
-.mode-toggle button {
-  flex: 1;
-  border: 1px solid var(--border);
-  background: var(--surface-alt);
-  color: var(--text-secondary);
-  border-radius: 999px;
-  padding: 8px 12px;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.mode-toggle button.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.label {
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-input[type='tel'],
-input[type='text'],
-select {
-  width: 100%;
-  height: 44px;
-  padding: 0 12px;
-  font-size: 15px;
-  color: var(--text-primary);
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  outline: none;
-  box-sizing: border-box;
-}
-
-input:focus,
-select:focus {
-  border-color: var(--accent);
-}
-
-.birthday-row {
-  display: flex;
-  gap: 10px;
-}
-
-.btn-primary {
-  height: 46px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.readonly-note {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-  text-align: center;
-  line-height: 1.5;
-  margin: 0;
+  padding: 13px;
+  border-radius: 10px;
+  background: var(--guest-soft);
+  color: var(--guest-muted);
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .picker {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 
 .picker-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 52px;
-  padding: 8px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-alt);
-  color: var(--text-primary);
+  min-height: 56px;
+  padding: 10px 15px;
+  border: 1px solid var(--guest-field-border);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--guest-ink);
+  font-family: inherit;
   font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
+  font-weight: 700;
   text-align: left;
+  cursor: pointer;
+}
+
+.picker-item:active {
+  background: var(--guest-soft);
+}
+
+.picker-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .picker-logo {
   width: 36px;
   height: 36px;
   object-fit: contain;
-  border-radius: 6px;
+  border-radius: 8px;
   flex-shrink: 0;
-}
-
-.picker-item:disabled {
-  opacity: 0.5;
-}
-
-.text-btn {
-  border: none;
-  background: transparent;
-  color: var(--accent);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.notice {
-  font-size: 12.5px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  line-height: 1.5;
-}
-
-.notice-error {
-  background: var(--danger-light);
-  color: var(--danger);
-}
-
-.notice-info {
-  background: var(--accent-light);
-  color: var(--text-secondary);
-  margin-bottom: 12px;
 }
 </style>

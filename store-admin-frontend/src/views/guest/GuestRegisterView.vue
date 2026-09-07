@@ -17,9 +17,13 @@ const errorMsg = ref('')
 // customer fills anything in so they know whose card they're opening.
 const store = ref<StoreContext | null>(null)
 const brandLogo = computed(() => store.value?.orgLogoUrl ?? '')
-const brandName = computed(() =>
-  store.value ? (locale.value === 'ja' ? store.value.orgNameJa : store.value.orgNameZh) : '',
-)
+const brandName = computed(() => {
+  if (!store.value) return ''
+  const chain = locale.value === 'ja' ? store.value.orgNameJa : store.value.orgNameZh
+  const branch = locale.value === 'ja' ? store.value.branchNameJa : store.value.branchNameZh
+  // With a logo the chain is already shown visually — just add the branch.
+  return brandLogo.value ? branch : [chain, branch].filter(Boolean).join(' ')
+})
 
 onMounted(async () => {
   if (!storeToken.value) return
@@ -97,21 +101,26 @@ async function submit() {
 </script>
 
 <template>
-  <div class="card">
-    <div v-if="brandLogo || brandName" class="brand">
-      <img v-if="brandLogo" :src="brandLogo" alt="" class="brand-logo" />
-      <span v-else class="brand-name">{{ brandName }}</span>
+  <div class="register-view">
+    <div v-if="brandLogo || brandName" class="g-brand">
+      <img v-if="brandLogo" :src="brandLogo" alt="" class="g-brand-logo" />
+      <span v-if="brandName" class="g-brand-name">{{ brandName }}</span>
     </div>
-    <h1>{{ t('guest.registerTitle') }}</h1>
-    <p class="lead">{{ t('guest.registerLead') }}</p>
 
-    <div v-if="!storeToken" class="notice notice-error">{{ t('guest.errStoreToken') }}</div>
+    <section class="g-intro">
+      <p class="g-eyebrow">{{ t('guest.eyebrowRegister') }}</p>
+      <h1 class="g-title">{{ t('guest.registerTitle') }}</h1>
+      <p class="g-lead">{{ t('guest.registerLead') }}</p>
+    </section>
 
-    <form v-else class="form" @submit.prevent="submit">
-      <label class="field">
-        <span class="label">{{ t('guest.phone') }} <em>{{ t('guest.required') }}</em></span>
+    <div v-if="!storeToken" class="g-notice is-error">{{ t('guest.errStoreToken') }}</div>
+
+    <form v-else class="g-form" @submit.prevent="submit">
+      <label class="g-field">
+        <span class="g-field-label">{{ t('guest.phone') }} <em class="g-req">{{ t('guest.required') }}</em></span>
         <input
           v-model="form.phone"
+          class="g-input"
           type="tel"
           inputmode="numeric"
           autocomplete="tel"
@@ -119,30 +128,33 @@ async function submit() {
         />
       </label>
 
-      <label class="field">
-        <span class="label">{{ t('guest.name') }} <em class="opt">{{ t('guest.optional') }}</em></span>
-        <input v-model="form.name" type="text" autocomplete="name" :placeholder="t('guest.namePlaceholder')" />
+      <label class="g-field">
+        <span class="g-field-label">{{ t('guest.name') }} <em class="g-opt">{{ t('guest.optional') }}</em></span>
+        <input v-model="form.name" class="g-input" type="text" autocomplete="name" :placeholder="t('guest.namePlaceholder')" />
       </label>
 
-      <div class="field">
-        <span class="label">{{ t('guest.birthday') }} <em>{{ t('guest.required') }}</em></span>
-        <div class="birthday-row">
-          <select v-model="form.birthdayMonth">
+      <div class="g-field">
+        <span class="g-field-label">{{ t('guest.birthday') }} <em class="g-req">{{ t('guest.required') }}</em></span>
+        <div class="g-date-row">
+          <select v-model="form.birthdayMonth" class="g-select">
             <option value="">{{ t('guest.month') }}</option>
             <option v-for="m in months" :key="m" :value="m">{{ m }}</option>
           </select>
-          <select v-model="form.birthdayDay">
+          <span>{{ t('guest.month') }}</span>
+          <select v-model="form.birthdayDay" class="g-select">
             <option value="">{{ t('guest.day') }}</option>
             <option v-for="d in days" :key="d" :value="d">{{ d }}</option>
           </select>
+          <span>{{ t('guest.day') }}</span>
         </div>
-        <span class="hint">{{ t('guest.birthdayHintRequired') }}</span>
+        <span class="g-hint">{{ t('guest.birthdayHintRequired') }}</span>
       </div>
 
-      <label class="field">
-        <span class="label">{{ t('guest.pin') }} <em class="opt">{{ t('guest.optional') }}</em></span>
+      <label class="g-field">
+        <span class="g-field-label">{{ t('guest.pin') }} <em class="g-opt">{{ t('guest.optional') }}</em></span>
         <input
           v-model="form.pin"
+          class="g-input"
           type="text"
           inputmode="numeric"
           autocomplete="off"
@@ -150,176 +162,34 @@ async function submit() {
           :placeholder="t('guest.pinPlaceholder')"
           @input="form.pin = form.pin.replace(/\D/g, '').slice(0, 6)"
         />
-        <span class="hint" :class="{ 'hint-error': pinError }">
+        <span class="g-hint" :class="{ 'is-error': pinError }">
           {{ pinError ? t('guest.errPinFormat') : t('guest.pinHint') }}
         </span>
       </label>
 
-      <label class="consent">
+      <label class="g-consent">
         <input v-model="form.consent" type="checkbox" />
         <span>{{ t('guest.consent') }}</span>
       </label>
 
-      <div v-if="errorMsg" class="notice notice-error">{{ errorMsg }}</div>
+      <div v-if="errorMsg" class="g-notice is-error">{{ errorMsg }}</div>
 
-      <button type="submit" class="btn-primary" :disabled="!canSubmit">
+      <button type="submit" class="g-btn-primary" :disabled="!canSubmit">
         {{ submitting ? t('guest.submitting') : t('guest.registerSubmit') }}
       </button>
-      <router-link :to="{ name: 'guest-login' }" class="link-alt">{{ t('guest.haveCard') }}</router-link>
+      <router-link :to="{ name: 'guest-login' }" class="g-link">{{ t('guest.haveCard') }}</router-link>
     </form>
   </div>
 </template>
 
 <style scoped>
-.card {
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  padding: 28px 24px 24px;
-  margin-top: 24px;
+.register-view {
+  padding-top: 4px;
 }
 
-.brand {
-  display: flex;
-  justify-content: center;
-  margin-bottom: 14px;
-}
-
-.brand-logo {
-  max-height: 44px;
-  max-width: 65%;
-  object-fit: contain;
-}
-
-.brand-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-secondary);
-}
-
-h1 {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0 0 6px;
-}
-
-.lead {
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin: 0 0 20px;
-  line-height: 1.5;
-}
-
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.label {
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-
-.label em {
-  color: var(--danger);
-  font-style: normal;
-  font-size: 11px;
-}
-
-.label em.opt {
-  color: var(--text-tertiary);
-}
-
-input[type='tel'],
-input[type='text'],
-select {
-  width: 100%;
-  height: 44px;
-  padding: 0 12px;
-  font-size: 15px;
-  color: var(--text-primary);
-  background: var(--surface-alt);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  outline: none;
-  box-sizing: border-box;
-}
-
-input:focus,
-select:focus {
-  border-color: var(--accent);
-}
-
-.birthday-row {
-  display: flex;
-  gap: 10px;
-}
-
-.hint {
-  font-size: 11.5px;
-  color: var(--text-tertiary);
-}
-
-.hint-error {
-  color: var(--danger);
-}
-
-.consent {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  cursor: pointer;
-}
-
-.consent input {
-  margin-top: 2px;
-  flex-shrink: 0;
-}
-
-.btn-primary {
-  height: 46px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.link-alt {
-  text-align: center;
-  font-size: 12.5px;
-  color: var(--accent);
-  text-decoration: none;
-}
-
-.notice {
-  font-size: 12.5px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  line-height: 1.5;
-}
-
-.notice-error {
-  background: var(--danger-light);
-  color: var(--danger);
+/* Keep the parenthetical "(任意)" style label from the copy readable next to
+   the tag chips. */
+.g-field-label {
+  flex-wrap: wrap;
 }
 </style>

@@ -43,13 +43,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="guest-shell">
-    <div class="guest-topbar">
+    <div class="guest-canvas guest-topbar">
       <div class="lang-toggle" role="group" aria-label="Language">
-        <button type="button" :class="{ active: lang === 'ja' }" @click="setLang('ja')">日本語</button>
+        <button type="button" :class="{ active: lang === 'ja' }" @click="setLang('ja')">JA</button>
+        <span aria-hidden="true">/</span>
         <button type="button" :class="{ active: lang === 'zh' }" @click="setLang('zh')">中文</button>
       </div>
     </div>
-    <main class="guest-main">
+    <main class="guest-canvas guest-main">
       <router-view />
     </main>
   </div>
@@ -57,47 +58,64 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .guest-shell {
+  position: relative;
   min-height: 100vh;
   min-height: 100dvh;
-  background: var(--bg);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 12px 14px 40px;
+  background: #fff;
+  padding: 14px 22px 48px;
 }
 
 .guest-topbar {
-  width: 100%;
-  max-width: 460px;
+  position: absolute;
+  top: 16px;
+  left: 0;
+  right: 0;
+  z-index: 5;
   display: flex;
   justify-content: flex-end;
+  padding: 0 22px;
+  pointer-events: none;
 }
 
 .lang-toggle {
   display: inline-flex;
-  border: 1px solid var(--border);
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--guest-rule);
   border-radius: 999px;
-  overflow: hidden;
-  background: var(--surface);
+  background: #fff;
+  color: #c3c7ca;
+  font-size: 10px;
+  pointer-events: auto;
 }
 
 .lang-toggle button {
   border: none;
   background: transparent;
-  color: var(--text-secondary);
-  font-size: 12px;
-  padding: 5px 12px;
+  color: #a5aaae;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 3px;
+  line-height: 1.3;
   cursor: pointer;
-  line-height: 1.4;
 }
 
 .lang-toggle button.active {
-  background: var(--accent);
-  color: #fff;
+  color: var(--guest-green-dark);
+  font-weight: 800;
 }
 
 .guest-main {
-  width: 100%;
-  max-width: 460px;
+  padding-top: 4px;
+}
+
+@media (max-width: 360px) {
+  .guest-shell {
+    padding-inline: 18px;
+  }
+  .guest-topbar {
+    padding-inline: 18px;
+  }
 }
 </style>

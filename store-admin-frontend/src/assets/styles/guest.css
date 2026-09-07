@@ -1,0 +1,422 @@
+/*
+ * Shared visual system for the public loyalty-card pages (/pc/*).
+ *
+ * Direction: a restrained, trustworthy, white, mobile-first sheet — the
+ * bright confidence of a LINE-style consumer screen without copying any
+ * LINE brand asset. All rules are scoped under `.guest-shell` so nothing
+ * here can leak into the admin UI, and the guest palette is committed to
+ * light regardless of the admin theme (a public phone page is always light).
+ *
+ * This file only carries the presentation layer. Business logic, API calls,
+ * auth and conditional rendering all stay in the views.
+ */
+
+.guest-shell {
+  --guest-green: #06c755;
+  --guest-green-dark: #05aa49;
+  --guest-mint: #edf9f2;
+  --guest-mint-rule: #d9f0e2;
+  --guest-ink: #202326;
+  --guest-muted: #777d82;
+  --guest-soft: #f6f7f8;
+  --guest-rule: #e7e9eb;
+  --guest-field-border: #dfe3e5;
+  --guest-danger: var(--danger);
+
+  color-scheme: light;
+  color: var(--guest-ink);
+  background: #fff;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic',
+    'PingFang SC', sans-serif;
+}
+
+/* ---- layout ---------------------------------------------------------------- */
+
+.guest-canvas {
+  width: 100%;
+  max-width: 460px;
+  margin: 0 auto;
+}
+
+/* ---- brand lockup ------------------------------------------------------------ */
+
+.g-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 2px 0 20px;
+}
+
+.g-brand-logo {
+  max-height: 30px;
+  max-width: 120px;
+  object-fit: contain;
+}
+
+.g-brand-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--guest-ink);
+}
+
+/* ---- section intro (register / recover) ----------------------------------- */
+
+.g-intro {
+  padding: 4px 0 22px;
+}
+
+.g-eyebrow {
+  margin: 0 0 6px;
+  color: var(--guest-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.g-title {
+  margin: 0 0 10px;
+  font-size: 26px;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--guest-ink);
+}
+
+.g-lead {
+  max-width: 340px;
+  margin: 0;
+  color: var(--guest-muted);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+/* ---- forms --------------------------------------------------------------- */
+
+.g-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.g-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.g-field-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--guest-ink);
+}
+
+.g-field-label .g-req,
+.g-field-label .g-opt {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.g-field-label .g-req {
+  color: var(--guest-green-dark);
+}
+
+.g-field-label .g-opt {
+  color: #a5aaae;
+}
+
+.g-hint {
+  color: #989da1;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.g-hint.is-error {
+  color: var(--guest-danger);
+}
+
+.guest-shell .g-input,
+.guest-shell .g-select {
+  width: 100%;
+  height: 50px;
+  padding: 0 14px;
+  border: 1px solid var(--guest-field-border);
+  border-radius: 12px;
+  background: var(--guest-soft);
+  color: var(--guest-ink);
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.guest-shell .g-input:focus,
+.guest-shell .g-select:focus {
+  border-color: var(--guest-green);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(6, 199, 85, 0.12);
+}
+
+.guest-shell .g-input::placeholder {
+  color: #b8bdc0;
+}
+
+.g-date-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.g-date-row .g-select {
+  text-align: center;
+}
+
+.g-date-row > span {
+  color: var(--guest-muted);
+  font-size: 12px;
+}
+
+/* consent checkbox */
+.g-consent {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: start;
+  gap: 10px;
+  color: #5f6569;
+  font-size: 11.5px;
+  line-height: 1.55;
+  cursor: pointer;
+}
+
+.g-consent input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--guest-green);
+  cursor: pointer;
+}
+
+/* segmented mode switch */
+.g-modeswitch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 22px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--guest-soft);
+}
+
+.g-modeswitch button {
+  min-height: 40px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #7d8387;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.g-modeswitch button.active {
+  background: #fff;
+  color: var(--guest-green-dark);
+  box-shadow: 0 2px 8px rgba(34, 43, 38, 0.09);
+}
+
+/* ---- buttons ------------------------------------------------------------- */
+
+.guest-shell .g-btn-primary {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--guest-green);
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+  box-shadow: 0 8px 18px rgba(6, 199, 85, 0.18);
+  cursor: pointer;
+}
+
+.guest-shell .g-btn-primary:active {
+  transform: translateY(1px);
+  background: var(--guest-green-dark);
+}
+
+.guest-shell .g-btn-primary:disabled {
+  background: #c8ccce;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.guest-shell .g-btn-secondary {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--guest-rule);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--guest-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.g-link {
+  align-self: center;
+  border: 0;
+  background: transparent;
+  color: var(--guest-green-dark);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+/* ---- notices ------------------------------------------------------------- */
+
+.g-notice {
+  padding: 11px 13px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.g-notice.is-error {
+  background: var(--danger-light);
+  color: var(--guest-danger);
+}
+
+.g-notice.is-info {
+  background: var(--guest-mint);
+  color: #3a4b41;
+}
+
+/* ---- sections / dividers ------------------------------------------------- */
+
+.g-section {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--guest-rule);
+}
+
+.g-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.g-section-head h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--guest-ink);
+}
+
+.g-section-head p {
+  margin: 6px 0 0;
+  color: var(--guest-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.g-count-pill {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--guest-mint);
+  color: var(--guest-green-dark);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+/* ---- bottom sheet ------------------------------------------------------------ */
+
+.g-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(20, 23, 26, 0.44);
+}
+
+.g-sheet {
+  width: 100%;
+  max-width: 460px;
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 10px 22px calc(24px + env(safe-area-inset-bottom));
+  background: #fff;
+  border-radius: 20px 20px 0 0;
+  box-shadow: 0 -12px 34px rgba(20, 23, 26, 0.18);
+}
+
+.g-sheet-grip {
+  width: 38px;
+  height: 4px;
+  margin: 0 auto 14px;
+  border-radius: 999px;
+  background: #e0e3e5;
+}
+
+.g-sheet-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  text-align: center;
+  color: var(--guest-ink);
+}
+
+.g-sheet-desc {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+  color: var(--guest-muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .g-sheet {
+    animation: g-sheet-up 0.24s cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+  @keyframes g-sheet-up {
+    from {
+      transform: translateY(14px);
+      opacity: 0.4;
+    }
+  }
+}
+
+@media (min-width: 480px) {
+  .g-sheet-backdrop {
+    align-items: center;
+  }
+  .g-sheet {
+    border-radius: 20px;
+  }
+}

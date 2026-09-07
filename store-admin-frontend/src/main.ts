@@ -2,6 +2,7 @@ import '@/assets/styles/variables.css'
 import 'element-plus/dist/index.css'
 import '@/assets/styles/element-overrides.css'
 import '@/assets/styles/global.css'
+import '@/assets/styles/guest.css'
 
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'

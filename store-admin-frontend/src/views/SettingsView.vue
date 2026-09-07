@@ -40,31 +40,42 @@ const isAdmin = computed(() => auth.role === 'admin')
 const paymentMethods = ref<PaymentMethodDef[]>([])
 const loading = ref(false)
 
-// Brand logo shown on the customer-facing loyalty pages (admin only).
-const orgLogoInput = ref('')
-const orgLogoSaved = ref('')
+// Brand info (name + logo) shown on the customer-facing loyalty pages
+// (admin only). The logo also feeds the multi-chain merchant picker.
+const orgForm = ref({ nameZh: '', nameJa: '', logoUrl: '' })
+const orgSaved = ref({ nameZh: '', nameJa: '', logoUrl: '' })
 const orgSaving = ref(false)
+const orgDirty = computed(
+  () =>
+    orgForm.value.nameZh !== orgSaved.value.nameZh ||
+    orgForm.value.nameJa !== orgSaved.value.nameJa ||
+    orgForm.value.logoUrl !== orgSaved.value.logoUrl,
+)
 
 async function loadOrg() {
   if (!isAdmin.value) return
   try {
     const org = await fetchOrganization()
-    orgLogoInput.value = org.logoUrl
-    orgLogoSaved.value = org.logoUrl
+    orgForm.value = { nameZh: org.nameZh, nameJa: org.nameJa, logoUrl: org.logoUrl }
+    orgSaved.value = { ...orgForm.value }
   } catch {
     /* non-critical */
   }
 }
 
-async function saveOrgLogo() {
+async function saveOrg() {
   orgSaving.value = true
   try {
-    const org = await updateOrganization({ logoUrl: orgLogoInput.value.trim() })
-    orgLogoInput.value = org.logoUrl
-    orgLogoSaved.value = org.logoUrl
+    const org = await updateOrganization({
+      nameZh: orgForm.value.nameZh.trim(),
+      nameJa: orgForm.value.nameJa.trim(),
+      logoUrl: orgForm.value.logoUrl.trim(),
+    })
+    orgForm.value = { nameZh: org.nameZh, nameJa: org.nameJa, logoUrl: org.logoUrl }
+    orgSaved.value = { ...orgForm.value }
     ElMessage.success(t('common.savedSuccess'))
-  } catch {
-    ElMessage.error(t('common.unexpectedError'))
+  } catch (e) {
+    ElMessage.error(e instanceof Error && e.message ? e.message : t('common.unexpectedError'))
   } finally {
     orgSaving.value = false
   }
@@ -528,19 +539,33 @@ async function handleChangePassword() {
     <div v-if="isAdmin" class="card">
       <h3>{{ t('settings.brandSection') }}</h3>
       <p class="section-hint">{{ t('settings.brandHint') }}</p>
+
+      <div class="brand-names">
+        <label class="brand-field">
+          <span>{{ t('settings.brandNameJa') }}</span>
+          <el-input v-model="orgForm.nameJa" :placeholder="t('settings.brandNameJaPlaceholder')" maxlength="100" />
+        </label>
+        <label class="brand-field">
+          <span>{{ t('settings.brandNameZh') }}</span>
+          <el-input v-model="orgForm.nameZh" :placeholder="t('settings.brandNameZhPlaceholder')" maxlength="100" />
+        </label>
+      </div>
+
       <div class="brand-row">
-        <img v-if="orgLogoInput" :src="orgLogoInput" alt="" class="brand-preview" />
+        <img v-if="orgForm.logoUrl" :src="orgForm.logoUrl" alt="" class="brand-preview" />
         <div v-else class="brand-preview brand-preview-empty">{{ t('settings.brandNoLogo') }}</div>
-        <div class="brand-input">
-          <el-input
-            v-model="orgLogoInput"
-            :placeholder="t('settings.brandLogoPlaceholder')"
-            clearable
-          />
-          <el-button type="primary" :loading="orgSaving" :disabled="orgLogoInput === orgLogoSaved" @click="saveOrgLogo">
-            {{ t('common.save') }}
-          </el-button>
-        </div>
+        <el-input
+          v-model="orgForm.logoUrl"
+          :placeholder="t('settings.brandLogoPlaceholder')"
+          clearable
+          class="brand-logo-input"
+        />
+      </div>
+
+      <div class="brand-actions">
+        <el-button type="primary" :loading="orgSaving" :disabled="!orgDirty" @click="saveOrg">
+          {{ t('common.save') }}
+        </el-button>
       </div>
     </div>
 
@@ -794,6 +819,21 @@ async function handleChangePassword() {
   border-top: 1px solid var(--border);
 }
 
+.brand-names {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.brand-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
 .brand-row {
   display: flex;
   gap: 16px;
@@ -820,10 +860,19 @@ async function handleChangePassword() {
   box-sizing: border-box;
 }
 
-.brand-input {
-  display: flex;
-  gap: 8px;
+.brand-logo-input {
   flex: 1;
+}
+
+.brand-actions {
+  margin-top: 14px;
+}
+
+@media (max-width: 640px) {
+  .brand-names {
+    flex-direction: column;
+    gap: 10px;
+  }
 }
 
 .preference-label {

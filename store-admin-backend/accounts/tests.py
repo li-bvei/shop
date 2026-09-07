@@ -251,11 +251,16 @@ class OrganizationEndpointTests(ApiTestCase):
             self.client.patch('/api/organization/', {'logo_url': 'https://x/l.png'}).status_code, 403,
         )
 
-        # admin can
+        # admin can — name + logo together
         self.login_as(self.admin)
-        ok = self.client.patch('/api/organization/', {'logo_url': 'https://cdn.example.com/logo.png'})
+        ok = self.client.patch('/api/organization/', {
+            'name_ja': 'いろは食堂', 'name_zh': '伊吕波食堂',
+            'logo_url': 'https://cdn.example.com/logo.png',
+        })
         self.assertEqual(ok.status_code, 200)
         self.assertEqual(ok.data['logo_url'], 'https://cdn.example.com/logo.png')
+        self.assertEqual(ok.data['name_ja'], 'いろは食堂')
+        self.assertEqual(ok.data['name_zh'], '伊吕波食堂')
 
         bad = self.client.patch('/api/organization/', {'logo_url': 'not a url'})
         self.assertEqual(bad.status_code, 400)

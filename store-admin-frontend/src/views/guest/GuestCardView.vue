@@ -8,6 +8,7 @@ import {
   fetchCard,
   fetchPrizes,
   fetchRedemptions,
+  guestCheckin,
   guestLogin,
   pulseCard,
   redeem,
@@ -26,10 +27,26 @@ import GuestOnboarding from '@/components/GuestOnboarding.vue'
 import AnimatedNumber from '@/components/AnimatedNumber.vue'
 import WheelOfFortune from '@/components/WheelOfFortune.vue'
 import SlideToConfirm from '@/components/SlideToConfirm.vue'
+import QrScanner from '@/components/QrScanner.vue'
+import type { AppLocale } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
 const { t, locale } = useI18n()
+
+// Bottom-nav tabs — the card is a small app, not one long scroll.
+type Tab = 'home' | 'visits' | 'settings'
+const tab = ref<Tab>('home')
+
+// Language, mirrored into localStorage like GuestShell does.
+function setLang(next: AppLocale) {
+  locale.value = next
+  try {
+    localStorage.setItem('pc_lang', next)
+  } catch {
+    /* ignore */
+  }
+}
 
 const ONBOARDED_KEY = 'pc_onboarded'
 function hasOnboarded() {
@@ -148,12 +165,47 @@ const canRedeemVoucher = computed(
   () => !!c.value.pointsPerVoucher && (card.value?.pointsBalance ?? 0) >= c.value.pointsPerVoucher,
 )
 const activeVouchers = computed(() => card.value?.vouchers.filter((v) => v.status === 'active') ?? [])
-const latestEntry = computed(() => card.value?.ledger[0] ?? null)
+
+// Show a short slice of the ledger by default; "もっと見る" reveals more.
+const LEDGER_STEP = 8
+const ledgerLimit = ref(LEDGER_STEP)
+const shownLedger = computed(() => card.value?.ledger.slice(0, ledgerLimit.value) ?? [])
+const hasMoreLedger = computed(() => (card.value?.ledger.length ?? 0) > ledgerLimit.value)
 
 const reasonLabel = (reason: string) => t(`guest.reason.${reason}`, reason)
 
 function newRequestId() {
   return `pc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+// --- self-service check-in (scan the table QR from inside the app) ----------
+const checkinScanning = ref(false)
+
+function extractStoreToken(payload: string): string {
+  try {
+    return new URL(payload).searchParams.get('t') || payload
+  } catch {
+    return payload
+  }
+}
+
+async function onCheckinScan(payload: string) {
+  checkinScanning.value = false
+  const token = extractStoreToken(payload).trim()
+  if (!token || busy.value) return
+  busy.value = true
+  try {
+    const r = await guestCheckin(token)
+    bonusMsg.value = r.alreadyCheckedIn ? t('guest.checkinAgain') : t('guest.checkinWelcome')
+    confettiKey.value += 1
+    window.setTimeout(() => (bonusMsg.value = ''), 3400)
+    await load()
+    tab.value = 'home'
+  } catch {
+    window.alert(t('guest.checkinFailed'))
+  } finally {
+    busy.value = false
+  }
 }
 
 async function load() {
@@ -400,121 +452,260 @@ onBeforeUnmount(() => {
     <template v-else-if="card">
       <div v-if="bonusMsg" :key="`t${confettiKey}`" class="live-toast">{{ bonusMsg }}</div>
 
-      <section class="hero">
-        <div v-if="orgLogo || brandName" class="g-brand">
-          <img v-if="orgLogo" :src="orgLogo" alt="" class="g-brand-logo" />
-          <span v-if="brandName" class="g-brand-name">{{ brandName }}</span>
-        </div>
+      <!-- ================= HOME ================= -->
+      <div v-show="tab === 'home'" class="tabpanel">
+        <section class="hero">
+          <div v-if="orgLogo || brandName" class="g-brand">
+            <img v-if="orgLogo" :src="orgLogo" alt="" class="g-brand-logo" />
+            <span v-if="brandName" class="g-brand-name">{{ brandName }}</span>
+          </div>
 
-        <div class="greeting">
-          <span class="hello">{{ card.name ? t('guest.helloName', { name: card.name }) : t('guest.hello') }}</span>
-          <span v-if="readonly" class="readonly-badge">{{ t('guest.readonlyBadge') }}</span>
-        </div>
+          <div class="greeting">
+            <span class="hello">{{ card.name ? t('guest.helloName', { name: card.name }) : t('guest.hello') }}</span>
+            <span v-if="readonly" class="readonly-badge">{{ t('guest.readonlyBadge') }}</span>
+          </div>
 
-        <div class="hero-main">
-          <div class="points-block">
-            <p class="g-eyebrow">{{ t('guest.pointsNow') }}</p>
-            <div class="points" :class="{ bump: showGain }">
-              <span class="points-value"><AnimatedNumber :value="card.pointsBalance" /></span>
-              <span class="points-unit">{{ t('guest.points') }}</span>
-              <span v-if="showGain" :key="`g${confettiKey}`" class="points-gain">+{{ pointsGain }}</span>
-              <div v-if="showGain" :key="`c${confettiKey}`" class="confetti" aria-hidden="true">
-                <span v-for="n in 16" :key="n" :style="{ '--i': n }" />
+          <div class="hero-main">
+            <div class="points-block">
+              <p class="g-eyebrow">{{ t('guest.pointsNow') }}</p>
+              <div class="points" :class="{ bump: showGain }">
+                <span class="points-value"><AnimatedNumber :value="card.pointsBalance" /></span>
+                <span class="points-unit">{{ t('guest.points') }}</span>
+                <span v-if="showGain" :key="`g${confettiKey}`" class="points-gain">+{{ pointsGain }}</span>
+                <div v-if="showGain" :key="`c${confettiKey}`" class="confetti" aria-hidden="true">
+                  <span v-for="n in 16" :key="n" :style="{ '--i': n }" />
+                </div>
               </div>
             </div>
+
+            <button
+              v-if="!readonly"
+              type="button"
+              class="g-btn-primary member-btn"
+              @click="memberSheet = true"
+            >
+              {{ t('guest.showMember') }}
+            </button>
           </div>
+
+          <p v-if="readonly" class="readonly-hint">{{ t('guest.loginReadonlyNote') }}</p>
+
+          <div v-if="card.stampTarget" class="stamps">
+            <div class="g-section-head">
+              <div><h2>{{ t('guest.stampsTitle') }}</h2></div>
+              <span class="g-count-pill">{{ stampFilled }} / {{ card.stampTarget }}</span>
+            </div>
+            <div class="stamp-row">
+              <span
+                v-for="(filled, i) in stampCells"
+                :key="i"
+                class="stamp"
+                :class="{ filled, pop: i === justFilledStamp }"
+              />
+            </div>
+          </div>
+        </section>
+
+        <button
+          v-if="showPinPrompt"
+          type="button"
+          class="card pin-nudge"
+          @click="tab = 'settings'"
+        >
+          🔒 {{ t('guest.setPinNudge') }}<span aria-hidden="true">›</span>
+        </button>
+
+        <!-- Coupons available (summary; tap a row for the redemption detail) -->
+        <section v-if="activeVouchers.length" class="coupon-summary">
+          <div class="coupon-summary-head">
+            <span>{{ t('guest.couponsAvailable') }}</span>
+            <strong>{{ activeVouchers.length }}</strong>
+          </div>
+          <button
+            v-for="v in activeVouchers"
+            :key="v.redemptionCode"
+            type="button"
+            class="coupon-row"
+            @click="voucherModal = v"
+          >
+            <span class="coupon-copy">
+              <strong>{{ v.label }}</strong>
+              <small>
+                {{ t('guest.voucherExpires', { date: shortDate(v.expiresAt) }) }}
+                <template v-if="v.minSpendYen"> · {{ t('guest.voucherMinSpend', { yen: v.minSpendYen.toLocaleString('ja-JP') }) }}</template>
+              </small>
+            </span>
+            <span class="coupon-code">{{ v.redemptionCode }}</span>
+          </button>
+          <p class="coupon-hint">{{ t('guest.voucherHint') }}</p>
+        </section>
+
+        <!-- 大抽選会 — the headline way to spend points -->
+        <div v-if="!readonly && c.hasPrizes" class="card lottery-hero">
+          <div class="lottery-hero-top">
+            <span class="lottery-hero-badge">{{ t('guest.lotteryBadge') }}</span>
+            <span class="lottery-hero-spark" aria-hidden="true">🎊</span>
+          </div>
+          <h2 class="lottery-hero-title">{{ t('guest.lotteryHeroTitle') }}</h2>
+          <p class="lottery-hero-sub">{{ t('guest.lotteryHeroSub') }}</p>
+          <div class="lottery-hero-actions">
+            <button
+              v-if="card.drawChances > 0"
+              type="button"
+              class="lottery-cta free"
+              :disabled="busy"
+              @click="openWheel('chance')"
+            >
+              🎁 {{ t('guest.drawFree') }}
+              <small>{{ t('guest.drawChancesLeft', { n: card.drawChances }) }}</small>
+            </button>
+            <button
+              v-if="canDrawWithPoints"
+              type="button"
+              class="lottery-cta"
+              :disabled="busy"
+              @click="openWheel('points')"
+            >
+              {{ t('guest.drawWithPoints') }}
+              <small>{{ c.pointsPerDraw }} {{ t('guest.points') }}</small>
+            </button>
+            <p
+              v-if="card.drawChances === 0 && !canDrawWithPoints && c.pointsPerDraw"
+              class="lottery-hero-locked"
+            >
+              {{ t('guest.drawNeedMore', { n: c.pointsPerDraw - card.pointsBalance }) }}
+            </p>
+          </div>
+        </div>
+
+        <!-- ポイント交換所 -->
+        <div v-if="!readonly && (redemptions.length || canRedeemVoucher)" class="card spend-card">
+          <h2>{{ t('guest.exchangeTitle') }}</h2>
+          <p class="spend-hint">{{ t('guest.exchangeHint') }}</p>
+
+          <ul v-if="redemptions.length" class="exchange-list">
+            <li
+              v-for="opt in redemptions"
+              :key="opt.id"
+              class="exchange-row"
+              :class="{ dim: opt.soldOut || !canAfford(opt.pointsCost) }"
+            >
+              <span class="exchange-name">{{ opt.name }}</span>
+              <span class="exchange-cost">{{ opt.pointsCost }}<small>{{ t('guest.pt') }}</small></span>
+              <button
+                type="button"
+                class="exchange-btn"
+                :disabled="busy || opt.soldOut || !canAfford(opt.pointsCost)"
+                @click="redeemOption(opt)"
+              >
+                {{ opt.soldOut ? t('guest.soldOut') : t('guest.exchange') }}
+              </button>
+            </li>
+          </ul>
 
           <button
-            v-if="!readonly"
+            v-else-if="canRedeemVoucher"
             type="button"
-            class="g-btn-primary member-btn"
-            @click="memberSheet = true"
+            class="spend-btn"
+            :disabled="busy"
+            @click="redeemVoucher"
           >
-            {{ t('guest.showMember') }}
+            <span class="spend-btn-main">{{ t('guest.redeemVoucher', { yen: c.voucherYenPerUnit }) }}</span>
+            <span class="spend-btn-sub">{{ c.pointsPerVoucher }} {{ t('guest.points') }}</span>
           </button>
         </div>
 
-        <p v-if="readonly" class="readonly-hint">{{ t('guest.loginReadonlyNote') }}</p>
-
-        <div v-if="card.stampTarget" class="stamps">
-          <div class="g-section-head">
-            <div><h2>{{ t('guest.stampsTitle') }}</h2></div>
-            <span class="g-count-pill">{{ stampFilled }} / {{ card.stampTarget }}</span>
-          </div>
-          <div class="stamp-row">
-            <span
-              v-for="(filled, i) in stampCells"
-              :key="i"
-              class="stamp"
-              :class="{ filled, pop: i === justFilledStamp }"
-            />
-          </div>
+        <!-- Milestones -->
+        <div v-if="card.milestones.length" class="card milestone-card">
+          <h2>{{ t('guest.milestonesTitle') }}</h2>
+          <ul class="milestones">
+            <li v-for="m in card.milestones" :key="m.threshold" :class="{ reached: m.reached }">
+              <span class="ms-dot" />
+              <span class="ms-label">{{ m.label }}</span>
+              <span class="ms-threshold">{{ m.threshold }} {{ t('guest.points') }}</span>
+            </li>
+          </ul>
+          <p class="ms-progress">{{ t('guest.lifetimePoints', { n: card.lifetimePoints.toLocaleString('ja-JP') }) }}</p>
         </div>
-      </section>
+      </div>
 
-      <!-- Coupons available (summary; tap a row for the redemption detail) -->
-      <section v-if="activeVouchers.length" class="coupon-summary">
-        <div class="coupon-summary-head">
-          <span>{{ t('guest.couponsAvailable') }}</span>
-          <strong>{{ activeVouchers.length }}</strong>
-        </div>
-        <button
-          v-for="v in activeVouchers"
-          :key="v.redemptionCode"
-          type="button"
-          class="coupon-row"
-          @click="voucherModal = v"
-        >
-          <span class="coupon-copy">
-            <strong>{{ v.label }}</strong>
-            <small>
-              {{ t('guest.voucherExpires', { date: shortDate(v.expiresAt) }) }}
-              <template v-if="v.minSpendYen"> · {{ t('guest.voucherMinSpend', { yen: v.minSpendYen.toLocaleString('ja-JP') }) }}</template>
-            </small>
-          </span>
-          <span class="coupon-code">{{ v.redemptionCode }}</span>
-        </button>
-        <p class="coupon-hint">{{ t('guest.voucherHint') }}</p>
-      </section>
-
-      <!-- Most recent activity -->
-      <section v-if="latestEntry" class="recent">
-        <div class="g-section-head compact">
-          <h2>{{ t('guest.recentActivity') }}</h2>
-          <a href="#pc-ledger" class="g-link">{{ t('guest.viewAll') }}</a>
-        </div>
-        <div class="recent-row">
-          <div class="recent-main">
-            <span class="recent-reason">{{ reasonLabel(latestEntry.reason) }}</span>
-            <span class="recent-date">{{ shortDateTime(latestEntry.createdAt) }}</span>
-          </div>
-          <span
-            v-if="latestEntry.delta"
-            class="recent-delta"
-            :class="{ minus: latestEntry.delta < 0 }"
-          >{{ latestEntry.delta > 0 ? '+' : '' }}{{ latestEntry.delta }}</span>
-        </div>
-      </section>
-
-      <!-- Set a recovery PIN -->
-      <div v-if="showPinPrompt" class="card pin-card">
-        <h2>{{ t('guest.setPinTitle') }}</h2>
-        <p class="pin-body">{{ t('guest.setPinBody') }}</p>
-        <input
-          v-model="pinValue"
-          class="pin-input"
-          type="text"
-          inputmode="numeric"
-          autocomplete="off"
-          maxlength="6"
-          :placeholder="t('guest.pinPlaceholder')"
-          @input="pinValue = pinValue.replace(/\D/g, '').slice(0, 6)"
-        />
-        <p v-if="pinError" class="pin-error">{{ pinError }}</p>
-        <div class="pin-actions">
-          <button type="button" class="pin-skip" @click="pinPromptDismissed = true">
-            {{ t('guest.later') }}
+      <!-- ================= 来店・記録 ================= -->
+      <div v-show="tab === 'visits'" class="tabpanel">
+        <section v-if="!readonly" class="card checkin-cta">
+          <h2>{{ t('guest.checkinTitle') }}</h2>
+          <p class="checkin-sub">{{ t('guest.checkinSub') }}</p>
+          <button type="button" class="g-btn-primary" :disabled="busy" @click="checkinScanning = true">
+            📷 {{ t('guest.checkinScan') }}
           </button>
+        </section>
+
+        <div class="card ledger-card">
+          <h2>{{ t('guest.history') }}</h2>
+          <ul v-if="card.ledger.length" class="ledger">
+            <li v-for="row in shownLedger" :key="row.id">
+              <div class="ledger-main">
+                <span class="ledger-reason">{{ reasonLabel(row.reason) }}</span>
+                <span class="ledger-date">{{ shortDateTime(row.createdAt) }}</span>
+              </div>
+              <span v-if="row.delta" class="ledger-delta" :class="{ minus: row.delta < 0 }">
+                {{ row.delta > 0 ? '+' : '' }}{{ row.delta }}
+              </span>
+            </li>
+          </ul>
+          <p v-else class="empty">{{ t('guest.historyEmpty') }}</p>
+          <button
+            v-if="hasMoreLedger"
+            type="button"
+            class="ledger-more"
+            @click="ledgerLimit += 12"
+          >
+            {{ t('guest.showMore') }}
+          </button>
+        </div>
+
+        <div v-if="c.pointsPer1000yen" class="card info-card">
+          <h2>{{ c.name || t('guest.campaignFallback') }}</h2>
+          <ul>
+            <li>{{ t('guest.rateEarn', { yen: 1000, pts: c.pointsPer1000yen }) }}</li>
+            <li v-if="c.pointsPerVoucher && c.voucherYenPerUnit">
+              {{ t('guest.rateVoucher', { pts: c.pointsPerVoucher, yen: c.voucherYenPerUnit }) }}
+            </li>
+            <li v-if="c.pointsPerDraw && c.hasPrizes">{{ t('guest.rateDraw', { pts: c.pointsPerDraw }) }}</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- ================= 設定 ================= -->
+      <div v-show="tab === 'settings'" class="tabpanel">
+        <div class="card settings-card">
+          <h2>{{ t('guest.accountSection') }}</h2>
+          <div class="settings-row">
+            <span>{{ t('guest.name') }}</span><strong>{{ card.name || '—' }}</strong>
+          </div>
+        </div>
+
+        <div class="card settings-card">
+          <h2>{{ t('guest.langSection') }}</h2>
+          <div class="lang-choice">
+            <button type="button" :class="{ on: locale === 'ja' }" @click="setLang('ja')">日本語</button>
+            <button type="button" :class="{ on: locale === 'zh' }" @click="setLang('zh')">中文</button>
+          </div>
+        </div>
+
+        <div v-if="!readonly" class="card pin-card">
+          <h2>{{ card.hasPin ? t('guest.pinChangeTitle') : t('guest.setPinTitle') }}</h2>
+          <p class="pin-body">{{ t('guest.setPinBody') }}</p>
+          <input
+            v-model="pinValue"
+            class="pin-input"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
+            maxlength="6"
+            :placeholder="t('guest.pinPlaceholder')"
+            @input="pinValue = pinValue.replace(/\D/g, '').slice(0, 6)"
+          />
+          <p v-if="pinError" class="pin-error">{{ pinError }}</p>
           <button
             type="button"
             class="pin-save"
@@ -524,128 +715,28 @@ onBeforeUnmount(() => {
             {{ pinSaving ? t('guest.submitting') : t('guest.setPinCta') }}
           </button>
         </div>
-      </div>
 
-      <!-- 大抽選会 — the headline way to spend points -->
-      <div v-if="!readonly && c.hasPrizes" class="card lottery-hero">
-        <div class="lottery-hero-top">
-          <span class="lottery-hero-badge">{{ t('guest.lotteryBadge') }}</span>
-          <span class="lottery-hero-spark" aria-hidden="true">🎊</span>
-        </div>
-        <h2 class="lottery-hero-title">{{ t('guest.lotteryHeroTitle') }}</h2>
-        <p class="lottery-hero-sub">{{ t('guest.lotteryHeroSub') }}</p>
-        <div class="lottery-hero-actions">
-          <button
-            v-if="card.drawChances > 0"
-            type="button"
-            class="lottery-cta free"
-            :disabled="busy"
-            @click="openWheel('chance')"
-          >
-            🎁 {{ t('guest.drawFree') }}
-            <small>{{ t('guest.drawChancesLeft', { n: card.drawChances }) }}</small>
-          </button>
-          <button
-            v-if="canDrawWithPoints"
-            type="button"
-            class="lottery-cta"
-            :disabled="busy"
-            @click="openWheel('points')"
-          >
-            {{ t('guest.drawWithPoints') }}
-            <small>{{ c.pointsPerDraw }} {{ t('guest.points') }}</small>
-          </button>
-          <p
-            v-if="card.drawChances === 0 && !canDrawWithPoints && c.pointsPerDraw"
-            class="lottery-hero-locked"
-          >
-            {{ t('guest.drawNeedMore', { n: c.pointsPerDraw - card.pointsBalance }) }}
-          </p>
+        <div class="card settings-card">
+          <button type="button" class="settings-link" @click="openOnboarding">{{ t('guest.howToUse') }} ›</button>
+          <p class="settings-note">{{ t('guest.saveHint') }}</p>
+          <p class="settings-note">{{ t('guest.migrateHint') }}</p>
         </div>
       </div>
 
-      <!-- ポイント交換所 -->
-      <div v-if="!readonly && (redemptions.length || canRedeemVoucher)" class="card spend-card">
-        <h2>{{ t('guest.exchangeTitle') }}</h2>
-        <p class="spend-hint">{{ t('guest.exchangeHint') }}</p>
-
-        <ul v-if="redemptions.length" class="exchange-list">
-          <li
-            v-for="opt in redemptions"
-            :key="opt.id"
-            class="exchange-row"
-            :class="{ dim: opt.soldOut || !canAfford(opt.pointsCost) }"
-          >
-            <span class="exchange-name">{{ opt.name }}</span>
-            <span class="exchange-cost">{{ opt.pointsCost }}<small>{{ t('guest.pt') }}</small></span>
-            <button
-              type="button"
-              class="exchange-btn"
-              :disabled="busy || opt.soldOut || !canAfford(opt.pointsCost)"
-              @click="redeemOption(opt)"
-            >
-              {{ opt.soldOut ? t('guest.soldOut') : t('guest.exchange') }}
-            </button>
-          </li>
-        </ul>
-
-        <button
-          v-else-if="canRedeemVoucher"
-          type="button"
-          class="spend-btn"
-          :disabled="busy"
-          @click="redeemVoucher"
-        >
-          <span class="spend-btn-main">{{ t('guest.redeemVoucher', { yen: c.voucherYenPerUnit }) }}</span>
-          <span class="spend-btn-sub">{{ c.pointsPerVoucher }} {{ t('guest.points') }}</span>
+      <nav class="g-bottomnav">
+        <button type="button" :class="{ on: tab === 'home' }" @click="tab = 'home'">
+          <span class="bn-icon" aria-hidden="true">🏠</span>{{ t('guest.tabHome') }}
         </button>
-      </div>
-
-      <!-- Milestones -->
-      <div v-if="card.milestones.length" class="card milestone-card">
-        <h2>{{ t('guest.milestonesTitle') }}</h2>
-        <ul class="milestones">
-          <li v-for="m in card.milestones" :key="m.threshold" :class="{ reached: m.reached }">
-            <span class="ms-dot" />
-            <span class="ms-label">{{ m.label }}</span>
-            <span class="ms-threshold">{{ m.threshold }} {{ t('guest.points') }}</span>
-          </li>
-        </ul>
-        <p class="ms-progress">{{ t('guest.lifetimePoints', { n: card.lifetimePoints.toLocaleString('ja-JP') }) }}</p>
-      </div>
-
-      <div v-if="c.pointsPer1000yen" class="card info-card">
-        <h2>{{ c.name || t('guest.campaignFallback') }}</h2>
-        <ul>
-          <li>{{ t('guest.rateEarn', { yen: 1000, pts: c.pointsPer1000yen }) }}</li>
-          <li v-if="c.pointsPerVoucher && c.voucherYenPerUnit">
-            {{ t('guest.rateVoucher', { pts: c.pointsPerVoucher, yen: c.voucherYenPerUnit }) }}
-          </li>
-          <li v-if="c.pointsPerDraw && c.hasPrizes">{{ t('guest.rateDraw', { pts: c.pointsPerDraw }) }}</li>
-        </ul>
-      </div>
-
-      <div id="pc-ledger" class="card ledger-card">
-        <h2>{{ t('guest.history') }}</h2>
-        <ul v-if="card.ledger.length" class="ledger">
-          <li v-for="row in card.ledger" :key="row.id">
-            <div class="ledger-main">
-              <span class="ledger-reason">{{ reasonLabel(row.reason) }}</span>
-              <span class="ledger-date">{{ shortDateTime(row.createdAt) }}</span>
-            </div>
-            <span v-if="row.delta" class="ledger-delta" :class="{ minus: row.delta < 0 }">
-              {{ row.delta > 0 ? '+' : '' }}{{ row.delta }}
-            </span>
-          </li>
-        </ul>
-        <p v-else class="empty">{{ t('guest.historyEmpty') }}</p>
-      </div>
-
-      <p class="footnote">
-        {{ t('guest.saveHint') }}
-        <template v-if="!readonly"> · <button type="button" class="link-btn" @click="openOnboarding">{{ t('guest.howToUse') }}</button></template>
-      </p>
+        <button type="button" :class="{ on: tab === 'visits' }" @click="tab = 'visits'">
+          <span class="bn-icon" aria-hidden="true">📍</span>{{ t('guest.tabVisits') }}
+        </button>
+        <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">
+          <span class="bn-icon" aria-hidden="true">⚙️</span>{{ t('guest.tabSettings') }}
+        </button>
+      </nav>
     </template>
+
+    <QrScanner v-if="checkinScanning" @decode="onCheckinScan" @close="checkinScanning = false" />
 
     <GuestOnboarding v-if="showOnboarding && card" :card="card" @close="closeOnboarding" />
 
@@ -1068,49 +1159,163 @@ h2 {
   line-height: 1.5;
 }
 
-/* ---- recent activity -------------------------------------------------------- */
+/* ---- tab panels + bottom nav ---------------------------------------------- */
 
-.recent {
-  padding: 24px 0;
-  border-bottom: 1px solid var(--guest-rule);
+.tabpanel {
+  display: flex;
+  flex-direction: column;
+  /* clear the fixed bottom nav */
+  padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
 }
 
-.g-section-head.compact {
+.tabpanel > .card:last-child,
+.tabpanel > .hero:last-child {
+  border-bottom: none;
+}
+
+.g-bottomnav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  max-width: 460px;
+  margin: 0 auto;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--guest-rule);
+}
+
+.g-bottomnav button {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   align-items: center;
+  gap: 3px;
+  padding: 9px 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--guest-muted);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
-.recent-row {
+.g-bottomnav button.on {
+  color: var(--guest-green-dark);
+}
+
+.bn-icon {
+  font-size: 19px;
+  line-height: 1;
+  filter: grayscale(0.4);
+}
+
+.g-bottomnav button.on .bn-icon {
+  filter: none;
+}
+
+/* ---- PIN nudge banner (home) -------------------------------------------------- */
+
+.pin-nudge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 4px;
+  border: none;
+  border-bottom: 1px solid var(--guest-rule);
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--guest-ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pin-nudge span {
+  margin-left: auto;
+  color: var(--guest-muted);
+  font-size: 16px;
+}
+
+/* ---- check-in call-to-action (visits) --------------------------------------- */
+
+.checkin-cta h2 {
+  margin-bottom: 4px;
+}
+
+.checkin-sub {
+  font-size: 12px;
+  color: var(--guest-muted);
+  line-height: 1.55;
+  margin: 0 0 14px;
+}
+
+/* ---- settings ------------------------------------------------------------- */
+
+.settings-card h2 {
+  margin-bottom: 10px;
+}
+
+.settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 14px;
-}
-
-.recent-main {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.recent-reason {
   font-size: 13px;
-  color: var(--guest-ink);
-}
-
-.recent-date {
-  font-size: 11px;
   color: var(--guest-muted);
 }
 
-.recent-delta {
-  font-size: 15px;
+.settings-row strong {
   font-weight: 700;
+  color: var(--guest-ink);
+}
+
+.lang-choice {
+  display: flex;
+  gap: 8px;
+}
+
+.lang-choice button {
+  flex: 1;
+  min-height: 44px;
+  border: 1px solid var(--guest-field-border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--guest-muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lang-choice button.on {
+  border-color: var(--guest-green);
+  background: var(--guest-mint);
   color: var(--guest-green-dark);
 }
 
-.recent-delta.minus {
-  color: var(--guest-danger);
+.settings-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--guest-green-dark);
+  cursor: pointer;
+}
+
+.settings-note {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--guest-muted);
+  line-height: 1.55;
 }
 
 /* ---- set-PIN prompt ---------------------------------------------------------- */
@@ -1158,26 +1363,8 @@ h2 {
   margin: 0;
 }
 
-.pin-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.pin-skip {
-  flex: 0 0 auto;
-  padding: 0 16px;
-  height: 46px;
-  border: 1px solid var(--guest-rule);
-  border-radius: 12px;
-  background: #fff;
-  color: var(--guest-muted);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
 .pin-save {
-  flex: 1;
+  width: 100%;
   height: 46px;
   border: none;
   border-radius: 12px;
@@ -1553,21 +1740,17 @@ h2 {
   margin-top: 16px;
 }
 
-.footnote {
-  text-align: center;
-  font-size: 11.5px;
-  color: var(--guest-muted);
-  padding: 18px 0 0;
-}
-
-.link-btn {
-  border: none;
-  background: transparent;
+.ledger-more {
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px;
+  border: 1px solid var(--guest-field-border);
+  border-radius: 10px;
+  background: #fff;
   color: var(--guest-green-dark);
   font: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 700;
-  padding: 0;
   cursor: pointer;
 }
 

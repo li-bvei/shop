@@ -6,11 +6,17 @@ import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { House } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { getAccessToken } from '@/api/http'
 
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
+
+// Reached /login while another account is already signed in somewhere — a
+// fresh login here becomes this tab's own session and leaves the other
+// tabs alone (see api/http.ts). Surface that so it's not a surprise.
+const anotherSessionExists = !!getAccessToken()
 
 const formRef = ref<FormInstance>()
 const submitting = ref(false)
@@ -59,6 +65,8 @@ async function handleSubmit() {
           {{ t('login.submit') }}
         </el-button>
       </el-form>
+
+      <p v-if="anotherSessionExists" class="multi-hint">{{ t('login.multiAccountHint') }}</p>
     </div>
   </div>
 </template>
@@ -125,5 +133,12 @@ async function handleSubmit() {
   height: 42px;
   font-size: 14px;
   margin-top: 8px;
+}
+
+.multi-hint {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin: 16px 0 0;
 }
 </style>

@@ -197,7 +197,11 @@ router.beforeEach((to) => {
   if (!to.meta.public && !auth.isLoggedIn) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
-  if (to.name === 'login' && auth.isLoggedIn) {
+  // `?add=1` = deliberately opening the login form in a new tab to sign in
+  // as a second account (admin + a branch login side by side). The token is
+  // read sessionStorage-first (see api/http.ts), so that tab's login won't
+  // disturb the others.
+  if (to.name === 'login' && auth.isLoggedIn && !to.query.add) {
     return homeRoute()
   }
   // Platform super admin lives only in the /platform console — the

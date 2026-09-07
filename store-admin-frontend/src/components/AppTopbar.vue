@@ -26,9 +26,14 @@ const branchPillLabel = computed(() => {
   return branchDisplayName(branchStore.list.find((b) => b.id === auth.branchId), locale.value, auth.branchId ?? '')
 })
 
-function handleLogout() {
-  auth.logout()
-  router.push({ name: 'login' })
+function onUserCommand(cmd: string) {
+  if (cmd === 'logout') {
+    auth.logout()
+    router.push({ name: 'login' })
+  } else if (cmd === 'add-account') {
+    // A new tab, its own session — the current one stays signed in.
+    window.open(`${import.meta.env.BASE_URL}login?add=1`, '_blank')
+  }
 }
 </script>
 
@@ -44,14 +49,15 @@ function handleLogout() {
       <el-tag round class="branch-pill">{{ branchPillLabel }}</el-tag>
       <LangSwitch />
       <ThemeSwitch />
-      <el-dropdown trigger="click" @command="handleLogout">
+      <el-dropdown trigger="click" @command="onUserCommand">
         <span class="avatar-trigger">
           <el-avatar :size="30" class="avatar">{{ auth.displayName }}</el-avatar>
           <el-icon class="caret"><ArrowDown /></el-icon>
         </span>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item command="logout">{{ $t('common.logout') }}</el-dropdown-item>
+            <el-dropdown-item command="add-account">{{ $t('topbar.openAnotherAccount') }}</el-dropdown-item>
+            <el-dropdown-item command="logout" divided>{{ $t('common.logout') }}</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>

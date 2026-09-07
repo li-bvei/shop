@@ -7,20 +7,39 @@ export const API_BASE = configuredApiBase || (import.meta.env.DEV ? 'http://loca
 const ACCESS_KEY = 'sa_access_token'
 const REFRESH_KEY = 'sa_refresh_token'
 
+// Session tokens are read sessionStorage-first, localStorage-second, so two
+// tabs can hold two different accounts at once (e.g. admin + a branch login).
+// A plain new tab has no sessionStorage, so it inherits the localStorage
+// session — the normal single-account flow ("log in once, works everywhere")
+// is unchanged. A tab only gets its own isolated session by logging in there
+// (setTokens) or by being duplicated from one that had one.
+function tabHasOwnSession() {
+  return !!sessionStorage.getItem(ACCESS_KEY)
+}
+
 export function getAccessToken() {
-  return localStorage.getItem(ACCESS_KEY)
+  return sessionStorage.getItem(ACCESS_KEY) ?? localStorage.getItem(ACCESS_KEY)
 }
 
 export function getRefreshToken() {
-  return localStorage.getItem(REFRESH_KEY)
+  return sessionStorage.getItem(REFRESH_KEY) ?? localStorage.getItem(REFRESH_KEY)
 }
 
 export function setTokens(access: string, refresh: string) {
+  // this tab: its own session; also become the default for future new tabs
+  sessionStorage.setItem(ACCESS_KEY, access)
+  sessionStorage.setItem(REFRESH_KEY, refresh)
   localStorage.setItem(ACCESS_KEY, access)
   localStorage.setItem(REFRESH_KEY, refresh)
 }
 
+function storeRefreshedAccess(access: string) {
+  ;(tabHasOwnSession() ? sessionStorage : localStorage).setItem(ACCESS_KEY, access)
+}
+
 export function clearTokens() {
+  sessionStorage.removeItem(ACCESS_KEY)
+  sessionStorage.removeItem(REFRESH_KEY)
   localStorage.removeItem(ACCESS_KEY)
   localStorage.removeItem(REFRESH_KEY)
 }
@@ -66,7 +85,7 @@ async function tryRefresh(): Promise<boolean> {
       .then(async (res) => {
         if (!res.ok) return false
         const data = await res.json()
-        localStorage.setItem(ACCESS_KEY, data.access)
+        storeRefreshedAccess(data.access)
         return true
       })
       .catch(() => false)

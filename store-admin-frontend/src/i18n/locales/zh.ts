@@ -52,6 +52,7 @@ export default {
     greeting: '早上好，今天的经营状况',
     allBranches: '全{count}店',
     toggleTheme: '切换主题',
+    openAnotherAccount: '打开另一个账号（新标签页）',
   },
   featureUnavailable: {
     title: '该功能当前不可用',
@@ -114,6 +115,7 @@ export default {
     validateAccount: '请输入账号',
     validatePassword: '请输入密码',
     invalidCredentials: '账号或密码错误，请重试',
+    multiAccountHint: '在这里登录只会切换当前标签页，其他标签页里已登录的管理员/分店账号不受影响。',
   },
   dashboard: {
     todayRevenue: '今日营业额',

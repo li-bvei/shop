@@ -52,6 +52,7 @@ export default {
     greeting: 'おはようございます、本日の経営状況',
     allBranches: '全{count}店舗',
     toggleTheme: 'テーマを切り替え',
+    openAnotherAccount: '別のアカウントを開く（新しいタブ）',
   },
   featureUnavailable: {
     title: 'この機能は現在ご利用いただけません',
@@ -114,6 +115,7 @@ export default {
     validateAccount: 'アカウントを入力してください',
     validatePassword: 'パスワードを入力してください',
     invalidCredentials: 'アカウントまたはパスワードが正しくありません',
+    multiAccountHint: 'ここでログインするとこのタブだけ切り替わります。他のタブの管理者/店舗アカウントはそのまま使えます。',
   },
   dashboard: {
     todayRevenue: '本日の売上',

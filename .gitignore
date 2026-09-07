@@ -20,6 +20,7 @@ store-admin-backend/dailyreports/management/commands/import_data/*
 # Claude Code local tool/session state (not project config)
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+store-admin-frontend/.claude/
 
 # Python
 __pycache__/

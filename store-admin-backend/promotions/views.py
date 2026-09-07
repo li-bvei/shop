@@ -82,7 +82,7 @@ def _resolve_guest_customer(request):
         customer = (
             Customer.objects
             .filter(card_token=token, status=Customer.Status.ACTIVE)
-            .select_related('organization', 'registered_campaign')
+            .select_related('organization', 'registered_campaign', 'registered_campaign__branch')
             .first()
         )
         if customer:
@@ -118,11 +118,17 @@ def _card_payload(customer, *, include_token=False):
     vouchers = customer.vouchers.filter(status=Voucher.Status.ACTIVE).order_by('expires_at')[:50]
     milestones = _milestone_progress(customer, campaign) if campaign_active else []
     org = customer.organization
+    # The branch the customer actually registered at — shown alongside the
+    # chain name so the card reads as "○○グループ 心斎橋店", not just the
+    # (often generic) group name the customer has no memory of.
+    branch = campaign.branch if campaign else None
     payload = {
         'name': customer.name,
         'org_name_zh': org.name_zh,
         'org_name_ja': org.name_ja,
         'org_logo_url': org.logo_url,
+        'branch_name_zh': branch.name_zh if branch else '',
+        'branch_name_ja': branch.name_ja if branch else '',
         'points_balance': customer.points_balance,
         'lifetime_points': customer.lifetime_points_earned,
         'stamp_count': customer.stamp_count,
@@ -209,6 +215,8 @@ class GuestStoreContextView(APIView):
             'org_name_zh': org.name_zh,
             'org_name_ja': org.name_ja,
             'org_logo_url': org.logo_url,
+            'branch_name_zh': campaign.branch.name_zh,
+            'branch_name_ja': campaign.branch.name_ja,
         })
 
 
@@ -223,6 +231,8 @@ def _recovery_options(customers):
                 'org_name_zh': c.organization.name_zh,
                 'org_name_ja': c.organization.name_ja,
                 'logo_url': c.organization.logo_url,
+                'branch_name_zh': c.registered_campaign.branch.name_zh if c.registered_campaign else '',
+                'branch_name_ja': c.registered_campaign.branch.name_ja if c.registered_campaign else '',
             }
             for c in customers
         ],
@@ -255,7 +265,7 @@ class GuestLoginView(APIView):
         qs = (
             Customer.objects
             .filter(phone=phone, birthday_md=birthday_md, status=Customer.Status.ACTIVE)
-            .select_related('registered_campaign', 'organization')
+            .select_related('registered_campaign', 'registered_campaign__branch', 'organization')
         )
         if org:
             qs = qs.filter(organization_id=org)

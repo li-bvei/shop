@@ -102,6 +102,10 @@ export interface GuestCard {
   orgNameZh: string
   orgNameJa: string
   orgLogoUrl: string
+  // The branch the customer registered at — the recognisable "which shop"
+  // hook the chain name alone doesn't give them.
+  branchNameZh: string
+  branchNameJa: string
   pointsBalance: number
   lifetimePoints: number
   stampCount: number
@@ -154,6 +158,8 @@ interface CardDto {
   org_name_zh?: string
   org_name_ja?: string
   org_logo_url?: string
+  branch_name_zh?: string
+  branch_name_ja?: string
   points_balance: number
   lifetime_points: number
   stamp_count: number
@@ -200,6 +206,8 @@ function fromCardDto(dto: CardDto): GuestCard {
     orgNameZh: dto.org_name_zh ?? '',
     orgNameJa: dto.org_name_ja ?? '',
     orgLogoUrl: dto.org_logo_url ?? '',
+    branchNameZh: dto.branch_name_zh ?? '',
+    branchNameJa: dto.branch_name_ja ?? '',
     pointsBalance: dto.points_balance,
     lifetimePoints: dto.lifetime_points ?? 0,
     stampCount: dto.stamp_count,
@@ -325,16 +333,24 @@ export interface StoreContext {
   orgNameZh: string
   orgNameJa: string
   orgLogoUrl: string
+  branchNameZh: string
+  branchNameJa: string
 }
 
 export async function fetchStoreContext(storeToken: string): Promise<StoreContext> {
-  const d = await guestRequest<{ org_name_zh?: string; org_name_ja?: string; org_logo_url?: string }>(
-    `/guest/store-context/?t=${encodeURIComponent(storeToken)}`,
-  )
+  const d = await guestRequest<{
+    org_name_zh?: string
+    org_name_ja?: string
+    org_logo_url?: string
+    branch_name_zh?: string
+    branch_name_ja?: string
+  }>(`/guest/store-context/?t=${encodeURIComponent(storeToken)}`)
   return {
     orgNameZh: d.org_name_zh ?? '',
     orgNameJa: d.org_name_ja ?? '',
     orgLogoUrl: d.org_logo_url ?? '',
+    branchNameZh: d.branch_name_zh ?? '',
+    branchNameJa: d.branch_name_ja ?? '',
   }
 }
 
@@ -373,11 +389,20 @@ export interface RecoveryOption {
   orgNameZh: string
   orgNameJa: string
   logoUrl: string
+  branchNameZh: string
+  branchNameJa: string
 }
 
 interface MultipleDto {
   multiple: true
-  options: Array<{ org: string; org_name_zh: string; org_name_ja: string; logo_url: string }>
+  options: Array<{
+    org: string
+    org_name_zh: string
+    org_name_ja: string
+    logo_url: string
+    branch_name_zh?: string
+    branch_name_ja?: string
+  }>
 }
 
 function toOptions(d: MultipleDto): RecoveryOption[] {
@@ -386,6 +411,8 @@ function toOptions(d: MultipleDto): RecoveryOption[] {
     orgNameZh: o.org_name_zh,
     orgNameJa: o.org_name_ja,
     logoUrl: o.logo_url,
+    branchNameZh: o.branch_name_zh ?? '',
+    branchNameJa: o.branch_name_ja ?? '',
   }))
 }
 

@@ -259,7 +259,7 @@ def recover_card(*, phone, pin, birthday_md, org=None, ip=None) -> Customer:
         Customer.objects
         .filter(phone=phone, birthday_md=birthday_md, status=Customer.Status.ACTIVE)
         .exclude(pin_hash='')
-        .select_related('organization')
+        .select_related('organization', 'registered_campaign', 'registered_campaign__branch')
     )
     if org:
         qs = qs.filter(organization_id=org)

@@ -354,15 +354,30 @@ class GuestApiTests(ApiTestCase):
         self.assertIn('birthday', str(resp.data))
         self.assertFalse(Customer.objects.exists())
 
-    def test_store_context_returns_the_chain_brand(self):
+    def test_store_context_returns_the_chain_brand_and_branch(self):
         self.org.logo_url = 'https://cdn.example.com/logo.png'
         self.org.save(update_fields=['logo_url'])
         resp = self.client.get('/api/guest/store-context/', {'t': self.store_token})
         self.assertEqual(resp.status_code, 200, resp.content)
         self.assertEqual(resp.data['org_name_ja'], self.org.name_ja)
         self.assertEqual(resp.data['org_logo_url'], 'https://cdn.example.com/logo.png')
+        # the branch the QR belongs to — the customer's "which shop" hook
+        self.assertEqual(resp.data['branch_name_ja'], self.branch_a.name_ja)
+        self.assertEqual(resp.data['branch_name_zh'], self.branch_a.name_zh)
         # never leaks the campaign / token internals
         self.assertNotIn('card_token', resp.data)
+
+    def test_card_payload_names_the_registered_branch(self):
+        from rest_framework.test import APIClient
+
+        reg = self.client.post('/api/guest/register/', {
+            'store_token': self.store_token, 'phone': '09012345678',
+            'birthday_md': '03-07', 'consent': True,
+        }, format='json')
+        card = APIClient().get('/api/guest/card/', HTTP_X_GUEST_TOKEN=reg.data['card_token'])
+        self.assertEqual(card.status_code, 200)
+        self.assertEqual(card.data['org_name_ja'], self.org.name_ja)
+        self.assertEqual(card.data['branch_name_ja'], self.branch_a.name_ja)
 
     def test_store_context_rejects_a_bad_token(self):
         resp = self.client.get('/api/guest/store-context/', {'t': 'not-a-real-token'})

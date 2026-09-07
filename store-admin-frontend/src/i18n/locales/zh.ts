@@ -969,6 +969,11 @@ export default {
   guest: {
     registerTitle: '留个电话开始集章',
     registerLead: '留下手机号即可开通积分卡。每次结账时店员帮你打卡、按消费额攒积分。',
+    landingLead: '打开你的积分卡。',
+    landingNew: '第一次使用',
+    landingNewSub: '创建积分卡（约30秒）',
+    landingHave: '已有积分卡',
+    landingHaveSub: '用手机号登录',
     registerSubmit: '开卡',
     submitting: '处理中…',
     phone: '手机号',

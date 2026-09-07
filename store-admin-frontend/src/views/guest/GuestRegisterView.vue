@@ -20,6 +20,16 @@ const storeToken = computed(() => (route.query.t as string) || '')
 const submitting = ref(false)
 const errorMsg = ref('')
 
+// First screen after scanning the store QR gives a new customer and a
+// returning one equal footing: two choices, not a sign-up form with a
+// buried "already have a card?" link. `?new` (or no store token) skips
+// straight to the form.
+const stage = ref<'choose' | 'form'>(route.query.new !== undefined ? 'form' : 'choose')
+
+function goLogin() {
+  router.push({ name: 'guest-login', query: storeToken.value ? { t: storeToken.value } : {} })
+}
+
 // The chain's brand, resolved from the store-QR token — shown before the
 // customer fills anything in so they know whose card they're opening.
 const store = ref<StoreContext | null>(null)
@@ -135,12 +145,26 @@ async function submit() {
     <section class="g-intro">
       <p class="g-eyebrow">{{ t('guest.eyebrowRegister') }}</p>
       <h1 class="g-title">{{ t('guest.registerTitle') }}</h1>
-      <p class="g-lead">{{ t('guest.registerLead') }}</p>
+      <p class="g-lead">{{ stage === 'choose' ? t('guest.landingLead') : t('guest.registerLead') }}</p>
     </section>
 
     <div v-if="!storeToken" class="g-notice is-error">{{ t('guest.errStoreToken') }}</div>
 
+    <!-- Equal-weight choice: new customer / returning customer -->
+    <div v-else-if="stage === 'choose'" class="choice">
+      <button type="button" class="choice-card" @click="stage = 'form'">
+        <span class="choice-title">{{ t('guest.landingNew') }}</span>
+        <span class="choice-sub">{{ t('guest.landingNewSub') }}</span>
+      </button>
+      <button type="button" class="choice-card" @click="goLogin">
+        <span class="choice-title">{{ t('guest.landingHave') }}</span>
+        <span class="choice-sub">{{ t('guest.landingHaveSub') }}</span>
+      </button>
+    </div>
+
     <form v-else class="g-form" @submit.prevent="submit">
+      <button type="button" class="g-back" @click="stage = 'choose'">← {{ t('common.back') }}</button>
+
       <label class="g-field">
         <span class="g-field-label">{{ t('guest.phone') }} <em class="g-req">{{ t('guest.required') }}</em></span>
         <input
@@ -202,7 +226,7 @@ async function submit() {
       <button type="submit" class="g-btn-primary" :disabled="!canSubmit">
         {{ submitting ? t('guest.submitting') : t('guest.registerSubmit') }}
       </button>
-      <router-link :to="{ name: 'guest-login' }" class="g-link">{{ t('guest.haveCard') }}</router-link>
+      <button type="button" class="g-link" @click="goLogin">{{ t('guest.haveCard') }}</button>
     </form>
   </div>
 </template>
@@ -216,5 +240,54 @@ async function submit() {
    the tag chips. */
 .g-field-label {
   flex-wrap: wrap;
+}
+
+/* ---- new / returning choice (equal weight) ------------------------------- */
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.choice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 72px;
+  padding: 16px 18px;
+  border: 1px solid var(--guest-field-border);
+  border-radius: 14px;
+  background: #fff;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.choice-card:active {
+  background: var(--guest-soft);
+}
+
+.choice-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--guest-ink);
+}
+
+.choice-sub {
+  font-size: 12px;
+  color: var(--guest-muted);
+}
+
+.g-back {
+  align-self: flex-start;
+  margin-bottom: 4px;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--guest-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
 }
 </style>

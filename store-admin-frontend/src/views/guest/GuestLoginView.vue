@@ -3,7 +3,7 @@ import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ApiError } from '@/api/http'
-import { guestLogin, recoverCard, type RecoveryOption } from '@/api/guest'
+import { guestCheckin, guestLogin, recoverCard, type RecoveryOption } from '@/api/guest'
 
 const route = useRoute()
 const router = useRouter()
@@ -11,6 +11,23 @@ const { t, locale } = useI18n()
 
 // Landed here because the phone typed on the register form already had a card.
 const cameFromExisting = computed(() => route.query.existing === '1')
+
+// Carried through from a scanned store QR — after a successful recovery we
+// record that scan as a check-in so the visit still counts.
+const storeToken = computed(() => (route.query.t as string) || '')
+
+async function goToCardAfterRecovery() {
+  if (storeToken.value) {
+    try {
+      const c = await guestCheckin(storeToken.value)
+      router.replace({ name: 'guest-card', query: { visited: c.alreadyCheckedIn ? 'again' : '1' } })
+      return
+    } catch {
+      /* fall through to a plain card open */
+    }
+  }
+  router.replace({ name: 'guest-card' })
+}
 
 // 'pin'  — phone + birthday + 6-digit PIN, regain full use on a new device.
 // 'view' — phone + birthday, read-only snapshot (no spending).
@@ -58,7 +75,7 @@ async function run(org?: string) {
         pickerOptions.value = r.options
         return
       }
-      router.replace({ name: 'guest-card' })
+      await goToCardAfterRecovery()
     } else {
       const r = await guestLogin(phone, birthdayMd.value, org)
       if ('options' in r) {

@@ -965,6 +965,11 @@ export default {
   guest: {
     registerTitle: '電話番号でスタンプを貯める',
     registerLead: '電話番号のご登録でポイントカードが使えます。お会計のたびにスタッフがチェックイン、金額に応じてポイントが貯まります。',
+    landingLead: 'ポイントカードを開きます。',
+    landingNew: 'はじめての方',
+    landingNewSub: 'ポイントカードを作成（約30秒）',
+    landingHave: 'カードをお持ちの方',
+    landingHaveSub: '電話番号でログイン',
     registerSubmit: 'カードを発行',
     submitting: '処理中…',
     phone: '電話番号',

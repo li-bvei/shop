@@ -385,6 +385,32 @@ class GuestApiTests(ApiTestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertIn('store-token-invalid', str(resp.data))
 
+    def test_self_service_checkin_records_visit_and_is_idempotent(self):
+        cust = register_customer(organization=self.org, phone='09088887777', campaign=self.campaign)
+        headers = {'HTTP_X_GUEST_TOKEN': cust.card_token}
+
+        first = self.client.post('/api/guest/checkin/', {'store_token': self.store_token},
+                                 format='json', **headers)
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertFalse(first.data['already_checked_in'])
+        self.assertEqual(first.data['stamp_count'], 1)
+
+        again = self.client.post('/api/guest/checkin/', {'store_token': self.store_token},
+                                 format='json', **headers)
+        self.assertEqual(again.status_code, 201)
+        self.assertTrue(again.data['already_checked_in'])
+        self.assertEqual(again.data['stamp_count'], 1)  # no double count
+
+    def test_self_service_checkin_needs_a_card(self):
+        resp = self.client.post('/api/guest/checkin/', {'store_token': self.store_token}, format='json')
+        self.assertEqual(resp.status_code, 404)
+
+    def test_self_service_checkin_rejects_a_bad_token(self):
+        cust = register_customer(organization=self.org, phone='09077776666', campaign=self.campaign)
+        resp = self.client.post('/api/guest/checkin/', {'store_token': 'nope'}, format='json',
+                                HTTP_X_GUEST_TOKEN=cust.card_token)
+        self.assertEqual(resp.status_code, 400)
+
     def test_public_register_ignores_spend_fields(self):
         resp = self.client.post('/api/guest/register/', {
             'store_token': self.store_token, 'phone': '09012345678',

@@ -3,7 +3,14 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ApiError } from '@/api/http'
-import { AlreadyRegisteredError, fetchStoreContext, register, type StoreContext } from '@/api/guest'
+import {
+  AlreadyRegisteredError,
+  fetchStoreContext,
+  getGuestToken,
+  guestCheckin,
+  register,
+  type StoreContext,
+} from '@/api/guest'
 
 const route = useRoute()
 const router = useRouter()
@@ -28,6 +35,23 @@ const brandName = computed(() => {
 
 onMounted(async () => {
   if (!storeToken.value) return
+
+  // Returning customer scanned the table QR — that's a self-service
+  // check-in, not a re-registration. Record it and open their card.
+  if (getGuestToken() && route.query.new === undefined) {
+    try {
+      const r = await guestCheckin(storeToken.value)
+      router.replace({
+        name: 'guest-card',
+        query: { visited: r.alreadyCheckedIn ? 'again' : '1' },
+      })
+      return
+    } catch {
+      router.replace({ name: 'guest-card' })
+      return
+    }
+  }
+
   try {
     store.value = await fetchStoreContext(storeToken.value)
   } catch {

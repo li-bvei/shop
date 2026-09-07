@@ -3,10 +3,10 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     CampaignViewSet, CheckinMilestoneViewSet, CustomerViewSet, GuestCardPulseView, GuestCardView,
-    GuestDrawView, GuestLoginView, GuestPrizesView, GuestRecoverView, GuestRedeemView, GuestRedemptionsView,
-    GuestRegisterView, GuestSetPinView, GuestStoreContextView, GuestVoucherRedeemView, MilestoneViewSet,
-    PrizeViewSet, RedemptionOptionViewSet, RiskEventViewSet, SpendVerificationViewSet,
-    StaffPermissionViewSet, VoucherViewSet,
+    GuestCheckinView, GuestDrawView, GuestLoginView, GuestPrizesView, GuestRecoverView, GuestRedeemView,
+    GuestRedemptionsView, GuestRegisterView, GuestSetPinView, GuestStoreContextView,
+    GuestVoucherRedeemView, MilestoneViewSet, PrizeViewSet, RedemptionOptionViewSet, RiskEventViewSet,
+    SpendVerificationViewSet, StaffPermissionViewSet, VoucherViewSet,
 )
 
 router = DefaultRouter()
@@ -34,5 +34,6 @@ urlpatterns = [
     path('guest/redeem/', GuestRedeemView.as_view(), name='promo-guest-redeem'),
     path('guest/draw/', GuestDrawView.as_view(), name='promo-guest-draw'),
     path('guest/voucher/redeem/', GuestVoucherRedeemView.as_view(), name='promo-guest-voucher-redeem'),
+    path('guest/checkin/', GuestCheckinView.as_view(), name='promo-guest-checkin'),
     *router.urls,
 ]

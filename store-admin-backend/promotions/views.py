@@ -542,6 +542,38 @@ class GuestVoucherRedeemView(APIView):
         return Response({'redemption_code': voucher.redemption_code, 'status': voucher.status})
 
 
+class GuestCheckinView(APIView):
+    """Self-service check-in: the customer scans the QR printed on the table
+    (the same signed store token used for registration) and taps once on
+    their own phone — no staff action. Records the visit for the business
+    day and, if the campaign has the daily reward on, issues it. Idempotent
+    per business day."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [GuestWriteThrottle]
+
+    def post(self, request):
+        customer = _resolve_guest_customer(request)
+        if not customer:
+            raise NotFound('card-not-found')
+        campaign = load_store_token(request.data.get('store_token', ''))
+        result = record_checkin(
+            campaign=campaign, branch=campaign.branch, customer=customer,
+            ip=client_ip(request),
+        )
+        customer.refresh_from_db()
+        reward = result['reward_voucher']
+        return Response({
+            'already_checked_in': result['already_checked_in'],
+            'stamp_count': customer.stamp_count,
+            'reward_voucher': GuestVoucherSerializer(reward).data if reward else None,
+            'milestone_vouchers': GuestVoucherSerializer(
+                result.get('milestone_vouchers') or [], many=True,
+            ).data,
+        }, status=201)
+
+
 # ---------------------------------------------------------------------------
 # Admin / branch — campaigns
 # ---------------------------------------------------------------------------

@@ -1023,6 +1023,8 @@ export default {
     viewAll: 'すべて見る',
     liveDrawChance: '無料抽選が {n} 回もらえました！',
     liveNewVoucher: '新しいクーポンが届きました！',
+    checkinWelcome: 'ようこそ！スタンプ +1 🎉',
+    checkinAgain: '本日はチェックイン済みです',
     wheelSpin: '回す',
     wheelCostPoints: '{n} ポイント消費',
     selfServeHint: '小鉢・デザート・ドリンクは、この画面でスタッフに確認してもらえます',
@@ -1110,6 +1112,8 @@ export default {
   promoVerify: {
     title: 'カウンター受付',
     toRedeem: 'クーポン利用 →',
+    modeReceipt: '会計受付',
+    toCouponsForCustomer: 'このお客様のクーポンを使う →',
     exit: '終了',
     scanPrompt: 'お客様のカードQRをスキャン',
     scanWithCamera: 'カメラで読み取る',
@@ -1148,6 +1152,10 @@ export default {
   promoRedeem: {
     title: 'クーポン利用',
     toCheckin: '← 受付',
+    modeUse: 'クーポン利用',
+    redeemedToast: '「{label}」を使用しました',
+    nextCustomer: '次のお客様',
+    multiHint: '同じお客様のクーポンを続けて使えます',
     scanPrompt: 'クーポンコード / カードQR / 電話番号',
     modeCode: 'コード',
     modeCard: 'カードQR',

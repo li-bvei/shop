@@ -385,6 +385,33 @@ export async function fetchStoreContext(storeToken: string): Promise<StoreContex
   }
 }
 
+export interface CheckinResult {
+  alreadyCheckedIn: boolean
+  stampCount: number
+  rewardVoucher: GuestVoucher | null
+  milestoneVouchers: GuestVoucher[]
+}
+
+/** Self-service check-in: the customer scanned the table QR (same store
+ * token as registration) while already holding a card. */
+export async function guestCheckin(storeToken: string): Promise<CheckinResult> {
+  const d = await guestRequest<{
+    already_checked_in: boolean
+    stamp_count: number
+    reward_voucher: VoucherDto | null
+    milestone_vouchers: VoucherDto[]
+  }>('/guest/checkin/', {
+    method: 'POST',
+    body: JSON.stringify({ store_token: storeToken }),
+  })
+  return {
+    alreadyCheckedIn: d.already_checked_in,
+    stampCount: d.stamp_count,
+    rewardVoucher: d.reward_voucher ? fromVoucherDto(d.reward_voucher) : null,
+    milestoneVouchers: (d.milestone_vouchers || []).map(fromVoucherDto),
+  }
+}
+
 export async function register(payload: RegisterPayload): Promise<RegisterResult> {
   const dto = await guestRequest<{
     existing?: boolean

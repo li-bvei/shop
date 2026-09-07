@@ -30,10 +30,14 @@ const router = createRouter({
           name: 'guest-register',
           component: () => import('@/views/guest/GuestRegisterView.vue'),
           meta: { public: true },
-          // A returning customer whose browser still holds the card skips
-          // the form entirely — scanning the printed sticker again just
-          // reopens their card.
-          beforeEnter: (to) => (getGuestToken() && to.query.new === undefined ? { name: 'guest-card' } : true),
+          // A returning customer who lands here WITHOUT a store token (stale
+          // bookmark, typed URL) just goes to their card. With a token they
+          // scanned the printed QR — let the view load so it records a
+          // self-service check-in, then it redirects to the card itself.
+          beforeEnter: (to) =>
+            getGuestToken() && to.query.t === undefined && to.query.new === undefined
+              ? { name: 'guest-card' }
+              : true,
         },
         {
           path: 'card',

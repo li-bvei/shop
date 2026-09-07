@@ -1027,6 +1027,8 @@ export default {
     viewAll: '查看全部',
     liveDrawChance: '获得 {n} 次免费抽奖！',
     liveNewVoucher: '收到一张新券！',
+    checkinWelcome: '欢迎光临！印章 +1 🎉',
+    checkinAgain: '今天已经打过卡了',
     wheelSpin: '抽奖',
     wheelCostPoints: '消耗 {n} 积分',
     selfServeHint: '小菜 / 甜品 / 饮料可请店员在你手机上确认',
@@ -1114,6 +1116,8 @@ export default {
   promoVerify: {
     title: '柜台打卡',
     toRedeem: '券核销 →',
+    modeReceipt: '会计受付',
+    toCouponsForCustomer: '使用这位顾客的优惠券 →',
     exit: '退出',
     scanPrompt: '扫客人卡片二维码',
     scanWithCamera: '用相机扫码',
@@ -1152,6 +1156,10 @@ export default {
   promoRedeem: {
     title: '券核销',
     toCheckin: '← 打卡',
+    modeUse: '优惠券使用',
+    redeemedToast: '已使用「{label}」',
+    nextCustomer: '下一位顾客',
+    multiHint: '可以继续使用同一位顾客的其他优惠券',
     scanPrompt: '扫券码 / 客人卡片 / 报手机号',
     modeCode: '券码',
     modeCard: '卡片二维码',

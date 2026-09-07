@@ -414,55 +414,6 @@ export async function confirmSpend(payload: {
   }
 }
 
-export interface CheckinVoucherInfo {
-  label: string
-  rewardType: string
-  redemptionCode: string
-}
-
-export interface CheckinResult {
-  alreadyCheckedIn: boolean
-  rewardVoucher: CheckinVoucherInfo | null
-  /** Vouchers from cumulative-visit tiers hit on this check-in (3rd visit,
-   * 5th visit, …). */
-  milestoneVouchers: CheckinVoucherInfo[]
-}
-
-interface CheckinVoucherDto {
-  label: string
-  reward_type: string
-  redemption_code: string
-}
-
-function fromCheckinVoucher(d: CheckinVoucherDto): CheckinVoucherInfo {
-  return { label: d.label, rewardType: d.reward_type, redemptionCode: d.redemption_code }
-}
-
-/** Record a "customer showed their QR" visit with no purchase, and issue
- * the daily check-in reward + any cumulative-visit tier vouchers. */
-export async function recordCheckin(payload: {
-  cardToken?: string
-  phone?: string
-  branchId?: string
-  campaignId?: string
-}): Promise<CheckinResult> {
-  const res = await http.post<{
-    already_checked_in: boolean
-    reward_voucher: CheckinVoucherDto | null
-    milestone_vouchers: CheckinVoucherDto[]
-  }>('/promotions/spend-verifications/checkin/', {
-    ...(payload.cardToken ? { card_token: payload.cardToken } : {}),
-    ...(payload.phone ? { phone: payload.phone } : {}),
-    ...(payload.branchId ? { branch: payload.branchId } : {}),
-    ...(payload.campaignId ? { campaign: payload.campaignId } : {}),
-  })
-  return {
-    alreadyCheckedIn: res.already_checked_in,
-    rewardVoucher: res.reward_voucher ? fromCheckinVoucher(res.reward_voucher) : null,
-    milestoneVouchers: (res.milestone_vouchers ?? []).map(fromCheckinVoucher),
-  }
-}
-
 export interface SpendVerification {
   id: string
   customerName: string

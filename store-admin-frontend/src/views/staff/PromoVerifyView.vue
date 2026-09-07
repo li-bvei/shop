@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage } from 'element-plus'
@@ -9,12 +9,11 @@ import {
   confirmSpend,
   fetchMyVerifications,
   lookupCustomer,
-  recordCheckin,
-  type CheckinResult,
   type CustomerLookup,
   type SpendVerification,
 } from '@/api/promotions'
 import KioskBlockedNotice from '@/components/KioskBlockedNotice.vue'
+import KioskModeToggle from '@/components/KioskModeToggle.vue'
 import QrScanner from '@/components/QrScanner.vue'
 
 const router = useRouter()
@@ -25,7 +24,7 @@ const auth = useAuthStore()
 // counter kiosk — see promotions.views SpendVerificationViewSet._resolve_branch.
 const headOfficeBlocked = computed(() => auth.role === 'admin' && !auth.branchId)
 
-type Stage = 'scan' | 'amount' | 'done' | 'checkin-done'
+type Stage = 'scan' | 'amount' | 'done'
 const stage = ref<Stage>('scan')
 
 const scanInput = ref<HTMLInputElement>()
@@ -38,7 +37,6 @@ const tableNumber = ref('')
 
 const customer = ref<CustomerLookup | null>(null)
 const lastResult = ref<{ pointsGranted: number; pointsBalance: number; stampCount: number } | null>(null)
-const checkinResult = ref<CheckinResult | null>(null)
 const busy = ref(false)
 const recent = ref<SpendVerification[]>([])
 
@@ -48,8 +46,6 @@ const requestId = ref('')
 function newRequestId() {
   return `sv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
-
-let resetTimer: ReturnType<typeof setTimeout> | undefined
 
 const stampTarget = computed(() => customer.value?.stampTarget ?? 0)
 const stampFilled = computed(() =>
@@ -65,14 +61,12 @@ function focusAmount() {
 }
 
 function resetToScan() {
-  clearTimeout(resetTimer)
   stage.value = 'scan'
   tokenValue.value = ''
   amount.value = null
   tableNumber.value = ''
   customer.value = null
   lastResult.value = null
-  checkinResult.value = null
   requestId.value = ''
   focusScan()
 }
@@ -167,7 +161,6 @@ async function handleConfirm() {
     }
     stage.value = 'done'
     loadRecent()
-    resetTimer = setTimeout(resetToScan, 3500)
   } catch (err) {
     if (err instanceof ApiError) {
       const body = JSON.stringify(err.body)
@@ -185,29 +178,13 @@ async function handleConfirm() {
   }
 }
 
-// "Check-in only" — the customer showed their QR but isn't paying now
-// (e.g. just walked in). Records the visit and issues the daily reward.
-async function handleCheckinOnly() {
-  if (busy.value || !customer.value) return
-  busy.value = true
-  try {
-    const query = manualMode.value === 'phone' ? { phone: tokenValue.value.trim() } : { cardToken: tokenValue.value.trim() }
-    checkinResult.value = await recordCheckin(query)
-    stage.value = 'checkin-done'
-    resetTimer = setTimeout(resetToScan, 3500)
-  } catch (err) {
-    if (err instanceof ApiError) {
-      const body = JSON.stringify(err.body)
-      if (body.includes('head-office-account-cannot-scan')) ElMessage.error(t('kioskBlocked.body'))
-      else if (body.includes('no-active-campaign')) ElMessage.error(t('promoVerify.errNoCampaign'))
-      else if (body.includes('customer-blocked')) ElMessage.error(t('promoVerify.blocked'))
-      else ElMessage.error(t('promoVerify.confirmFailed'))
-    } else {
-      ElMessage.error(t('promoVerify.confirmFailed'))
-    }
-  } finally {
-    busy.value = false
-  }
+// Same customer, straight to their vouchers — no re-scan.
+function toRedeemForThisCustomer() {
+  const token = tokenValue.value.trim()
+  router.push({
+    name: 'promo-redeem',
+    query: manualMode.value === 'phone' ? { phone: token } : { card: token },
+  })
 }
 
 function exit() {
@@ -218,18 +195,13 @@ onMounted(() => {
   focusScan()
   loadRecent()
 })
-
-onBeforeUnmount(() => clearTimeout(resetTimer))
 </script>
 
 <template>
   <KioskBlockedNotice v-if="headOfficeBlocked" />
   <div v-else class="kiosk">
     <header class="kiosk-head">
-      <div class="head-left">
-        <span class="brand">{{ t('promoVerify.title') }}</span>
-        <router-link :to="{ name: 'promo-redeem' }" class="switch-link">{{ t('promoVerify.toRedeem') }}</router-link>
-      </div>
+      <KioskModeToggle active="verify" />
       <div class="head-right">
         <span class="operator">{{ auth.displayName || auth.account }}</span>
         <button type="button" class="exit-btn" @click="exit">{{ t('promoVerify.exit') }}</button>
@@ -301,13 +273,10 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
             {{ t('promoVerify.confirm') }}
           </button>
         </div>
-        <button type="button" class="scan-cam-btn" :disabled="busy" @click="handleCheckinOnly">
-          {{ t('promoVerify.checkinOnly') }}
-        </button>
       </section>
 
       <!-- Stage: done -->
-      <section v-else-if="stage === 'done' && lastResult" class="stage stage-done" @click="resetToScan">
+      <section v-else-if="stage === 'done' && lastResult" class="stage stage-done">
         <div class="check-mark">✓</div>
         <h1>{{ t('promoVerify.doneTitle') }}</h1>
         <p class="done-detail">
@@ -317,29 +286,9 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
           <template v-else>{{ t('promoVerify.doneNoPoints') }}</template>
         </p>
         <p class="done-balance">{{ t('promoVerify.doneBalance', { bal: lastResult.pointsBalance.toLocaleString('ja-JP') }) }}</p>
-        <button type="button" class="primary-btn" @click="resetToScan">{{ t('promoVerify.next') }}</button>
-      </section>
-
-      <!-- Stage: check-in only done -->
-      <section v-else-if="stage === 'checkin-done' && checkinResult" class="stage stage-done" @click="resetToScan">
-        <div class="check-mark">✓</div>
-        <h1>{{ t('promoVerify.checkinDoneTitle') }}</h1>
-        <p v-if="checkinResult.alreadyCheckedIn" class="done-detail">{{ t('promoVerify.checkinAlready') }}</p>
-        <template v-else>
-          <p v-if="checkinResult.rewardVoucher" class="done-detail">
-            {{ t('promoVerify.checkinVoucher', { label: checkinResult.rewardVoucher.label }) }}
-          </p>
-          <p
-            v-for="mv in checkinResult.milestoneVouchers"
-            :key="mv.redemptionCode"
-            class="done-detail milestone"
-          >
-            🎉 {{ t('promoVerify.checkinVoucher', { label: mv.label }) }}
-          </p>
-          <p v-if="!checkinResult.rewardVoucher && !checkinResult.milestoneVouchers.length" class="done-detail">
-            {{ t('promoVerify.checkinNoReward') }}
-          </p>
-        </template>
+        <button type="button" class="scan-cam-btn" @click="toRedeemForThisCustomer">
+          {{ t('promoVerify.toCouponsForCustomer') }}
+        </button>
         <button type="button" class="primary-btn" @click="resetToScan">{{ t('promoVerify.next') }}</button>
       </section>
     </main>
@@ -373,26 +322,10 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-}
-
-.head-left {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-}
-
-.brand {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.switch-link {
-  font-size: 12px;
-  color: var(--accent);
-  text-decoration: none;
 }
 
 .head-right {

@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { ApiError } from '@/api/http'
 import { redeemVoucher, verifyVouchers, type VoucherRow } from '@/api/promotions'
 import KioskBlockedNotice from '@/components/KioskBlockedNotice.vue'
+import KioskModeToggle from '@/components/KioskModeToggle.vue'
 import QrScanner from '@/components/QrScanner.vue'
 
+const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -17,7 +19,7 @@ const auth = useAuthStore()
 // at a store counter — see promotions.views VoucherViewSet.redeem.
 const headOfficeBlocked = computed(() => auth.role === 'admin' && !auth.branchId)
 
-type Stage = 'scan' | 'list' | 'done'
+type Stage = 'scan' | 'list'
 const stage = ref<Stage>('scan')
 const scanInput = ref<HTMLInputElement>()
 
@@ -26,10 +28,7 @@ const nameQuery = ref('')
 const tailQuery = ref('')
 const mode = ref<'code' | 'card' | 'phone' | 'name'>('code')
 const vouchers = ref<VoucherRow[]>([])
-const redeemed = ref<VoucherRow | null>(null)
 const busy = ref(false)
-
-let resetTimer: ReturnType<typeof setTimeout> | undefined
 
 const isManager = computed(() => auth.role === 'branch' || auth.role === 'admin')
 
@@ -38,13 +37,11 @@ function focusScan() {
 }
 
 function reset() {
-  clearTimeout(resetTimer)
   stage.value = 'scan'
   query.value = ''
   nameQuery.value = ''
   tailQuery.value = ''
   vouchers.value = []
-  redeemed.value = null
   focusScan()
 }
 
@@ -77,20 +74,22 @@ const canLookup = computed(() =>
     : query.value.trim().length > 0,
 )
 
+function currentQuery() {
+  const raw = query.value.trim()
+  return mode.value === 'name'
+    ? { name: nameQuery.value.trim(), phoneTail: tailQuery.value.trim() }
+    : mode.value === 'code'
+      ? { redemptionCode: raw }
+      : mode.value === 'phone'
+        ? { phone: raw }
+        : { cardToken: raw }
+}
+
 async function lookup() {
   if (!canLookup.value || busy.value) return
   busy.value = true
   try {
-    const raw = query.value.trim()
-    const q =
-      mode.value === 'name'
-        ? { name: nameQuery.value.trim(), phoneTail: tailQuery.value.trim() }
-        : mode.value === 'code'
-          ? { redemptionCode: raw }
-          : mode.value === 'phone'
-            ? { phone: raw }
-            : { cardToken: raw }
-    vouchers.value = await verifyVouchers(q)
+    vouchers.value = await verifyVouchers(currentQuery())
     stage.value = 'list'
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) ElMessage.warning(t('promoRedeem.notFound'))
@@ -145,9 +144,10 @@ async function handleRedeem(v: VoucherRow) {
 
   busy.value = true
   try {
-    redeemed.value = await redeemVoucher({ redemptionCode: v.redemptionCode, spendAmountYen })
-    stage.value = 'done'
-    resetTimer = setTimeout(reset, 4000)
+    await redeemVoucher({ redemptionCode: v.redemptionCode, spendAmountYen })
+    ElMessage.success(t('promoRedeem.redeemedToast', { label: v.label }))
+    // Stay on this customer's list so several coupons don't need re-scanning.
+    vouchers.value = await verifyVouchers(currentQuery())
   } catch (err) {
     if (err instanceof ApiError) {
       const body = JSON.stringify(err.body)
@@ -169,18 +169,30 @@ function exit() {
   router.push({ name: auth.role === 'staff' ? 'my-availability' : 'dashboard' })
 }
 
-onMounted(focusScan)
-onBeforeUnmount(() => clearTimeout(resetTimer))
+onMounted(() => {
+  // Arrived from the receipt screen ("use this customer's coupons") —
+  // prefill and look up straight away, no re-scan.
+  const card = (route.query.card as string) || ''
+  const phone = (route.query.phone as string) || ''
+  if (card) {
+    mode.value = 'card'
+    query.value = card
+    lookup()
+  } else if (phone) {
+    mode.value = 'phone'
+    query.value = phone
+    lookup()
+  } else {
+    focusScan()
+  }
+})
 </script>
 
 <template>
   <KioskBlockedNotice v-if="headOfficeBlocked" />
   <div v-else class="kiosk">
     <header class="kiosk-head">
-      <div class="head-left">
-        <span class="brand">{{ t('promoRedeem.title') }}</span>
-        <router-link :to="{ name: 'promo-verify' }" class="switch-link">{{ t('promoRedeem.toCheckin') }}</router-link>
-      </div>
+      <KioskModeToggle active="redeem" />
       <div class="head-right">
         <span class="operator">{{ auth.displayName || auth.account }}</span>
         <button type="button" class="exit-btn" @click="exit">{{ t('promoVerify.exit') }}</button>
@@ -246,8 +258,9 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
       <section v-else-if="stage === 'list'" class="stage stage-list">
         <div class="list-head">
           <h1>{{ t('promoRedeem.listTitle') }}</h1>
-          <button type="button" class="ghost-btn" @click="reset">{{ t('promoVerify.cancel') }}</button>
+          <button type="button" class="ghost-btn" @click="reset">{{ t('promoRedeem.nextCustomer') }}</button>
         </div>
+        <p class="list-hint">{{ t('promoRedeem.multiHint') }}</p>
         <ul class="voucher-list">
           <li
             v-for="v in vouchers"
@@ -278,16 +291,6 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
         </ul>
       </section>
 
-      <section v-else-if="stage === 'done' && redeemed" class="stage stage-done" @click="reset">
-        <div class="check-mark">✓</div>
-        <h1>{{ t('promoRedeem.doneTitle') }}</h1>
-        <p class="done-label">{{ redeemed.label }}</p>
-        <p v-if="redeemed.redeemedSpendYen" class="done-sub">
-          {{ t('promoRedeem.doneSpend', { yen: redeemed.redeemedSpendYen.toLocaleString('ja-JP') }) }}
-        </p>
-        <p class="done-hint">{{ t('promoRedeem.applyHint') }}</p>
-        <button type="button" class="primary-btn" @click="reset">{{ t('promoVerify.next') }}</button>
-      </section>
     </main>
 
     <QrScanner v-if="scanning" @decode="onScanDecode" @close="scanning = false" />
@@ -308,26 +311,10 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-}
-
-.head-left {
-  display: flex;
-  align-items: baseline;
-  gap: 14px;
-}
-
-.brand {
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.switch-link {
-  font-size: 12px;
-  color: var(--accent);
-  text-decoration: none;
 }
 
 .head-right {
@@ -536,38 +523,9 @@ onBeforeUnmount(() => clearTimeout(resetTimer))
   cursor: not-allowed;
 }
 
-.stage-done {
-  cursor: pointer;
-}
-
-.check-mark {
-  width: 84px;
-  height: 84px;
-  border-radius: 50%;
-  background: var(--success);
-  color: #fff;
-  font-size: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.done-label {
-  font-size: 18px;
-  font-weight: 700;
-  margin: 0;
-}
-
-.done-sub {
-  font-size: 14px;
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.done-hint {
-  font-size: 13px;
+.list-hint {
+  font-size: 12.5px;
   color: var(--text-tertiary);
-  margin: 0;
-  text-align: center;
+  margin: -6px 0 0;
 }
 </style>

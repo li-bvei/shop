@@ -359,6 +359,8 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
             consumed_at=consumed_at, points_granted=points, direct_draws_granted=direct_draws,
             verified_by=verified_by, source_ip=ip, request_id=request_id,
         )
+        update_fields = ['last_seen_at']
+        locked.last_seen_at = now
         if ci_created:
             check_in.spend_verification = verification
             check_in.save(update_fields=['spend_verification'])
@@ -366,9 +368,11 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
             # as "showed the QR today", so the check-in perks fire here too.
             _issue_checkin_reward(customer=locked, campaign=campaign, branch=branch, check_in=check_in)
             _apply_checkin_milestones(customer=locked, campaign=campaign, branch=branch)
-
-        update_fields = ['last_seen_at']
-        locked.last_seen_at = now
+            # One stamp per business-day visit — not per checkout. A customer
+            # who self-checked-in earlier today already got it.
+            if campaign.stamp_target:
+                locked.stamp_count += 1
+                update_fields.append('stamp_count')
         if points:
             locked.points_balance += points
             locked.lifetime_points_earned += points
@@ -377,9 +381,6 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
         if direct_draws:
             locked.draw_chances += direct_draws
             update_fields.append('draw_chances')
-        if campaign.stamp_target:
-            locked.stamp_count += 1
-            update_fields.append('stamp_count')
         locked.save(update_fields=update_fields)
 
         if points:
@@ -430,8 +431,14 @@ def record_checkin(*, campaign, branch, customer, verified_by=None, ip=None) -> 
             milestone_vouchers = _apply_checkin_milestones(
                 customer=locked, campaign=campaign, branch=branch,
             )
+            fields = ['last_seen_at']
             locked.last_seen_at = now
-            locked.save(update_fields=['last_seen_at'])
+            # A visit-count stamp card advances on the visit itself (that's
+            # what "check-in" is for) — one stamp per business day.
+            if campaign.stamp_target:
+                locked.stamp_count += 1
+                fields.append('stamp_count')
+            locked.save(update_fields=fields)
 
     return {
         'check_in': check_in,

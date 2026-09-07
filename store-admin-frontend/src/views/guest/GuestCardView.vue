@@ -183,6 +183,14 @@ async function load() {
     if (!readonly.value && card.value && route.query.welcome === '1' && !hasOnboarded()) {
       showOnboarding.value = true
     }
+    // Came here from scanning the table QR (self-service check-in).
+    if (!readonly.value && card.value && route.query.visited) {
+      bonusMsg.value =
+        route.query.visited === 'again' ? t('guest.checkinAgain') : t('guest.checkinWelcome')
+      confettiKey.value += 1
+      window.setTimeout(() => (bonusMsg.value = ''), 3400)
+      router.replace({ name: 'guest-card' })
+    }
   } catch {
     loadError.value = true
   } finally {

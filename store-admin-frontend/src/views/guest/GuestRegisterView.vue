@@ -17,12 +17,13 @@ const errorMsg = ref('')
 // customer fills anything in so they know whose card they're opening.
 const store = ref<StoreContext | null>(null)
 const brandLogo = computed(() => store.value?.orgLogoUrl ?? '')
+// Chain + branch, e.g. "○○グループ 心斎橋店" — shown next to the logo (not
+// instead of it): a logo may be just a mark, so the name always appears.
 const brandName = computed(() => {
   if (!store.value) return ''
   const chain = locale.value === 'ja' ? store.value.orgNameJa : store.value.orgNameZh
   const branch = locale.value === 'ja' ? store.value.branchNameJa : store.value.branchNameZh
-  // With a logo the chain is already shown visually — just add the branch.
-  return brandLogo.value ? branch : [chain, branch].filter(Boolean).join(' ')
+  return [chain, branch].filter(Boolean).join(' ')
 })
 
 onMounted(async () => {

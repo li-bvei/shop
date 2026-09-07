@@ -131,12 +131,11 @@ const orgName = computed(() =>
 const branchName = computed(() =>
   card.value ? (locale.value === 'ja' ? card.value.branchNameJa : card.value.branchNameZh) : '',
 )
-/** What the customer recognises: "○○グループ 心斎橋店". With a logo the
- *  chain is already shown visually, so just the branch is added. */
-const brandName = computed(() => {
-  if (!card.value) return ''
-  return orgLogo.value ? branchName.value : [orgName.value, branchName.value].filter(Boolean).join(' ')
-})
+/** "○○グループ 心斎橋店" — shown next to the logo, not instead of it (the
+ *  logo may be just a mark), so the chain name always appears. */
+const brandName = computed(() =>
+  card.value ? [orgName.value, branchName.value].filter(Boolean).join(' ') : '',
+)
 const canDrawWithPoints = computed(
   () => !!c.value.hasPrizes && !!c.value.pointsPerDraw && (card.value?.pointsBalance ?? 0) >= c.value.pointsPerDraw,
 )

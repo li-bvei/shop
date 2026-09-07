@@ -43,10 +43,12 @@
 
 .g-brand {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   min-height: 34px;
-  padding: 2px 0 20px;
+  /* clear the absolutely-positioned language toggle in the top-right */
+  padding: 2px 84px 20px 0;
 }
 
 .g-brand-logo {

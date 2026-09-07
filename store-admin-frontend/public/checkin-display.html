@@ -48,8 +48,9 @@
   }
   #qr { width: 62vmin; height: 62vmin; }
   #qr svg { display: block; width: 100%; height: 100%; }
-  #tagline { margin-top: 3.4vmin; font-size: 4.6vmin; font-weight: 800; color: #06a548; text-align: center; }
-  #subline { margin-top: 1vmin; font-size: 2.6vmin; color: #5b6369; text-align: center; }
+  #text-col { text-align: center; }
+  #tagline { margin-top: 3.4vmin; font-size: 4.6vmin; font-weight: 800; color: #06a548; }
+  #subline { margin-top: 1vmin; font-size: 2.6vmin; color: #5b6369; }
 
   #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: #eef1f2; }
   #bar-fill { height: 100%; width: 100%; background: #06c755; transition: width 0.9s linear; }
@@ -59,12 +60,14 @@
     border: 0; background: transparent; color: #c8ced2; font-size: 22px; cursor: pointer; opacity: 0.5;
   }
 
+  /* A landscape tablet: QR left, message right. */
   @media (orientation: landscape) {
-    #display { flex-direction: row; }
-    #brand { position: absolute; top: 3vmin; }
-    #text-col { margin-left: 5vmin; text-align: left; }
-    #tagline, #subline { text-align: left; margin-top: 0; }
-    #subline { margin-top: 1.4vmin; }
+    #display { flex-direction: row; gap: 5vmin; }
+    #brand { position: absolute; top: 4vmin; left: 0; right: 0; }
+    #qr { width: 56vmin; height: 56vmin; }
+    #text-col { text-align: left; }
+    #tagline { margin-top: 0; font-size: 3.6vmin; white-space: nowrap; }
+    #subline { margin-top: 2vmin; font-size: 2.2vmin; white-space: nowrap; }
   }
 </style>
 </head>

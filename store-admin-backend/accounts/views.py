@@ -42,12 +42,31 @@ class OrganizationView(APIView):
         for field in ('name_zh', 'name_ja', 'logo_url'):
             if field in request.data:
                 setattr(org, field, (request.data[field] or '').strip())
+        if 'logo_url' in request.data:
+            org.logo_url = _clean_logo(org.logo_url)
         try:
             org.full_clean(exclude=['code'])
         except DjangoValidationError as exc:
             raise ValidationError(exc.message_dict)
         org.save(update_fields=['name_zh', 'name_ja', 'logo_url', 'updated_at'])
         return Response(_org_body(org))
+
+
+# A logo is either a link the chain hosts, or a small inline image the admin
+# uploaded in Settings (the frontend resizes it to ≤256px before encoding).
+_LOGO_MAX_LEN = 500_000  # ~365KB of image once base64 is decoded
+
+
+def _clean_logo(value):
+    if not value:
+        return ''
+    if value.startswith(('http://', 'https://')):
+        return value
+    if value.startswith('data:image/'):
+        if len(value) > _LOGO_MAX_LEN:
+            raise ValidationError({'logo_url': ['image-too-large']})
+        return value
+    raise ValidationError({'logo_url': ['must-be-an-image-or-https-url']})
 
 
 def _org_body(org):

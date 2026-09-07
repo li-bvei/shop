@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, EditPen, Delete, Key, Rank, ArrowUp, ArrowDown } from '@element-plus/icons-vue'
+import { Plus, EditPen, Delete, Key, Rank, ArrowUp, ArrowDown, Upload } from '@element-plus/icons-vue'
 import {
   fetchPaymentMethods,
   renamePaymentMethod,
@@ -78,6 +78,43 @@ async function saveOrg() {
     ElMessage.error(e instanceof Error && e.message ? e.message : t('common.unexpectedError'))
   } finally {
     orgSaving.value = false
+  }
+}
+
+// Shrink an uploaded image to a data URI that fits comfortably in the DB —
+// longest side ≤ 256px, transparency kept (PNG). The customer pages only
+// ever show it at ~40px tall, so this is plenty.
+function shrinkToDataUrl(file: File, max = 256): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const scale = Math.min(1, max / Math.max(img.width, img.height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.width * scale)
+      canvas.height = Math.round(img.height * scale)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return reject(new Error('no-canvas'))
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      resolve(canvas.toDataURL('image/png'))
+    }
+    img.onerror = () => reject(new Error('not-an-image'))
+    img.src = URL.createObjectURL(file)
+  })
+}
+
+async function onLogoFile(file: File) {
+  if (!file.type.startsWith('image/')) {
+    ElMessage.error(t('settings.brandLogoNotImage'))
+    return
+  }
+  if (file.size > 4 * 1024 * 1024) {
+    ElMessage.error(t('settings.brandLogoTooBig'))
+    return
+  }
+  try {
+    orgForm.value.logoUrl = await shrinkToDataUrl(file)
+  } catch {
+    ElMessage.error(t('settings.brandLogoNotImage'))
   }
 }
 // Admin picks which branch's payment methods to manage; branch accounts are
@@ -554,12 +591,31 @@ async function handleChangePassword() {
       <div class="brand-row">
         <img v-if="orgForm.logoUrl" :src="orgForm.logoUrl" alt="" class="brand-preview" />
         <div v-else class="brand-preview brand-preview-empty">{{ t('settings.brandNoLogo') }}</div>
-        <el-input
-          v-model="orgForm.logoUrl"
-          :placeholder="t('settings.brandLogoPlaceholder')"
-          clearable
-          class="brand-logo-input"
-        />
+        <div class="brand-logo-controls">
+          <div class="brand-logo-line">
+            <el-upload
+              :auto-upload="false"
+              :show-file-list="false"
+              accept="image/*"
+              :on-change="(f: { raw?: File }) => f.raw && onLogoFile(f.raw)"
+            >
+              <el-button :icon="Upload">{{ t('settings.brandLogoUpload') }}</el-button>
+            </el-upload>
+            <el-button v-if="orgForm.logoUrl" text type="danger" @click="orgForm.logoUrl = ''">
+              {{ t('settings.brandLogoRemove') }}
+            </el-button>
+          </div>
+          <div v-if="orgForm.logoUrl.startsWith('data:')" class="brand-logo-uploaded">
+            {{ t('settings.brandLogoUploaded') }}
+          </div>
+          <el-input
+            v-else
+            v-model="orgForm.logoUrl"
+            :placeholder="t('settings.brandLogoPlaceholder')"
+            clearable
+          />
+          <span class="brand-logo-hint">{{ t('settings.brandLogoUploadHint') }}</span>
+        </div>
       </div>
 
       <div class="brand-actions">
@@ -860,8 +916,32 @@ async function handleChangePassword() {
   box-sizing: border-box;
 }
 
-.brand-logo-input {
+.brand-logo-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   flex: 1;
+  min-width: 0;
+}
+
+.brand-logo-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-logo-uploaded {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 6px 10px;
+  background: var(--surface-alt, rgba(0, 0, 0, 0.03));
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+}
+
+.brand-logo-hint {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
 }
 
 .brand-actions {

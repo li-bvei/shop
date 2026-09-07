@@ -264,3 +264,24 @@ class OrganizationEndpointTests(ApiTestCase):
 
         bad = self.client.patch('/api/organization/', {'logo_url': 'not a url'})
         self.assertEqual(bad.status_code, 400)
+
+    def test_admin_can_upload_a_logo_as_a_data_uri(self):
+        self.login_as(self.admin)
+        tiny_png = (
+            'data:image/png;base64,'
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+        )
+        ok = self.client.patch('/api/organization/', {'logo_url': tiny_png})
+        self.assertEqual(ok.status_code, 200, ok.content)
+        self.assertEqual(ok.data['logo_url'], tiny_png)
+
+        # a non-image / script URI is refused
+        bad = self.client.patch('/api/organization/', {'logo_url': 'javascript:alert(1)'})
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn('logo_url', bad.data)
+
+        # an oversized data URI is refused
+        huge = 'data:image/png;base64,' + 'A' * 600_000
+        self.assertEqual(
+            self.client.patch('/api/organization/', {'logo_url': huge}).status_code, 400,
+        )

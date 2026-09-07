@@ -12,9 +12,11 @@ class Organization(models.Model):
     name_zh = models.CharField(max_length=100)
     name_ja = models.CharField(max_length=100)
     # Brand logo for the customer-facing loyalty pages (register / recovery
-    # / card). A URL the chain hosts themselves — the platform has no media
-    # storage. Empty = the pages just show the name.
-    logo_url = models.URLField(blank=True, default='')
+    # / card). Either an external "https://…" URL the chain hosts itself, or
+    # an inline "data:image/…;base64,…" URI when the admin uploads a file in
+    # Settings (the frontend shrinks it to ≤256px first, so it stays small).
+    # TextField, not URLField, to hold the data: form. Empty = name only.
+    logo_url = models.TextField(blank=True, default='')
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

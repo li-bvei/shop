@@ -3,7 +3,13 @@ import { computed, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { ApiError } from '@/api/http'
-import { guestCheckin, guestLogin, recoverCard, type RecoveryOption } from '@/api/guest'
+import {
+  guestCheckin,
+  guestLogin,
+  liveQrProofFrom,
+  recoverCard,
+  type RecoveryOption,
+} from '@/api/guest'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,7 +25,7 @@ const storeToken = computed(() => (route.query.t as string) || '')
 async function goToCardAfterRecovery() {
   if (storeToken.value) {
     try {
-      const c = await guestCheckin(storeToken.value)
+      const c = await guestCheckin(storeToken.value, liveQrProofFrom(route.query))
       router.replace({ name: 'guest-card', query: { visited: c.alreadyCheckedIn ? 'again' : '1' } })
       return
     } catch {

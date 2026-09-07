@@ -19,6 +19,7 @@ from .models import (
     Campaign, CheckinMilestone, CheckInRecord, Customer, LotteryDraw, Milestone, Prize,
     RedemptionOption, RiskEvent, SpendVerification, StaffPermission, Voucher,
 )
+from . import rotating
 from .reports import build_campaign_report
 from .serializers import (
     CampaignSerializer, CheckInRecordSerializer, CheckinMilestoneSerializer, CustomerDetailSerializer,
@@ -543,11 +544,16 @@ class GuestVoucherRedeemView(APIView):
 
 
 class GuestCheckinView(APIView):
-    """Self-service check-in: the customer scans the QR printed on the table
-    (the same signed store token used for registration) and taps once on
+    """Self-service check-in: the customer scans a store QR and taps once on
     their own phone — no staff action. Records the visit for the business
     day and, if the campaign has the daily reward on, issues it. Idempotent
-    per business day."""
+    per business day.
+
+    `w` + `c` (from the in-store rotating display, see promotions.rotating)
+    are optional. A campaign with `checkin_requires_live_qr` rejects a
+    check-in without a fresh pair — that's what stops a customer scanning a
+    photo of the printed QR from home. Without the flag they're only
+    recorded (live vs unverified) for review."""
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -558,9 +564,21 @@ class GuestCheckinView(APIView):
         if not customer:
             raise NotFound('card-not-found')
         campaign = load_store_token(request.data.get('store_token', ''))
+
+        window, code = request.data.get('w'), request.data.get('c')
+        live_verified = (
+            rotating.verify(campaign.checkin_secret, window, code)
+            if window and code else None
+        )
+        if campaign.checkin_requires_live_qr:
+            if live_verified is None:
+                raise ValidationError({'checkin': ['live-qr-required']})
+            if not live_verified:
+                raise ValidationError({'checkin': ['live-qr-stale']})
+
         result = record_checkin(
             campaign=campaign, branch=campaign.branch, customer=customer,
-            ip=client_ip(request),
+            ip=client_ip(request), live_verified=live_verified,
         )
         customer.refresh_from_db()
         reward = result['reward_voucher']
@@ -582,7 +600,9 @@ class CampaignViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
     """admin: every branch in the Organization. branch: its own branch
     only, read + write. staff: blocked (project default)."""
 
-    queryset = Campaign.objects.select_related('branch', 'created_by', 'updated_by').all()
+    queryset = Campaign.objects.select_related(
+        'branch', 'branch__organization', 'created_by', 'updated_by',
+    ).all()
     serializer_class = CampaignSerializer
     filterset_fields = ['branch', 'status']
 

@@ -1,3 +1,4 @@
+import secrets
 from datetime import time
 
 from django.conf import settings
@@ -80,6 +81,16 @@ class Campaign(models.Model):
     checkin_reward_config = models.JSONField(default=dict, blank=True)
     checkin_reward_expires_after_days = models.PositiveIntegerField(default=1)
 
+    # --- Anti-replay for self-service check-in ------------------------
+    # The printed store QR is a static token: a customer can photograph it
+    # once and "check in" from home every day. When `checkin_requires_live_qr`
+    # is on, a check-in must also carry a short time-based code that only the
+    # in-store display (promotions.rotating + /checkin-display.html) can
+    # produce from `checkin_secret`. The printed QR then still works for
+    # *registration*, just not for a stamp. Default off = unchanged behaviour.
+    checkin_secret = models.CharField(max_length=64, blank=True, default='')
+    checkin_requires_live_qr = models.BooleanField(default=False)
+
     # A sale at 02:00 belongs to the previous business day for a store that
     # trades past midnight. See promotions.utils.business_local_date.
     business_day_cutover = models.TimeField(default=time(5, 0))
@@ -95,6 +106,11 @@ class Campaign(models.Model):
 
     class Meta:
         ordering = ['-created_at', '-id']
+
+    def save(self, *args, **kwargs):
+        if not self.checkin_secret:
+            self.checkin_secret = secrets.token_hex(32)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f'{self.branch_id} / {self.name}'

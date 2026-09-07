@@ -392,9 +392,26 @@ export interface CheckinResult {
   milestoneVouchers: GuestVoucher[]
 }
 
-/** Self-service check-in: the customer scanned the table QR (same store
- * token as registration) while already holding a card. */
-export async function guestCheckin(storeToken: string): Promise<CheckinResult> {
+/** The rotating proof (`w` window, `c` code) carried by a QR shown on the
+ * in-store display — see public/checkin-display.html. Absent when the
+ * customer scanned the plain printed QR. */
+export interface LiveQrProof {
+  w: string
+  c: string
+}
+
+/** Self-service check-in: the customer scanned a store QR while already
+ * holding a card. Pass `live` when the QR came from the in-store display —
+ * a campaign with `checkin_requires_live_qr` rejects a check-in without it. */
+export async function guestCheckin(
+  storeToken: string,
+  live?: LiveQrProof | null,
+): Promise<CheckinResult> {
+  const body: Record<string, string> = { store_token: storeToken }
+  if (live?.w && live?.c) {
+    body.w = live.w
+    body.c = live.c
+  }
   const d = await guestRequest<{
     already_checked_in: boolean
     stamp_count: number
@@ -402,7 +419,7 @@ export async function guestCheckin(storeToken: string): Promise<CheckinResult> {
     milestone_vouchers: VoucherDto[]
   }>('/guest/checkin/', {
     method: 'POST',
-    body: JSON.stringify({ store_token: storeToken }),
+    body: JSON.stringify(body),
   })
   return {
     alreadyCheckedIn: d.already_checked_in,
@@ -410,6 +427,15 @@ export async function guestCheckin(storeToken: string): Promise<CheckinResult> {
     rewardVoucher: d.reward_voucher ? fromVoucherDto(d.reward_voucher) : null,
     milestoneVouchers: (d.milestone_vouchers || []).map(fromVoucherDto),
   }
+}
+
+/** Pull the rotating proof out of a scanned URL or the current route query. */
+export function liveQrProofFrom(source: URLSearchParams | Record<string, unknown>): LiveQrProof | null {
+  const get = (k: string) =>
+    source instanceof URLSearchParams ? source.get(k) : (source[k] as string | undefined)
+  const w = get('w')
+  const c = get('c')
+  return w && c ? { w: String(w), c: String(c) } : null
 }
 
 export async function register(payload: RegisterPayload): Promise<RegisterResult> {

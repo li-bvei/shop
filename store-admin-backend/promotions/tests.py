@@ -1,9 +1,12 @@
 from datetime import time, timedelta
 
+from django.test import SimpleTestCase
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from common.test_utils import ApiTestCase, TwoOrganizationApiTestCase
+
+from . import rotating
 
 from .models import (
     Campaign, CheckinMilestone, CheckinMilestoneClaim, CheckInRecord, Customer, LotteryDraw, Milestone,
@@ -17,6 +20,50 @@ from .services import (
     void_spend_verification,
 )
 from .utils import business_local_date, client_ip, normalize_birthday_md, normalize_phone
+
+
+class RotatingCodeTests(SimpleTestCase):
+    """The in-store display's rolling check-in code (promotions.rotating)."""
+
+    def test_code_round_trips_for_the_current_window(self):
+        secret = 'a' * 64
+        w = rotating.current_window()
+        code = rotating.code_for(secret, w)
+        self.assertTrue(rotating.verify(secret, w, code))
+        self.assertTrue(rotating.verify(secret, str(w), code))  # window may arrive as a string
+
+    def test_a_stale_code_is_rejected(self):
+        secret = 'b' * 64
+        now = 1_000_000 * rotating.STEP_SECONDS  # a fixed reference time
+        old = rotating.current_window(now) - (rotating.PAST_WINDOWS + 1)
+        self.assertFalse(rotating.verify(secret, old, rotating.code_for(secret, old), now=now))
+        # one window inside the tolerance still passes
+        ok = rotating.current_window(now) - rotating.PAST_WINDOWS
+        self.assertTrue(rotating.verify(secret, ok, rotating.code_for(secret, ok), now=now))
+
+    def test_a_far_future_window_is_rejected(self):
+        secret = 'c' * 64
+        now = 5_000_000 * rotating.STEP_SECONDS
+        future = rotating.current_window(now) + rotating.FUTURE_WINDOWS + 2
+        self.assertFalse(rotating.verify(secret, future, rotating.code_for(secret, future), now=now))
+
+    def test_wrong_secret_or_malformed_input_is_a_plain_false(self):
+        w = rotating.current_window()
+        self.assertFalse(rotating.verify('right' * 12, w, rotating.code_for('wrong' * 12, w)))
+        self.assertFalse(rotating.verify('', w, 'whatever'))
+        self.assertFalse(rotating.verify('s' * 64, 'not-a-number', 'deadbeef'))
+        self.assertFalse(rotating.verify('s' * 64, w, ''))
+
+    def test_setup_blob_is_decodable_json(self):
+        import base64
+        import json
+
+        blob = rotating.make_setup_blob(store_token='tok', secret='sec', brand_name='○○ 心斎橋店')
+        data = json.loads(base64.urlsafe_b64decode(blob.encode()))
+        self.assertEqual(data['t'], 'tok')
+        self.assertEqual(data['s'], 'sec')
+        self.assertEqual(data['n'], '○○ 心斎橋店')
+        self.assertEqual(data['step'], rotating.STEP_SECONDS)
 
 
 def make_campaign(branch, **kwargs):
@@ -410,6 +457,43 @@ class GuestApiTests(ApiTestCase):
         resp = self.client.post('/api/guest/checkin/', {'store_token': 'nope'}, format='json',
                                 HTTP_X_GUEST_TOKEN=cust.card_token)
         self.assertEqual(resp.status_code, 400)
+
+    def test_live_qr_campaign_needs_a_fresh_rotating_code(self):
+        self.campaign.checkin_requires_live_qr = True
+        self.campaign.save(update_fields=['checkin_requires_live_qr'])
+        cust = register_customer(organization=self.org, phone='09011110000', campaign=self.campaign)
+        headers = {'HTTP_X_GUEST_TOKEN': cust.card_token}
+
+        # printed QR only (no w/c) — refused, with a code the app can act on
+        bare = self.client.post('/api/guest/checkin/', {'store_token': self.store_token},
+                                format='json', **headers)
+        self.assertEqual(bare.status_code, 400)
+        self.assertIn('live-qr-required', str(bare.data))
+        self.assertFalse(CheckInRecord.objects.filter(customer=cust).exists())
+
+        # a stale code
+        w = rotating.current_window() - (rotating.PAST_WINDOWS + 2)
+        stale = self.client.post('/api/guest/checkin/', {
+            'store_token': self.store_token, 'w': w, 'c': rotating.code_for(self.campaign.checkin_secret, w),
+        }, format='json', **headers)
+        self.assertEqual(stale.status_code, 400)
+        self.assertIn('live-qr-stale', str(stale.data))
+
+        # a fresh code from the in-store display
+        w = rotating.current_window()
+        ok = self.client.post('/api/guest/checkin/', {
+            'store_token': self.store_token, 'w': w, 'c': rotating.code_for(self.campaign.checkin_secret, w),
+        }, format='json', **headers)
+        self.assertEqual(ok.status_code, 201, ok.content)
+        self.assertEqual(ok.data['stamp_count'], 1)
+        self.assertEqual(CheckInRecord.objects.get(customer=cust).risk_level, 'live')
+
+    def test_checkin_without_the_flag_records_but_does_not_block(self):
+        cust = register_customer(organization=self.org, phone='09022220000', campaign=self.campaign)
+        resp = self.client.post('/api/guest/checkin/', {'store_token': self.store_token},
+                                format='json', HTTP_X_GUEST_TOKEN=cust.card_token)
+        self.assertEqual(resp.status_code, 201)
+        self.assertEqual(CheckInRecord.objects.get(customer=cust).risk_level, 'normal')
 
     def test_public_register_ignores_spend_fields(self):
         resp = self.client.post('/api/guest/register/', {

@@ -8,6 +8,7 @@ import {
   fetchStoreContext,
   getGuestToken,
   guestCheckin,
+  liveQrProofFrom,
   register,
   type StoreContext,
 } from '@/api/guest'
@@ -27,7 +28,14 @@ const errorMsg = ref('')
 const stage = ref<'choose' | 'form'>(route.query.new !== undefined ? 'form' : 'choose')
 
 function goLogin() {
-  router.push({ name: 'guest-login', query: storeToken.value ? { t: storeToken.value } : {} })
+  const query: Record<string, string> = {}
+  if (storeToken.value) query.t = storeToken.value
+  const live = liveQrProofFrom(route.query)
+  if (live) {
+    query.w = live.w
+    query.c = live.c
+  }
+  router.push({ name: 'guest-login', query })
 }
 
 // The chain's brand, resolved from the store-QR token — shown before the
@@ -46,11 +54,12 @@ const brandName = computed(() => {
 onMounted(async () => {
   if (!storeToken.value) return
 
-  // Returning customer scanned the table QR — that's a self-service
-  // check-in, not a re-registration. Record it and open their card.
+  // Returning customer scanned a store QR — that's a self-service check-in,
+  // not a re-registration. Record it (forwarding any in-store rotating
+  // proof) and open their card.
   if (getGuestToken() && route.query.new === undefined) {
     try {
-      const r = await guestCheckin(storeToken.value)
+      const r = await guestCheckin(storeToken.value, liveQrProofFrom(route.query))
       router.replace({
         name: 'guest-card',
         query: { visited: r.alreadyCheckedIn ? 'again' : '1' },

@@ -97,6 +97,7 @@ const blankCampaign = (): CampaignPayload => ({
   checkinRewardType: 'drink',
   checkinRewardConfig: {},
   checkinRewardExpiresAfterDays: 1,
+  checkinRequiresLiveQr: false,
 })
 const campaignForm = reactive<CampaignPayload>(blankCampaign())
 
@@ -161,6 +162,7 @@ function openCampaignEdit(row: Campaign) {
     checkinRewardType: row.checkinRewardType || 'drink',
     checkinRewardConfig: row.checkinRewardConfig ?? {},
     checkinRewardExpiresAfterDays: row.checkinRewardExpiresAfterDays,
+    checkinRequiresLiveQr: row.checkinRequiresLiveQr,
   })
   campaignDialog.value = true
 }
@@ -243,6 +245,24 @@ async function copyRegisterUrl() {
     ElMessage.success(t('promotions.urlCopied'))
   } catch {
     ElMessage.warning(registerUrl.value)
+  }
+}
+
+// ---- in-store check-in display (anti-replay) ----
+const displayUrl = computed(() => `${appBaseUrl}/checkin-display.html`)
+
+function openCheckinDisplay() {
+  window.open(displayUrl.value, '_blank')
+}
+
+async function copyCheckinSetup() {
+  const blob = qrCampaign.value?.checkinSetup ?? ''
+  if (!blob) return
+  try {
+    await navigator.clipboard.writeText(blob)
+    ElMessage.success(t('promotions.checkinSetupCopied'))
+  } catch {
+    ElMessage.warning(blob)
   }
 }
 
@@ -855,6 +875,11 @@ onMounted(async () => {
             <el-switch v-model="campaignForm.checkinRewardEnabled" />
             <span class="field-hint">{{ t('promotions.checkinRewardHint') }}</span>
           </el-form-item>
+
+          <el-form-item :label="t('promotions.checkinLiveQr')" class="span-2">
+            <el-switch v-model="campaignForm.checkinRequiresLiveQr" />
+            <span class="field-hint">{{ t('promotions.checkinLiveQrHint') }}</span>
+          </el-form-item>
           <template v-if="campaignForm.checkinRewardEnabled">
             <el-form-item :label="t('promotions.checkinRewardType')">
               <el-select v-model="campaignForm.checkinRewardType" style="width: 100%">
@@ -912,6 +937,22 @@ onMounted(async () => {
           <el-button type="primary" @click="downloadQr">{{ t('promotions.downloadPng') }}</el-button>
         </div>
         <p class="qr-note">{{ t('promotions.storeQrNote') }}</p>
+
+        <template v-if="qrCampaign?.checkinSetup">
+          <div class="qr-divider" />
+          <p class="qr-subhead">{{ t('promotions.checkinDisplayTitle') }}</p>
+          <p class="qr-note">{{ t('promotions.checkinDisplayNote') }}</p>
+          <p class="qr-url">{{ displayUrl }}</p>
+          <div class="qr-actions">
+            <el-button @click="copyCheckinSetup">{{ t('promotions.checkinSetupCopy') }}</el-button>
+            <el-button type="primary" @click="openCheckinDisplay">
+              {{ t('promotions.checkinDisplayOpen') }}
+            </el-button>
+          </div>
+          <p v-if="!qrCampaign?.checkinRequiresLiveQr" class="qr-note qr-warn">
+            {{ t('promotions.checkinLiveQrOff') }}
+          </p>
+        </template>
       </div>
     </el-dialog>
 
@@ -1078,6 +1119,23 @@ onMounted(async () => {
   font-size: 11.5px;
   color: var(--text-tertiary);
   margin: 14px 0 0;
+}
+
+.qr-note.qr-warn {
+  color: var(--warning, #d48806);
+}
+
+.qr-divider {
+  height: 1px;
+  background: var(--border-color, #e5e7eb);
+  margin: 20px 0 16px;
+}
+
+.qr-subhead {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
 }
 
 .drawer-loading {

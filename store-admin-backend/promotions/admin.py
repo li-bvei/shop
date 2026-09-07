@@ -29,9 +29,13 @@ class RedemptionOptionInline(admin.TabularInline):
 
 @admin.register(Campaign)
 class CampaignAdmin(admin.ModelAdmin):
-    list_display = ['name', 'branch', 'status', 'points_per_1000yen', 'stamp_target', 'created_at']
-    list_filter = ['status', 'branch']
+    list_display = [
+        'name', 'branch', 'status', 'points_per_1000yen', 'stamp_target',
+        'checkin_requires_live_qr', 'created_at',
+    ]
+    list_filter = ['status', 'branch', 'checkin_requires_live_qr']
     search_fields = ['name']
+    readonly_fields = ['checkin_secret']
     inlines = [PrizeInline, MilestoneInline, CheckinMilestoneInline, RedemptionOptionInline]
 
 

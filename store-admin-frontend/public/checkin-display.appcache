@@ -1,0 +1,12 @@
+CACHE MANIFEST
+# The in-store check-in display must keep working if the shop's Wi-Fi drops.
+# AppCache is dead in modern browsers (they just ignore this line) but the
+# iOS 9 iPad this page targets still honours it. Bump the version to force
+# those old devices to re-pull after a deploy.
+# version 1
+
+CACHE:
+checkin-display.html
+
+NETWORK:
+*

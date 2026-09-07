@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from branches.models import Branch
 
+from . import rotating
 from .models import (
     Campaign, CheckinMilestone, CheckInRecord, Customer, LotteryDraw, Milestone, PointsLedger, Prize,
     RedemptionOption, RewardType, RiskEvent, SpendVerification, StaffPermission, Voucher,
@@ -29,6 +30,7 @@ class CampaignSerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField()
     updated_by_name = serializers.SerializerMethodField()
     store_token = serializers.SerializerMethodField()
+    checkin_setup = serializers.SerializerMethodField()
 
     class Meta:
         model = Campaign
@@ -42,6 +44,7 @@ class CampaignSerializer(serializers.ModelSerializer):
             'stamp_target', 'business_day_cutover',
             'checkin_reward_enabled', 'checkin_reward_type', 'checkin_reward_config',
             'checkin_reward_expires_after_days',
+            'checkin_requires_live_qr', 'checkin_setup',
             'created_by_name', 'updated_by_name', 'created_at', 'updated_at', 'store_token',
         ]
         read_only_fields = ['created_at', 'updated_at']
@@ -58,6 +61,23 @@ class CampaignSerializer(serializers.ModelSerializer):
         if obj.status != Campaign.Status.ACTIVE:
             return ''
         return make_store_token(obj)
+
+    def get_checkin_setup(self, obj):
+        """The paste-once string that arms an in-store check-in display for
+        this campaign (see /checkin-display.html). Only for an active
+        campaign, and only handed to admin/branch — it carries the secret."""
+        if obj.status != Campaign.Status.ACTIVE:
+            return ''
+        org = obj.branch.organization
+        brand = ' '.join(
+            p for p in [org.name_ja or org.name_zh, obj.branch.name_ja or obj.branch.name_zh] if p
+        )
+        request = self.context.get('request')
+        origin = request.build_absolute_uri('/').rstrip('/') if request else ''
+        return rotating.make_setup_blob(
+            store_token=make_store_token(obj), secret=obj.checkin_secret,
+            brand_name=brand, origin=origin,
+        )
 
     def validate_active_weekdays(self, value):
         value = (value or '').strip()

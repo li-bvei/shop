@@ -10,6 +10,7 @@ import {
   fetchRedemptions,
   guestCheckin,
   guestLogin,
+  liveQrProofFrom,
   pulseCard,
   redeem,
   selfServeRedeem,
@@ -18,6 +19,7 @@ import {
   type DrawResult,
   type GuestCard,
   type GuestVoucher,
+  type LiveQrProof,
   type RedemptionItem,
   type WheelPrize,
 } from '@/api/guest'
@@ -178,31 +180,37 @@ function newRequestId() {
   return `pc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-// --- self-service check-in (scan the table QR from inside the app) ----------
+// --- self-service check-in (scan the store QR from inside the app) ----------
 const checkinScanning = ref(false)
 
-function extractStoreToken(payload: string): string {
+function parseCheckinScan(payload: string): { token: string; live: LiveQrProof | null } {
   try {
-    return new URL(payload).searchParams.get('t') || payload
+    const u = new URL(payload)
+    return { token: (u.searchParams.get('t') || payload).trim(), live: liveQrProofFrom(u.searchParams) }
   } catch {
-    return payload
+    return { token: payload.trim(), live: null }
   }
 }
 
 async function onCheckinScan(payload: string) {
   checkinScanning.value = false
-  const token = extractStoreToken(payload).trim()
+  const { token, live } = parseCheckinScan(payload)
   if (!token || busy.value) return
   busy.value = true
   try {
-    const r = await guestCheckin(token)
+    const r = await guestCheckin(token, live)
     bonusMsg.value = r.alreadyCheckedIn ? t('guest.checkinAgain') : t('guest.checkinWelcome')
     confettiKey.value += 1
     window.setTimeout(() => (bonusMsg.value = ''), 3400)
     await load()
     tab.value = 'home'
-  } catch {
-    window.alert(t('guest.checkinFailed'))
+  } catch (err) {
+    const body = err instanceof ApiError ? JSON.stringify(err.body) : ''
+    window.alert(
+      body.includes('live-qr-required') || body.includes('live-qr-stale')
+        ? t('guest.checkinNeedsLiveQr')
+        : t('guest.checkinFailed'),
+    )
   } finally {
     busy.value = false
   }

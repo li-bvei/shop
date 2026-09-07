@@ -396,13 +396,19 @@ def verify_spend(*, campaign, branch, customer, amount_yen, table_number='',
     return verification
 
 
-def record_checkin(*, campaign, branch, customer, verified_by=None, ip=None) -> dict:
+def record_checkin(*, campaign, branch, customer, verified_by=None, ip=None,
+                   live_verified=None) -> dict:
     """A standalone "the customer showed their QR" event with no purchase —
     logs the visit for the business day and, if the campaign has the
     check-in reward on, issues the free drink/dessert voucher. Idempotent
     per business day: a second tap the same day just returns
     `already_checked_in=True` with no new voucher. Mirrors verify_spend's
-    locking shape."""
+    locking shape.
+
+    `live_verified` (when not None) records on the CheckInRecord whether the
+    scan carried a valid in-store rotating code — `'live'` vs `'unverified'`
+    — so a manager can tell real visits from a photographed printed QR even
+    on campaigns that don't hard-require the live display."""
     if not campaign_is_open(campaign):
         raise ValidationError({'campaign': ['campaign-not-active']})
     if campaign.branch_id != branch.id:
@@ -418,9 +424,11 @@ def record_checkin(*, campaign, branch, customer, verified_by=None, ip=None) -> 
         if locked.status == Customer.Status.BLOCKED:
             raise ValidationError({'customer': ['customer-blocked']})
 
+        defaults = {'branch': branch, 'checked_in_at': now, 'result': 'checkin_only'}
+        if live_verified is not None:
+            defaults['risk_level'] = 'live' if live_verified else 'unverified'
         check_in, created = CheckInRecord.objects.get_or_create(
-            customer=locked, campaign=campaign, local_date=local_date,
-            defaults={'branch': branch, 'checked_in_at': now, 'result': 'checkin_only'},
+            customer=locked, campaign=campaign, local_date=local_date, defaults=defaults,
         )
         reward = None
         milestone_vouchers = []

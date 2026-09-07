@@ -50,6 +50,8 @@ export interface Campaign {
   checkinRewardType: string
   checkinRewardConfig: Record<string, unknown>
   checkinRewardExpiresAfterDays: number
+  checkinRequiresLiveQr: boolean
+  checkinSetup: string
   createdByName: string
   updatedByName: string
   createdAt: string
@@ -85,6 +87,8 @@ interface CampaignDto {
   checkin_reward_type: string
   checkin_reward_config: Record<string, unknown>
   checkin_reward_expires_after_days: number
+  checkin_requires_live_qr: boolean
+  checkin_setup: string
   created_by_name: string
   updated_by_name: string
   created_at: string
@@ -121,6 +125,8 @@ function fromCampaignDto(d: CampaignDto): Campaign {
     checkinRewardType: d.checkin_reward_type,
     checkinRewardConfig: d.checkin_reward_config ?? {},
     checkinRewardExpiresAfterDays: d.checkin_reward_expires_after_days,
+    checkinRequiresLiveQr: d.checkin_requires_live_qr,
+    checkinSetup: d.checkin_setup ?? '',
     createdByName: d.created_by_name,
     updatedByName: d.updated_by_name,
     createdAt: d.created_at,
@@ -154,6 +160,7 @@ export interface CampaignPayload {
   checkinRewardType: string
   checkinRewardConfig: Record<string, unknown>
   checkinRewardExpiresAfterDays: number
+  checkinRequiresLiveQr: boolean
 }
 
 function toCampaignDto(p: CampaignPayload): Record<string, unknown> {
@@ -182,6 +189,7 @@ function toCampaignDto(p: CampaignPayload): Record<string, unknown> {
     checkin_reward_type: p.checkinRewardType,
     checkin_reward_config: p.checkinRewardConfig,
     checkin_reward_expires_after_days: p.checkinRewardExpiresAfterDays,
+    checkin_requires_live_qr: p.checkinRequiresLiveQr,
   }
 }
 

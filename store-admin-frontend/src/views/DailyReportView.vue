@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { Download, Clock } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Download, Clock, Printer, Refresh, WarningFilled } from '@element-plus/icons-vue'
+import { usePrintFit } from '@/composables/usePrintFit'
 import { fetchPaymentMethods, type PaymentMethodDef } from '@/api/masterData'
 import { fetchStaffByBranch, type StaffMember } from '@/api/staff'
 import {
@@ -25,6 +26,9 @@ import DailyReportForm, {
 } from '@/components/DailyReportForm.vue'
 import { formatCurrency, branchDisplayName, todayJst } from '@/utils/format'
 import { downloadCustomExcel } from '@/utils/excelExport'
+import {
+  saveDraft, getDraft, clearDraft, listDrafts, isNetworkFailure, type DailyReportDraft,
+} from '@/utils/dailyReportDraft'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -40,6 +44,30 @@ const reportId = ref<number | null>(null)
 const submitting = ref(false)
 
 const reportForm = reactive<DailyReportFormData>(normalizeDailyReportFormData({}))
+// The report's server-side updated_at as of the last successful load/save —
+// compared against the live server value at sync time to tell whether
+// someone else saved a newer version while this device was offline.
+const reportUpdatedAt = ref<string | null>(null)
+// Whether the form currently on screen came from an unsynced local draft
+// rather than the server (see loadReport) — shown so the user knows this
+// day still needs to reach the server.
+const viewingUnsyncedDraft = ref(false)
+const pendingDrafts = ref<DailyReportDraft[]>([])
+const syncingDrafts = ref(false)
+
+function refreshPendingDrafts() {
+  pendingDrafts.value = listDrafts()
+}
+
+const printRoot = ref<HTMLElement>()
+const { fitAndPrint } = usePrintFit(printRoot, { marginMm: 10 })
+
+async function handlePrint() {
+  const originalTitle = document.title
+  document.title = exportFileName.value
+  await fitAndPrint()
+  document.title = originalTitle
+}
 
 const historyDialogVisible = ref(false)
 const historyLoading = ref(false)
@@ -84,16 +112,26 @@ async function loadReport() {
   paymentMethods.value = methods
 
   reportId.value = seed.id
-  reportForm.personInCharge = seed.personInCharge
-  reportForm.totalRevenue = seed.totalRevenue
-  reportForm.totalCustomers = seed.totalCustomers
-  reportForm.groupCount = seed.groupCount
-  reportForm.morningRevenue = seed.morningRevenue
-  reportForm.morningCustomers = seed.morningCustomers
-  reportForm.morningGroupCount = seed.morningGroupCount
-  reportForm.paymentAmounts = { ...seed.paymentAmounts }
-  reportForm.expenses = seed.expenses.map((e) => ({ ...e }))
-  reportForm.cashRegisterCounts = { ...seed.cashRegisterCounts }
+  reportUpdatedAt.value = seed.updatedAt
+
+  // An unsynced local draft for this exact branch+date wins over whatever
+  // the server just returned — that server copy predates the offline edit
+  // (or the report doesn't exist there yet), so showing it instead would
+  // make the user think their earlier work was lost.
+  const draft = getDraft(branchId.value, reportDate.value)
+  viewingUnsyncedDraft.value = !!draft
+  const source = draft ? draft.data : seed
+
+  reportForm.personInCharge = source.personInCharge
+  reportForm.totalRevenue = source.totalRevenue
+  reportForm.totalCustomers = source.totalCustomers
+  reportForm.groupCount = source.groupCount
+  reportForm.morningRevenue = source.morningRevenue
+  reportForm.morningCustomers = source.morningCustomers
+  reportForm.morningGroupCount = source.morningGroupCount
+  reportForm.paymentAmounts = { ...source.paymentAmounts }
+  reportForm.expenses = source.expenses.map((e) => ({ ...e }))
+  reportForm.cashRegisterCounts = { ...source.cashRegisterCounts }
 }
 
 onMounted(async () => {
@@ -107,6 +145,17 @@ onMounted(async () => {
     reportDate.value = route.query.date
   }
   await loadReport()
+  refreshPendingDrafts()
+  // Best-effort: try once at page load (in case connectivity came back while
+  // the tab was closed) and again whenever the browser reports the network
+  // coming back up. Both are silent unless there's actually a conflict to
+  // ask the user about — see syncAllDrafts.
+  void syncAllDrafts()
+  window.addEventListener('online', syncAllDrafts)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('online', syncAllDrafts)
 })
 
 watch([branchId, reportDate], () => {
@@ -118,16 +167,115 @@ async function handleSubmit() {
   try {
     const derived = computeDerived(reportForm, paymentMethods.value)
     const snapshot = JSON.parse(JSON.stringify(reportForm))
-    reportId.value = await saveDailyReport(reportId.value, branchId.value, reportDate.value, snapshot)
-    await saveDailyReportHistorySnapshot({
-      branchId: branchId.value,
-      date: reportDate.value,
-      cashRemaining: derived.cashRemaining,
-      data: snapshot,
-    })
-    ElMessage.success(t('dailyReport.savedSuccess'))
+    try {
+      reportId.value = await saveDailyReport(reportId.value, branchId.value, reportDate.value, snapshot)
+      await saveDailyReportHistorySnapshot({
+        branchId: branchId.value,
+        date: reportDate.value,
+        cashRemaining: derived.cashRemaining,
+        data: snapshot,
+      })
+      clearDraft(branchId.value, reportDate.value)
+      refreshPendingDrafts()
+      viewingUnsyncedDraft.value = false
+      const fresh = await fetchDailyReport(branchId.value, reportDate.value)
+      reportUpdatedAt.value = fresh.updatedAt
+      ElMessage.success(t('dailyReport.savedSuccess'))
+    } catch (err) {
+      if (!isNetworkFailure(err)) throw err
+      // Offline (or the server is unreachable) — keep the entry instead of
+      // losing it. `reportUpdatedAt` is the last version we know the server
+      // actually has, so syncAllDrafts can tell later whether someone else
+      // also saved this day while we were offline.
+      saveDraft({
+        branchId: branchId.value, date: reportDate.value, data: snapshot,
+        baseUpdatedAt: reportUpdatedAt.value, savedLocallyAt: new Date().toISOString(),
+      })
+      refreshPendingDrafts()
+      viewingUnsyncedDraft.value = true
+      ElMessage({ type: 'warning', message: t('dailyReport.savedLocallyOffline'), duration: 5000 })
+    }
   } finally {
     submitting.value = false
+  }
+}
+
+/** Pushes one offline draft to the server. Returns whether it synced clean,
+ * hit a conflict (the server has a newer save than the draft was based on),
+ * or simply failed again (still offline) — the last two both leave the
+ * draft in place for a later retry. A real validation error (not a network
+ * failure) is left to propagate — silently discarding a draft over that
+ * would lose real data instead of protecting it. */
+async function syncOneDraft(draft: DailyReportDraft): Promise<'synced' | 'conflict' | 'still-offline'> {
+  const current = await fetchDailyReport(draft.branchId, draft.date)
+  if (draft.baseUpdatedAt && current.updatedAt && current.updatedAt !== draft.baseUpdatedAt) {
+    return 'conflict'
+  }
+  const methods = await fetchPaymentMethods(draft.branchId)
+  const derived = computeDerived(draft.data, methods)
+  await saveDailyReport(current.id, draft.branchId, draft.date, draft.data)
+  await saveDailyReportHistorySnapshot({
+    branchId: draft.branchId, date: draft.date, cashRemaining: derived.cashRemaining, data: draft.data,
+  })
+  clearDraft(draft.branchId, draft.date)
+  return 'synced'
+}
+
+async function syncAllDrafts() {
+  if (syncingDrafts.value) return
+  syncingDrafts.value = true
+  try {
+    const drafts = listDrafts()
+    let syncedAny = false
+    for (const draft of drafts) {
+      let outcome: 'synced' | 'conflict' | 'still-offline'
+      try {
+        outcome = await syncOneDraft(draft)
+      } catch (err) {
+        if (!isNetworkFailure(err)) throw err
+        outcome = 'still-offline'
+      }
+      if (outcome === 'synced') syncedAny = true
+      else if (outcome === 'conflict') await resolveDraftConflict(draft)
+    }
+    refreshPendingDrafts()
+    if (syncedAny) {
+      ElMessage.success(t('dailyReport.draftSyncSuccess'))
+      if (!getDraft(branchId.value, reportDate.value)) await loadReport()
+    }
+  } finally {
+    syncingDrafts.value = false
+  }
+}
+
+/** The server has a save newer than what this draft was based on — ask
+ * which one should win rather than guessing. "Use local" force-pushes the
+ * draft over it; "use server" just discards the draft. Leaving the dialog
+ * without choosing (Escape/backdrop) keeps the draft pending — it'll be
+ * asked about again on the next sync attempt, nothing is lost either way. */
+async function resolveDraftConflict(draft: DailyReportDraft) {
+  try {
+    await ElMessageBox.confirm(
+      t('dailyReport.draftConflictMessage', { date: draft.date }),
+      t('dailyReport.draftConflictTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('dailyReport.draftConflictUseLocal'),
+        cancelButtonText: t('dailyReport.draftConflictUseServer'),
+        distinguishCancelAndClose: true,
+      },
+    )
+    const current = await fetchDailyReport(draft.branchId, draft.date)
+    const methods = await fetchPaymentMethods(draft.branchId)
+    const derived = computeDerived(draft.data, methods)
+    await saveDailyReport(current.id, draft.branchId, draft.date, draft.data)
+    await saveDailyReportHistorySnapshot({
+      branchId: draft.branchId, date: draft.date, cashRemaining: derived.cashRemaining, data: draft.data,
+    })
+    clearDraft(draft.branchId, draft.date)
+  } catch (action) {
+    if (action === 'cancel') clearDraft(draft.branchId, draft.date)
+    // 'close' (Escape/backdrop): leave the draft pending, decide next time.
   }
 }
 
@@ -261,12 +409,28 @@ async function handleDownload() {
           </el-select>
           <span v-else class="branch-badge">{{ branchLabel(branchId) }}</span>
         </div>
-        <el-button :icon="Download" @click="handleDownload">{{ t('common.downloadExcel') }}</el-button>
+        <div class="no-print form-header-actions">
+          <el-button :icon="Printer" @click="handlePrint">{{ t('common.print') }}</el-button>
+          <el-button :icon="Download" @click="handleDownload">{{ t('common.downloadExcel') }}</el-button>
+        </div>
       </div>
 
-      <DailyReportForm v-model:data="reportForm" :branch-id="branchId" />
+      <div v-if="pendingDrafts.length" class="no-print draft-banner">
+        <el-icon><WarningFilled /></el-icon>
+        <span>
+          {{ viewingUnsyncedDraft ? t('dailyReport.viewingUnsyncedDraft') : '' }}
+          {{ t('dailyReport.pendingDraftsCount', { count: pendingDrafts.length }) }}
+        </span>
+        <el-button size="small" :icon="Refresh" :loading="syncingDrafts" @click="syncAllDrafts">
+          {{ t('dailyReport.syncNow') }}
+        </el-button>
+      </div>
 
-      <div class="submit-row">
+      <div ref="printRoot">
+        <DailyReportForm v-model:data="reportForm" :branch-id="branchId" />
+      </div>
+
+      <div class="submit-row no-print">
         <el-button :icon="Clock" @click="openHistory">{{ t('dailyReport.viewHistory') }}</el-button>
         <el-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('dailyReport.submit') }}</el-button>
       </div>
@@ -356,6 +520,36 @@ async function handleDownload() {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.form-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.draft-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--warning-light, #fdf3e2);
+  border: 1px solid var(--warning, #b7791f);
+  color: var(--warning, #b7791f);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  margin-bottom: 16px;
+  font-size: 12.5px;
+}
+
+.draft-banner span {
+  flex: 1;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
 }
 
 .branch-badge {

@@ -6,12 +6,19 @@ from rest_framework.generics import RetrieveAPIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.views import TokenObtainPairView
 
 from common.permissions import IsAdminRole
 
 from .models import User, UserPreference
-from .serializers import MeSerializer, UserPreferenceSerializer, UserSerializer
-from .services import guard_account_deactivation
+from .serializers import (
+    MeSerializer, OrganizationScopedTokenObtainPairSerializer, UserPreferenceSerializer, UserSerializer,
+)
+from .services import guard_account_deactivation, guard_account_deletion
+
+
+class OrganizationScopedTokenObtainPairView(TokenObtainPairView):
+    serializer_class = OrganizationScopedTokenObtainPairSerializer
 
 
 class MeView(RetrieveAPIView):
@@ -109,18 +116,17 @@ class UserViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminRole]
 
     def get_queryset(self):
-        return User.objects.filter(organization_id=self.request.user.organization_id)
+        # is_superuser=False: a platform superuser account can belong to an
+        # Organization (see organizations.views.PlatformOrganizationUsersView)
+        # without being manageable by that org's own admin — it must never
+        # show up in, or be editable from, a regular org's account list.
+        return User.objects.filter(organization_id=self.request.user.organization_id, is_superuser=False)
 
     def perform_create(self, serializer):
         serializer.save(organization=self.request.user.organization)
 
     def perform_destroy(self, instance):
-        if instance == self.request.user:
-            raise ValidationError('cannot delete the account you are currently logged in as.')
-        if instance.role == User.Role.ADMIN and User.objects.filter(
-            role=User.Role.ADMIN, organization_id=self.request.user.organization_id,
-        ).count() <= 1:
-            raise ValidationError('at least one admin account must remain.')
+        guard_account_deletion(instance, acting_user=self.request.user)
         instance.delete()
 
     @action(detail=True, methods=['post'])

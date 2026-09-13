@@ -1,3 +1,4 @@
+from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db.models import Avg, Q
@@ -71,5 +72,65 @@ def compute_price_comparisons(records):
         result[r.id] = {
             'direction': direction, 'prior_avg': avg,
             'delta_amount': delta, 'delta_percent': percent,
+        }
+    return result
+
+
+def compute_prior_purchase_deltas(records):
+    """For each record, compares its unit_price against the immediately
+    preceding purchase of the *same* (branch, supplier, item_name_normalized)
+    — i.e. "vs last time we bought this", not a monthly average. This is a
+    separate, deliberately simpler comparison from compute_price_comparisons
+    above (which stays month-average-based for the price_change filter,
+    since a straight last-purchase diff can look wildly misleading when two
+    deliveries of the same item are months apart) — this one is only for the
+    at-a-glance row hint the user actually watches day to day.
+
+    One bulk query bounded to the groups actually present in `records`
+    (never one query per record — see compute_price_comparisons for why
+    that matters at this table's size), then the "previous" row within each
+    group is found by walking the group in (date, id) order in Python.
+
+    Returns {record.id: {'prior_unit_price', 'direction', 'delta_amount',
+    'delta_percent'}}. A record with no prior purchase, or whose price is
+    unchanged from it, is simply absent — same "absent means no comparison"
+    convention as compute_price_comparisons.
+    """
+    records = list(records)
+    if not records:
+        return {}
+
+    keys = {(r.branch_id, r.supplier_id, r.item_name_normalized) for r in records}
+    query = Q()
+    for branch_id, supplier_id, item_name_normalized in keys:
+        query |= Q(branch_id=branch_id, supplier_id=supplier_id, item_name_normalized=item_name_normalized)
+
+    groups = defaultdict(list)
+    for row in PurchaseRecord.objects.filter(query).values(
+        'id', 'branch_id', 'supplier_id', 'item_name_normalized', 'date', 'unit_price',
+    ).order_by('date', 'id'):
+        key = (row['branch_id'], row['supplier_id'], row['item_name_normalized'])
+        groups[key].append(row)
+
+    result = {}
+    for r in records:
+        group = groups.get((r.branch_id, r.supplier_id, r.item_name_normalized), [])
+        prior = None
+        for row in group:
+            if (row['date'], row['id']) >= (r.date, r.id):
+                break
+            prior = row
+        if prior is None or prior['unit_price'] == r.unit_price:
+            continue
+        prior_price = prior['unit_price']
+        delta = r.unit_price - prior_price
+        percent = None if prior_price == 0 else (delta / prior_price * Decimal('100')).quantize(
+            Decimal('0.1'), rounding=ROUND_HALF_UP,
+        )
+        result[r.id] = {
+            'prior_unit_price': prior_price,
+            'direction': 'up' if delta > 0 else 'down',
+            'delta_amount': delta,
+            'delta_percent': percent,
         }
     return result

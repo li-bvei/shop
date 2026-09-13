@@ -38,6 +38,22 @@ function reportUnexpectedError(error: unknown) {
   ElMessage.error(i18n.global.t('common.unexpectedError'))
 }
 
+// Native <input type="number"> steps its value on mouse-wheel scroll while
+// focused — easy to trigger by accident just scrolling the page over a
+// number field (daily-report counts, cash-register denominations, purchase
+// quantity/unit price...), silently changing a value nobody meant to touch.
+// Blurring the field on wheel (capture phase, so it fires before the
+// browser's own step-the-value handling) stops that without blocking the
+// page's own scroll.
+window.addEventListener(
+  'wheel',
+  () => {
+    const el = document.activeElement
+    if (el instanceof HTMLInputElement && el.type === 'number') el.blur()
+  },
+  { capture: true, passive: true },
+)
+
 app.config.errorHandler = (err) => reportUnexpectedError(err)
 // Vue's own scheduler routes most render/effect errors through errorHandler
 // above, but a rejected promise outside any Vue-tracked async context (e.g.

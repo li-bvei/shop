@@ -16,3 +16,17 @@ def guard_account_deactivation(target, is_active, *, acting_user):
         ).exclude(pk=target.pk)
         if not other_active_admins.exists():
             raise ValidationError('at least one active admin account must remain for this organization.')
+
+
+def guard_account_deletion(target, *, acting_user):
+    """Raise if deleting `target` isn't allowed. Shared by the org-admin
+    account screen (UserViewSet.perform_destroy) and the platform
+    (super-admin) one."""
+    if target == acting_user:
+        raise ValidationError('cannot delete the account you are currently logged in as.')
+    if target.role == User.Role.ADMIN:
+        other_admins = User.objects.filter(
+            role=User.Role.ADMIN, organization_id=target.organization_id,
+        ).exclude(pk=target.pk)
+        if not other_admins.exists():
+            raise ValidationError('at least one admin account must remain.')

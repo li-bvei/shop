@@ -8,11 +8,17 @@ import {
 export interface DailyReportSeed extends DailyReportFormData {
   /** null when no report has ever been saved for this branch+date yet. */
   id: number | null
+  /** null alongside id === null. Used to detect whether the server's copy
+   * changed underneath an offline-saved draft before syncing it back —
+   * see utils/dailyReportDraft.ts. */
+  updatedAt: string | null
 }
 
-const EMPTY_SEED: DailyReportFormData = normalizeDailyReportFormData({
-  cashRegisterCounts: createEmptyCashRegisterCounts(),
-})
+const EMPTY_SEED: DailyReportFormData & { id: null; updatedAt: null } = {
+  ...normalizeDailyReportFormData({ cashRegisterCounts: createEmptyCashRegisterCounts() }),
+  id: null,
+  updatedAt: null,
+}
 
 interface DailyReportDto {
   id: number
@@ -28,11 +34,13 @@ interface DailyReportDto {
   payment_amounts: Record<string, number>
   expenses: DailyReportFormData['expenses']
   cash_register_counts?: Record<string, number>
+  updated_at: string
 }
 
 function fromDto(dto: DailyReportDto): DailyReportSeed {
   return {
     id: dto.id,
+    updatedAt: dto.updated_at,
     ...normalizeDailyReportFormData({
       personInCharge: dto.person_in_charge != null ? String(dto.person_in_charge) : '',
       totalRevenue: Number(dto.total_revenue),
@@ -79,7 +87,7 @@ function toDto(branchId: string, date: string, data: DailyReportFormData) {
 export async function fetchDailyReport(branchId: string, date: string): Promise<DailyReportSeed> {
   const params = new URLSearchParams({ branch: branchId, date })
   const rows = await http.get<DailyReportDto[]>(`/daily-reports/?${params.toString()}`)
-  return rows[0] ? fromDto(rows[0]) : { ...EMPTY_SEED, id: null }
+  return rows[0] ? fromDto(rows[0]) : { ...EMPTY_SEED }
 }
 
 /** Upserts the branch+date's live report; returns its id (new or existing). */

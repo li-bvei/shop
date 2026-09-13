@@ -1,5 +1,5 @@
 import django_filters
-from django.db.models import Count
+from django.db.models import Count, Sum
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import filters as drf_filters, viewsets
@@ -12,7 +12,7 @@ from common.permissions import BranchScopedQuerysetMixin
 
 from .models import PurchaseRecord, Supplier
 from .serializers import PurchaseRecordSerializer, SupplierSerializer
-from .services import compute_price_comparisons
+from .services import compute_price_comparisons, compute_prior_purchase_deltas
 from .utils import normalize_item_name
 
 
@@ -74,6 +74,17 @@ class PurchaseRecordViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
 
     def filter_queryset(self, queryset):
         queryset = super().filter_queryset(queryset)
+        # OrderingFilter fully replaces the queryset's ordering with whatever
+        # single field the frontend requested (e.g. just 'date') the moment an
+        # `ordering` query param is present — it doesn't fall back to this
+        # viewset's own `ordering = ['-date', '-id']` default for the tiebreak
+        # anymore. Without `-id` here, several rows entered on the same date
+        # come back in whatever order the DB happens to return them, not
+        # newest-entered-first. Appending it is always safe (redundant, never
+        # wrong) even when the requested field already disambiguates ties.
+        order_by = list(queryset.query.order_by)
+        if 'id' not in order_by and '-id' not in order_by:
+            queryset = queryset.order_by(*order_by, '-id')
         price_change = self.request.query_params.get('price_change')
         if price_change and self.action == 'list':
             if price_change not in ('up', 'down'):
@@ -92,12 +103,78 @@ class PurchaseRecordViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         page = self.paginate_queryset(queryset)
         target = page if page is not None else queryset
-        comparisons = compute_price_comparisons(target)
-        context = {**self.get_serializer_context(), 'price_comparisons': comparisons}
+        context = {
+            **self.get_serializer_context(),
+            'price_comparisons': compute_price_comparisons(target),
+            'prior_purchase_deltas': compute_prior_purchase_deltas(target),
+        }
         serializer = self.get_serializer(target, many=True, context=context)
         if page is not None:
             return self.get_paginated_response(serializer.data)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def month_total(self, request):
+        """Sum of `amount` over whatever filters are in effect, computed
+        DB-side. Exists so the frontend's month-total tile no longer has to
+        page through every matching record just to add them up client-side
+        — that extra unbounded fetch (on top of the already-paginated list
+        request) was the main cost behind the multi-second filter/page
+        delay reported against this view."""
+        total = self.filter_queryset(self.get_queryset()).aggregate(total=Sum('amount'))['total']
+        return Response({'total': total or 0})
+
+    @action(detail=False, methods=['post'])
+    def bulk_replace(self, request):
+        """Find-and-replace one specific wrong value across every matching
+        record — e.g. a whole delivery was logged under the wrong date, or
+        under the wrong supplier. Narrow the search with the same query
+        params the list view accepts (branch/supplier/month/item_name),
+        then supply the exact `field` + `old_value` to find and the
+        `new_value` to replace it with. Always previews the match count
+        and a short sample first; only writes when `confirm: true` is
+        also sent, so a mistyped old_value can't silently rewrite more
+        rows than intended.
+
+        Only `date` and `supplier` are replaceable — item_name/quantity/
+        unit_price are typed per row on purpose (batch-editing those would
+        mean overwriting a mix of different real transactions, not fixing
+        one repeated mistake)."""
+        field = request.data.get('field')
+        if field not in ('date', 'supplier'):
+            raise ValidationError({'field': ["Must be 'date' or 'supplier'."]})
+
+        old_value = request.data.get('old_value')
+        new_value = request.data.get('new_value')
+        if not old_value or not new_value:
+            raise ValidationError({'old_value': ['old_value and new_value are both required.']})
+
+        lookup_field = 'supplier_id' if field == 'supplier' else field
+        if field == 'supplier':
+            new_supplier = Supplier.objects.filter(
+                id=new_value, organization_id=request.user.organization_id,
+            ).first()
+            if not new_supplier:
+                raise ValidationError({'new_value': ['supplier-not-found']})
+
+        queryset = self.filter_queryset(self.get_queryset())
+        try:
+            queryset = queryset.filter(**{lookup_field: old_value})
+        except (ValueError, TypeError) as exc:
+            raise ValidationError({'old_value': [str(exc)]})
+
+        count = queryset.count()
+        if not request.data.get('confirm'):
+            preview = list(
+                queryset.select_related('supplier').order_by('-date', '-id')[:20].values(
+                    'id', 'date', 'branch_id', 'supplier_id', 'supplier__name', 'item_name', 'quantity', 'unit_price',
+                ),
+            )
+            return Response({'matchedCount': count, 'preview': preview})
+
+        if count:
+            queryset.update(**{lookup_field: new_value})
+        return Response({'replacedCount': count})
 
     @action(detail=False, methods=['get'])
     def suggestions(self, request):

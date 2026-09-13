@@ -22,9 +22,19 @@ const routeTitleKeys: Record<string, string> = {
   'platform-manage': 'platformFeatures.title',
 }
 
+// Hour buckets, not a fixed string — this used to say "おはようございます"
+// (good morning) all day regardless of the actual time.
+function greetingKey() {
+  const hour = new Date().getHours()
+  if (hour >= 5 && hour < 11) return 'topbar.greetingMorning'
+  if (hour >= 11 && hour < 18) return 'topbar.greetingAfternoon'
+  if (hour >= 18 && hour < 23) return 'topbar.greetingEvening'
+  return 'topbar.greetingLateNight'
+}
+
 const pageTitle = computed(() => {
   const key = routeTitleKeys[route.name as string]
-  return key ? t(key) : t('topbar.greeting')
+  return key ? t(key) : t(greetingKey())
 })
 
 // Below the mobile breakpoint the sidebar becomes a slide-in drawer instead

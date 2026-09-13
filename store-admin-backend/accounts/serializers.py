@@ -1,10 +1,29 @@
 from rest_framework import serializers
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from branches.models import Branch
 from common.features import enabled_features_for_org
 from staff.models import StaffMember
 
 from .models import User, UserPreference
+
+
+class OrganizationScopedTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """Blocks login itself for a suspended Organization's accounts, instead
+    of letting them log in successfully only to have
+    common.authentication.OrganizationScopedJWTAuthentication reject the
+    very next request — confusing on its own, and every already-open tab
+    for that tenant would also fail requests one call at a time rather
+    than the more legible up-front auth error a suspended tenant should
+    get."""
+
+    def validate(self, attrs):
+        data = super().validate(attrs)
+        user = self.user
+        if not user.is_superuser and not user.organization.active:
+            raise AuthenticationFailed('organization-suspended', code='organization_suspended')
+        return data
 
 
 class MeSerializer(serializers.ModelSerializer):

@@ -35,6 +35,13 @@ class PurchaseRecordSerializer(serializers.ModelSerializer):
     prior_month_avg_unit_price = serializers.SerializerMethodField()
     price_delta_amount = serializers.SerializerMethodField()
     price_delta_percent = serializers.SerializerMethodField()
+    # A second, separate comparison basis — see
+    # purchasing.services.compute_prior_purchase_deltas for why this isn't
+    # just derived from the fields above.
+    prior_purchase_unit_price = serializers.SerializerMethodField()
+    prior_purchase_direction = serializers.SerializerMethodField()
+    prior_purchase_delta_amount = serializers.SerializerMethodField()
+    prior_purchase_delta_percent = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseRecord
@@ -43,6 +50,8 @@ class PurchaseRecordSerializer(serializers.ModelSerializer):
             'quantity', 'unit_price', 'amount', 'note',
             'price_direction', 'prior_month_avg_unit_price',
             'price_delta_amount', 'price_delta_percent',
+            'prior_purchase_unit_price', 'prior_purchase_direction',
+            'prior_purchase_delta_amount', 'prior_purchase_delta_percent',
         ]
         read_only_fields = ['amount', 'item_name_normalized']
         extra_kwargs = {
@@ -68,6 +77,22 @@ class PurchaseRecordSerializer(serializers.ModelSerializer):
 
     def get_price_delta_percent(self, obj):
         entry = self.context.get('price_comparisons', {}).get(obj.id)
+        return entry['delta_percent'] if entry else None
+
+    def get_prior_purchase_unit_price(self, obj):
+        entry = self.context.get('prior_purchase_deltas', {}).get(obj.id)
+        return entry['prior_unit_price'] if entry else None
+
+    def get_prior_purchase_direction(self, obj):
+        entry = self.context.get('prior_purchase_deltas', {}).get(obj.id)
+        return entry['direction'] if entry else None
+
+    def get_prior_purchase_delta_amount(self, obj):
+        entry = self.context.get('prior_purchase_deltas', {}).get(obj.id)
+        return entry['delta_amount'] if entry else None
+
+    def get_prior_purchase_delta_percent(self, obj):
+        entry = self.context.get('prior_purchase_deltas', {}).get(obj.id)
         return entry['delta_percent'] if entry else None
 
     def validate(self, attrs):

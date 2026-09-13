@@ -192,9 +192,12 @@ async function querySuggestions(queryString: string, cb: (results: SuggestionOpt
   cb(results.map((s) => ({ ...s, value: s.itemName })))
 }
 
+// Only the item name (and purpose, which tends to repeat — "买菜"/"办公用品")
+// come from history. The amount never does: two reimbursements for the same
+// item are essentially never the same yen figure, so pre-filling it just
+// invites submitting last time's number by mistake instead of this time's.
 function handleSelectSuggestion(row: ExpenseRow, suggestion: SuggestionOption) {
   row.itemName = suggestion.itemName
-  row.amount = suggestion.lastAmount
   row.purpose = suggestion.lastPurpose
 }
 
@@ -202,7 +205,6 @@ function applyQuickSuggestion(suggestion: SuggestionOption) {
   const emptyRow = data.value.expenses.find((r) => !r.itemName)
   const target = emptyRow ?? { itemName: '', amount: null, purpose: '' }
   target.itemName = suggestion.itemName
-  target.amount = suggestion.lastAmount
   target.purpose = suggestion.lastPurpose
   if (!emptyRow) data.value.expenses.push(target)
 }
@@ -323,7 +325,12 @@ async function handleAddPaymentMethod() {
       <section class="report-section col">
         <div class="section-title"><el-icon class="field-icon"><CreditCard /></el-icon>{{ t('dailyReport.paymentMethodsTitle') }}</div>
         <div class="list-rows">
-          <div v-for="method in paymentMethods" :key="method.id" class="pm-row">
+          <div
+            v-for="method in paymentMethods"
+            :key="method.id"
+            class="pm-row"
+            :class="{ 'pm-zero-print-hide': !method.protected && !data.paymentAmounts[String(method.id)] }"
+          >
             <span class="pm-name"><span class="pm-dot" />{{ paymentMethodLabel(method) }}</span>
             <div class="pm-controls">
               <el-input
@@ -409,18 +416,11 @@ async function handleAddPaymentMethod() {
                 :placeholder="t('dailyReport.itemNamePlaceholder')"
                 :fetch-suggestions="querySuggestions"
                 @select="(s: SuggestionOption) => handleSelectSuggestion(row, s)"
-              >
-                <template #default="{ item }">
-                  <div class="suggestion-item">
-                    <span>{{ item.itemName }}</span>
-                    <span class="suggestion-meta">{{ formatCurrency(item.lastAmount) }}</span>
-                  </div>
-                </template>
-              </el-autocomplete>
+              />
             </div>
             <MoneyInput v-model="row.amount" class="i2" />
             <el-input v-model="row.purpose" class="i3" :placeholder="t('dailyReport.purposePlaceholder')" />
-            <el-button circle text :icon="Close" class="no-print" @click="removeExpenseRow(index)" />
+            <el-button circle text :icon="Close" class="remove-row-btn no-print" @click="removeExpenseRow(index)" />
           </div>
 
           <div class="expense-actions no-print">
@@ -645,16 +645,20 @@ async function handleAddPaymentMethod() {
 .expense-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 10px;
 }
 
-.expense-row > * {
-  min-width: 0;
-}
-
+/* Each field gets a real floor (not 0) so a narrower row — browser zoom
+   shrinks the effective viewport the same way a narrower window would —
+   wraps the row onto a second line once it runs out of space, instead of
+   squeezing every input below a legible/tappable size. The amount field in
+   particular used to be the first to go: it had the smallest flex-grow of
+   the three, so it always lost the fight for space first. */
 .expense-row .i1 {
-  flex: 1.4 1.4 0;
+  flex: 1.4 1.4 160px;
+  min-width: 140px;
 }
 
 .expense-row .i1 :deep(.el-autocomplete),
@@ -663,11 +667,19 @@ async function handleAddPaymentMethod() {
 }
 
 .expense-row .i2 {
-  flex: 0.8 0.8 0;
+  flex: 0.8 0.8 110px;
+  min-width: 100px;
 }
 
 .expense-row .i3 {
-  flex: 1.6 1.6 0;
+  flex: 1.6 1.6 160px;
+  min-width: 130px;
+}
+
+.expense-row .remove-row-btn {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
 }
 
 .expense-actions {
@@ -910,6 +922,13 @@ async function handleAddPaymentMethod() {
 
   :deep(.el-input.is-disabled .el-input__wrapper) {
     background: none;
+  }
+
+  /* Every payment method still prints on screen (so it's there to fill in),
+     but a method nobody used today is just blank noise on paper — cash
+     stays regardless, it's the reconciliation anchor. */
+  .pm-zero-print-hide {
+    display: none;
   }
 }
 </style>

@@ -95,18 +95,135 @@ export async function setOrganizationFeature(
   )
 }
 
+/** Onboards a brand-new tenant — organization, and optionally its first
+ * branch and first admin account, all in one call (the UI form for what
+ * `manage.py provision_organization` has always done from the shell). */
+export async function createPlatformOrganization(payload: {
+  code: string
+  nameZh: string
+  nameJa: string
+  branchCode?: string
+  branchNameZh?: string
+  branchNameJa?: string
+  adminAccount?: string
+  adminPassword?: string
+}): Promise<PlatformOrg> {
+  return fromDto(await http.post<PlatformOrgDto>('/platform/organizations/', {
+    code: payload.code, name_zh: payload.nameZh, name_ja: payload.nameJa,
+    branch_code: payload.branchCode, branch_name_zh: payload.branchNameZh, branch_name_ja: payload.branchNameJa,
+    admin_account: payload.adminAccount, admin_password: payload.adminPassword,
+  }))
+}
+
+/** Rename a tenant, or suspend/reactivate it (`active`) — a suspended
+ * tenant's accounts are rejected at login and on every request after. */
+export async function updatePlatformOrganization(
+  orgId: number,
+  payload: { nameZh?: string; nameJa?: string; active?: boolean },
+): Promise<PlatformOrg> {
+  return fromDto(await http.patch<PlatformOrgDto>(`/platform/organizations/${orgId}/`, {
+    ...(payload.nameZh !== undefined ? { name_zh: payload.nameZh } : {}),
+    ...(payload.nameJa !== undefined ? { name_ja: payload.nameJa } : {}),
+    ...(payload.active !== undefined ? { active: payload.active } : {}),
+  }))
+}
+
+export interface PlatformBranch {
+  id: string
+  code: string
+  nameZh: string
+  nameJa: string
+  accountCount: number
+}
+
+interface PlatformBranchDto {
+  id: string
+  code: string
+  name_zh: string
+  name_ja: string
+  account_count: number
+}
+
+function fromBranchDto(d: PlatformBranchDto): PlatformBranch {
+  return { id: d.id, code: d.code, nameZh: d.name_zh, nameJa: d.name_ja, accountCount: d.account_count }
+}
+
+export async function fetchPlatformBranches(orgId: number): Promise<PlatformBranch[]> {
+  const rows = await http.get<PlatformBranchDto[]>(`/platform/organizations/${orgId}/branches/`)
+  return rows.map(fromBranchDto)
+}
+
+export async function createPlatformBranch(
+  orgId: number,
+  payload: { code: string; nameZh: string; nameJa: string },
+): Promise<PlatformBranch> {
+  return fromBranchDto(await http.post<PlatformBranchDto>(`/platform/organizations/${orgId}/branches/`, {
+    code: payload.code, name_zh: payload.nameZh, name_ja: payload.nameJa,
+  }))
+}
+
+export async function updatePlatformBranch(
+  branchId: string,
+  payload: { nameZh?: string; nameJa?: string },
+): Promise<PlatformBranch> {
+  return fromBranchDto(await http.patch<PlatformBranchDto>(`/platform/branches/${branchId}/`, {
+    ...(payload.nameZh !== undefined ? { name_zh: payload.nameZh } : {}),
+    ...(payload.nameJa !== undefined ? { name_ja: payload.nameJa } : {}),
+  }))
+}
+
+/** Rejects with an Error whose message is 'branch-has-accounts' if the
+ * branch still has login accounts on it — same guard as a tenant's own
+ * Settings screen. */
+export async function deletePlatformBranch(branchId: string): Promise<void> {
+  await http.delete(`/platform/branches/${branchId}/`)
+}
+
 export interface PlatformUser {
   id: number
   account: string
   displayName: string
   role: 'admin' | 'branch' | 'staff'
   branchId: string | null
+  staffMemberId: string | null
   isActive: boolean
   isSuperuser: boolean
 }
 
 export async function fetchOrganizationUsers(orgId: number): Promise<PlatformUser[]> {
   return http.get<PlatformUser[]>(`/platform/organizations/${orgId}/users/`)
+}
+
+export async function createPlatformUser(orgId: number, payload: {
+  account: string
+  password: string
+  displayName: string
+  role: 'admin' | 'branch' | 'staff'
+  branchId?: string | null
+  staffMemberId?: string | null
+}): Promise<PlatformUser> {
+  return http.post<PlatformUser>(`/platform/organizations/${orgId}/users/`, {
+    account: payload.account, password: payload.password, display_name: payload.displayName,
+    role: payload.role, branch_id: payload.branchId, staff_member_id: payload.staffMemberId,
+  })
+}
+
+export async function updatePlatformUser(
+  userId: number,
+  payload: { displayName?: string; branchId?: string | null },
+): Promise<PlatformUser> {
+  return http.patch<PlatformUser>(`/platform/users/${userId}/`, {
+    ...(payload.displayName !== undefined ? { display_name: payload.displayName } : {}),
+    ...(payload.branchId !== undefined ? { branch_id: payload.branchId } : {}),
+  })
+}
+
+export async function deletePlatformUser(userId: number): Promise<void> {
+  await http.delete(`/platform/users/${userId}/`)
+}
+
+export async function resetPlatformUserPassword(userId: number, password: string): Promise<void> {
+  await http.post(`/platform/users/${userId}/reset_password/`, { password })
 }
 
 export async function setPlatformUserActive(userId: number, isActive: boolean): Promise<PlatformUser> {

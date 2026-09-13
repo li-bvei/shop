@@ -1,11 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
 
-from accounts.models import User
-from branches.models import Branch
-from organizations.models import Organization
-from paymentmethods.models import seed_default_payment_methods
-from scheduling.services import seed_default_schedule_setting
+from organizations.services import ProvisionError, provision_organization
 
 
 class Command(BaseCommand):
@@ -22,36 +17,16 @@ class Command(BaseCommand):
         parser.add_argument('--branch-name-ja')
 
     def handle(self, *args, **options):
-        if User.objects.filter(username=options['admin_account']).exists():
-            raise CommandError('admin-account-already-exists')
-        if Organization.objects.filter(code=options['code']).exists():
-            raise CommandError('organization-code-already-exists')
-        branch_args = (options['branch_code'], options['branch_name_zh'], options['branch_name_ja'])
-        if any(branch_args) and not all(branch_args):
-            raise CommandError('all branch options must be supplied together')
-
-        with transaction.atomic():
-            organization = Organization.objects.create(
+        try:
+            organization, branch, admin = provision_organization(
                 code=options['code'], name_zh=options['name_zh'], name_ja=options['name_ja'],
+                admin_account=options['admin_account'], admin_password=options['admin_password'],
+                branch_code=options['branch_code'], branch_name_zh=options['branch_name_zh'],
+                branch_name_ja=options['branch_name_ja'],
             )
-            branch = None
-            if options['branch_code']:
-                # Branch.id is historically global. Prefixing with tenant
-                # code prevents collisions while `code` remains tenant-local.
-                branch = Branch.objects.create(
-                    id=f"{organization.code}-{options['branch_code']}",
-                    organization=organization, code=options['branch_code'],
-                    name_zh=options['branch_name_zh'], name_ja=options['branch_name_ja'],
-                )
-                seed_default_payment_methods(branch)
-                seed_default_schedule_setting(branch)
-            user = User(
-                username=options['admin_account'], first_name=options['admin_account'],
-                role=User.Role.ADMIN, organization=organization, branch=None,
-                is_staff=False, is_superuser=False,
-            )
-            user.set_password(options['admin_password'])
-            user.save()
+        except ProvisionError as exc:
+            raise CommandError(str(exc))
+
         self.stdout.write(self.style.SUCCESS(
-            f'provisioned organization={organization.code} admin={user.username} branch={branch or "none"}',
+            f'provisioned organization={organization.code} admin={admin.username} branch={branch or "none"}',
         ))

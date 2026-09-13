@@ -16,6 +16,13 @@ export interface PurchaseRecord {
   priorMonthAvgUnitPrice: number | null
   priceDeltaAmount: number | null
   priceDeltaPercent: number | null
+  // vs the immediately preceding purchase of the same item — see
+  // purchasing.services.compute_prior_purchase_deltas on the backend for
+  // why this is a separate comparison from the month-average one above.
+  priorPurchaseUnitPrice: number | null
+  priorPurchaseDirection: 'up' | 'down' | null
+  priorPurchaseDeltaAmount: number | null
+  priorPurchaseDeltaPercent: number | null
 }
 
 interface PurchaseDto {
@@ -32,6 +39,10 @@ interface PurchaseDto {
   prior_month_avg_unit_price: string | number | null
   price_delta_amount: string | number | null
   price_delta_percent: string | number | null
+  prior_purchase_unit_price: string | number | null
+  prior_purchase_direction: 'up' | 'down' | null
+  prior_purchase_delta_amount: string | number | null
+  prior_purchase_delta_percent: string | number | null
 }
 
 function fromDto(dto: PurchaseDto): PurchaseRecord {
@@ -49,10 +60,18 @@ function fromDto(dto: PurchaseDto): PurchaseRecord {
     priorMonthAvgUnitPrice: dto.prior_month_avg_unit_price !== null ? Number(dto.prior_month_avg_unit_price) : null,
     priceDeltaAmount: dto.price_delta_amount !== null ? Number(dto.price_delta_amount) : null,
     priceDeltaPercent: dto.price_delta_percent !== null ? Number(dto.price_delta_percent) : null,
+    priorPurchaseUnitPrice: dto.prior_purchase_unit_price !== null ? Number(dto.prior_purchase_unit_price) : null,
+    priorPurchaseDirection: dto.prior_purchase_direction,
+    priorPurchaseDeltaAmount: dto.prior_purchase_delta_amount !== null ? Number(dto.prior_purchase_delta_amount) : null,
+    priorPurchaseDeltaPercent: dto.prior_purchase_delta_percent !== null ? Number(dto.prior_purchase_delta_percent) : null,
   }
 }
 
-type PurchaseWrite = Omit<PurchaseRecord, 'id' | 'amount' | 'priceDirection' | 'priorMonthAvgUnitPrice' | 'priceDeltaAmount' | 'priceDeltaPercent'>
+type PurchaseWrite = Omit<
+  PurchaseRecord,
+  'id' | 'amount' | 'priceDirection' | 'priorMonthAvgUnitPrice' | 'priceDeltaAmount' | 'priceDeltaPercent' |
+  'priorPurchaseUnitPrice' | 'priorPurchaseDirection' | 'priorPurchaseDeltaAmount' | 'priorPurchaseDeltaPercent'
+>
 
 function toDto(payload: PurchaseWrite) {
   return {
@@ -126,6 +145,72 @@ export async function fetchAllPurchases(params: PurchaseListParams = {}): Promis
     page += 1
   }
   return all
+}
+
+/** Sum of `amount` over the given filters, computed DB-side — replaces
+ * summing fetchAllPurchases() client-side, which meant paging through every
+ * matching record (and recomputing its price comparison) on every filter
+ * change just to add up a total. */
+export async function fetchPurchaseMonthTotal(params: PurchaseListParams = {}): Promise<number> {
+  const dto = await http.get<{ total: string | number }>(`/purchases/month_total/?${buildListQuery(params)}`)
+  return Number(dto.total)
+}
+
+export interface BulkReplacePreviewRow {
+  id: string
+  date: string
+  branchId: string
+  supplierId: string
+  supplierName: string
+  itemName: string
+  quantity: number
+  unitPrice: number
+}
+
+export interface BulkReplacePreview {
+  matchedCount: number
+  preview: BulkReplacePreviewRow[]
+}
+
+interface BulkReplacePreviewRowDto {
+  id: number
+  date: string
+  branch_id: string
+  supplier_id: number
+  supplier__name: string
+  item_name: string
+  quantity: string | number
+  unit_price: string | number
+}
+
+function fromPreviewDto(row: BulkReplacePreviewRowDto): BulkReplacePreviewRow {
+  return {
+    id: String(row.id), date: row.date, branchId: row.branch_id, supplierId: String(row.supplier_id),
+    supplierName: row.supplier__name, itemName: row.item_name,
+    quantity: Number(row.quantity), unitPrice: Number(row.unit_price),
+  }
+}
+
+/** Find-and-replace one specific wrong value (a date or a supplier) across
+ * every record matching `filters` — the same query params the list view
+ * accepts. Always call with confirm=false first to preview the match count
+ * before actually writing anything. */
+export async function bulkReplacePurchases(options: {
+  field: 'date' | 'supplier'
+  oldValue: string
+  newValue: string
+  confirm: boolean
+  filters?: PurchaseListParams
+}): Promise<BulkReplacePreview | { replacedCount: number }> {
+  const query = buildListQuery(options.filters ?? {})
+  const body = { field: options.field, old_value: options.oldValue, new_value: options.newValue, confirm: options.confirm }
+  const result = await http.post<
+    { matchedCount: number; preview: BulkReplacePreviewRowDto[] } | { replacedCount: number }
+  >(`/purchases/bulk_replace/?${query}`, body)
+  if ('preview' in result) {
+    return { matchedCount: result.matchedCount, preview: result.preview.map(fromPreviewDto) }
+  }
+  return result
 }
 
 export async function createPurchase(

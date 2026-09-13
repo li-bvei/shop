@@ -2,21 +2,26 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox, type AutocompleteInstance } from 'element-plus'
-import { Edit, Delete, Close, MoreFilled, TrendCharts, Refresh, CircleCheckFilled } from '@element-plus/icons-vue'
+import {
+  Edit, Delete, Close, MoreFilled, TrendCharts, Refresh, CircleCheckFilled, MagicStick,
+} from '@element-plus/icons-vue'
 import { fetchSuppliers, type Supplier } from '@/api/suppliers'
 import {
   fetchPurchases,
-  fetchAllPurchases,
+  fetchPurchaseMonthTotal,
   createPurchase,
   updatePurchase,
   deletePurchase,
   fetchPurchaseItemSuggestions,
   fetchPriceHistory,
   fetchSupplierPriceComparison,
+  bulkReplacePurchases,
   type PurchaseItemSuggestion,
   type PurchaseRecord,
   type PriceHistoryEntry,
   type SupplierPriceComparisonEntry,
+  type BulkReplacePreviewRow,
+  type PurchaseListParams,
 } from '@/api/purchasing'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
@@ -78,7 +83,7 @@ function supplierName(supplierId: string) {
 }
 
 async function fetchData() {
-  const [page, allForTotal] = await Promise.all([
+  const [page, total] = await Promise.all([
     fetchPurchases({
       branchId: filters.branchId || undefined,
       supplierId: filters.supplierId || undefined,
@@ -89,10 +94,10 @@ async function fetchData() {
       page: currentPage.value,
       pageSize,
     }),
-    // Total reflects every matching record, not just the current page —
-    // bounded by the same filters (typically a single month), so this
-    // never approaches the full 5000+ record table.
-    fetchAllPurchases({
+    // Summed DB-side — this used to mean paging through every matching
+    // record client-side just to add up a total (the main cost behind the
+    // multi-second filter/page delay this page used to have).
+    fetchPurchaseMonthTotal({
       branchId: filters.branchId || undefined,
       supplierId: filters.supplierId || undefined,
       month: filters.month || undefined,
@@ -101,7 +106,7 @@ async function fetchData() {
   ])
   purchases.value = page.results
   totalCount.value = page.count
-  monthTotal.value = allForTotal.reduce((sum, p) => sum + p.amount, 0)
+  monthTotal.value = total
 }
 
 async function load() {
@@ -191,14 +196,32 @@ function startEdit(record: PurchaseRecord) {
   focusItemName()
 }
 
+// Item names this supplier has actually been paid for before, for one
+// specific purpose: telling the "新商品" hint apart from an ordinary known
+// item while typing (see isNewItem below). Populated from the same
+// suggestion query, not a separate request.
+const knownItemNames = ref<Set<string>>(new Set())
+
 async function querySuggestions(queryString: string, cb: (results: SuggestionOption[]) => void) {
   if (!row.supplierId) {
     cb([])
     return
   }
   const results = await fetchPurchaseItemSuggestions(row.supplierId, queryString)
+  if (!queryString) knownItemNames.value = new Set(results.map((s) => s.itemName))
   cb(results.map((s) => ({ ...s, value: s.itemName })))
 }
+
+watch(() => row.supplierId, async (supplierId) => {
+  knownItemNames.value = supplierId
+    ? new Set((await fetchPurchaseItemSuggestions(supplierId)).map((s) => s.itemName))
+    : new Set()
+})
+
+const isNewItem = computed(() => {
+  const name = row.itemName.trim()
+  return !!name && !knownItemNames.value.has(name)
+})
 
 function handleSelectSuggestion(suggestion: SuggestionOption) {
   row.itemName = suggestion.itemName
@@ -210,8 +233,16 @@ function handleSelectSuggestion(suggestion: SuggestionOption) {
 // mid-composition also fires our row-submit handler and commits a half-typed
 // item name. `isComposing` is only reliable at keydown (by keyup it has
 // often already flipped false), so this must bind to @keydown, not @keyup.
+// The lastCompositionEndAt check is a second layer for browsers where the
+// very keydown that ends composition can still report isComposing:false —
+// a real, separate Enter press essentially never lands inside that window.
+const lastCompositionEndAt = ref(0)
+function handleCompositionEnd() {
+  lastCompositionEndAt.value = Date.now()
+}
 function handleRowEnter(event: KeyboardEvent) {
   if (event.isComposing || event.keyCode === 229) return
+  if (Date.now() - lastCompositionEndAt.value < 80) return
   commitRow()
 }
 
@@ -227,6 +258,14 @@ async function commitRow() {
   if (!row.itemName.trim()) {
     ElMessage.warning(t('purchasing.validateItemName'))
     focusItemName()
+    return
+  }
+  if (!row.quantity || row.quantity <= 0) {
+    ElMessage.warning(t('purchasing.validateQuantity'))
+    return
+  }
+  if (!row.unitPrice || row.unitPrice <= 0) {
+    ElMessage.warning(t('purchasing.validateUnitPrice'))
     return
   }
 
@@ -245,6 +284,13 @@ async function commitRow() {
     editingId.value = null
   } else {
     await createPurchase(payload)
+    // A brand-new item name just got added to this supplier's history —
+    // refresh the known-names set so isNewItem doesn't still flag it as
+    // new on the very next row (resetRow's focus deliberately suppresses
+    // el-autocomplete's own fetch, so nothing else would do this).
+    if (isNewItem.value) {
+      knownItemNames.value = new Set([...knownItemNames.value, payload.itemName])
+    }
   }
   triggerSavedPulse()
   resetRow()
@@ -280,6 +326,94 @@ async function handleDelete(record: PurchaseRecord) {
   }
 }
 
+// ---- Batch find-and-replace (fixing one repeated wrong date/supplier) ----
+
+const bulkReplaceDialogVisible = ref(false)
+const bulkReplaceSubmitting = ref(false)
+const bulkReplaceForm = reactive({
+  field: 'date' as 'date' | 'supplier',
+  oldDate: '',
+  newDate: '',
+  oldSupplierId: '',
+  newSupplierId: '',
+})
+const bulkReplacePreview = ref<BulkReplacePreviewRow[] | null>(null)
+const bulkReplaceMatchedCount = ref<number | null>(null)
+
+function openBulkReplace() {
+  bulkReplaceForm.field = 'date'
+  bulkReplaceForm.oldDate = ''
+  bulkReplaceForm.newDate = ''
+  bulkReplaceForm.oldSupplierId = ''
+  bulkReplaceForm.newSupplierId = ''
+  bulkReplacePreview.value = null
+  bulkReplaceMatchedCount.value = null
+  bulkReplaceDialogVisible.value = true
+}
+
+// Re-preview (never auto-apply) whenever the target field or its values
+// change, so the match count on screen never silently goes stale relative
+// to what "confirm" would actually act on.
+watch(
+  () => [bulkReplaceForm.field, bulkReplaceForm.oldDate, bulkReplaceForm.newDate, bulkReplaceForm.oldSupplierId, bulkReplaceForm.newSupplierId],
+  () => {
+    bulkReplacePreview.value = null
+    bulkReplaceMatchedCount.value = null
+  },
+)
+
+function bulkReplaceValues() {
+  return bulkReplaceForm.field === 'date'
+    ? { oldValue: bulkReplaceForm.oldDate, newValue: bulkReplaceForm.newDate }
+    : { oldValue: bulkReplaceForm.oldSupplierId, newValue: bulkReplaceForm.newSupplierId }
+}
+
+function currentListFilters(): PurchaseListParams {
+  return {
+    branchId: filters.branchId || undefined,
+    supplierId: filters.supplierId || undefined,
+    month: filters.month || undefined,
+    itemName: filters.itemName || undefined,
+  }
+}
+
+async function handleBulkReplacePreview() {
+  const { oldValue, newValue } = bulkReplaceValues()
+  if (!oldValue || !newValue) {
+    ElMessage.warning(t('purchasing.bulkReplaceOldValue'))
+    return
+  }
+  bulkReplaceSubmitting.value = true
+  try {
+    const result = await bulkReplacePurchases({
+      field: bulkReplaceForm.field, oldValue, newValue, confirm: false, filters: currentListFilters(),
+    })
+    if ('preview' in result) {
+      bulkReplacePreview.value = result.preview
+      bulkReplaceMatchedCount.value = result.matchedCount
+    }
+  } finally {
+    bulkReplaceSubmitting.value = false
+  }
+}
+
+async function handleBulkReplaceConfirm() {
+  const { oldValue, newValue } = bulkReplaceValues()
+  bulkReplaceSubmitting.value = true
+  try {
+    const result = await bulkReplacePurchases({
+      field: bulkReplaceForm.field, oldValue, newValue, confirm: true, filters: currentListFilters(),
+    })
+    if ('replacedCount' in result) {
+      ElMessage.success(t('purchasing.bulkReplaceSuccess', { count: result.replacedCount }))
+      bulkReplaceDialogVisible.value = false
+      await refreshSilently()
+    }
+  } finally {
+    bulkReplaceSubmitting.value = false
+  }
+}
+
 // ---- Price history + cross-supplier comparison drawer --------------------
 
 const historyDrawerVisible = ref(false)
@@ -287,10 +421,32 @@ const { loading: historyLoading, run: runHistoryLoad } = useDelayedLoading()
 const historyTarget = ref<PurchaseRecord | null>(null)
 const historyEntries = ref<PriceHistoryEntry[]>([])
 const comparisonEntries = ref<SupplierPriceComparisonEntry[]>([])
+// Opening the drawer defaults to just last+this month — enough to see the
+// current month-over-month trend at a glance, which is what this is for.
+// The full (up to 100-row) history fetched underneath is still right there
+// client-side, so "show all" is a free toggle, not a second request.
+const showFullHistory = ref(false)
+
+const recentHistoryEntries = computed(() => {
+  const [yearStr, monthStr] = todayJst().split('-')
+  const year = Number(yearStr)
+  const month = Number(monthStr)
+  const prevYear = month === 1 ? year - 1 : year
+  const prevMonth = month === 1 ? 12 : month - 1
+  return historyEntries.value.filter((e) => {
+    const [y, m] = e.date.split('-').map(Number)
+    return (y === year && m === month) || (y === prevYear && m === prevMonth)
+  })
+})
+
+const visibleHistoryEntries = computed(() => (
+  showFullHistory.value ? historyEntries.value : recentHistoryEntries.value
+))
 
 async function openPriceHistory(record: PurchaseRecord) {
   historyTarget.value = record
   historyDrawerVisible.value = true
+  showFullHistory.value = false
   await runHistoryLoad(async () => {
     const [history, comparison] = await Promise.all([
       fetchPriceHistory(record.branchId, record.supplierId, record.itemName),
@@ -346,6 +502,7 @@ async function openPriceHistory(record: PurchaseRecord) {
               :fetch-suggestions="querySuggestions"
               @select="handleSelectSuggestion"
               @keydown.enter="handleRowEnter"
+              @compositionend="handleCompositionEnd"
             >
               <template #default="{ item }">
                 <div class="suggestion-item">
@@ -354,6 +511,9 @@ async function openPriceHistory(record: PurchaseRecord) {
                 </div>
               </template>
             </el-autocomplete>
+            <span v-if="isNewItem" class="new-item-hint">
+              <el-icon><MagicStick /></el-icon>{{ t('purchasing.newItemHint') }}
+            </span>
           </div>
           <el-input
             v-model.number="row.quantity" type="number" class="c-qty"
@@ -425,6 +585,7 @@ async function openPriceHistory(record: PurchaseRecord) {
           <el-option value="unit_price" :label="t('purchasing.sortPriceAsc')" />
         </el-select>
         <el-button :icon="Refresh" @click="resetFilters">{{ t('common.reset') }}</el-button>
+        <el-button v-if="!isAdmin" :icon="Edit" @click="openBulkReplace">{{ t('purchasing.bulkReplace') }}</el-button>
       </div>
 
       <el-table :data="purchases" v-loading="loading" :empty-text="t('purchasing.empty')" class="purchase-table">
@@ -444,10 +605,10 @@ async function openPriceHistory(record: PurchaseRecord) {
         <el-table-column :label="t('purchasing.unitPrice')" width="130">
           <template #default="{ row: r }">
             <div>{{ formatCurrency(r.unitPrice) }}</div>
-            <div v-if="r.priceDirection && r.priceDeltaAmount !== null" class="price-change-detail" :class="r.priceDirection">
-              {{ t('purchasing.comparedWithPreviousMonth') }}
-              {{ r.priceDeltaAmount >= 0 ? '+' : '−' }}{{ formatCurrency(Math.round(Math.abs(r.priceDeltaAmount))) }}
-              <span v-if="r.priceDeltaPercent !== null">（{{ r.priceDeltaPercent >= 0 ? '+' : '' }}{{ r.priceDeltaPercent.toFixed(1) }}%）</span>
+            <div v-if="r.priorPurchaseDirection && r.priorPurchaseDeltaAmount !== null" class="price-change-detail" :class="r.priorPurchaseDirection">
+              {{ t('purchasing.comparedWithLastPurchase') }}
+              {{ r.priorPurchaseDeltaAmount >= 0 ? '+' : '−' }}{{ formatCurrency(Math.round(Math.abs(r.priorPurchaseDeltaAmount))) }}
+              <span v-if="r.priorPurchaseDeltaPercent !== null">（{{ r.priorPurchaseDeltaPercent >= 0 ? '+' : '' }}{{ r.priorPurchaseDeltaPercent.toFixed(1) }}%）</span>
             </div>
           </template>
         </el-table-column>
@@ -493,8 +654,14 @@ async function openPriceHistory(record: PurchaseRecord) {
             {{ historyTarget.itemName }}　·　{{ supplierName(historyTarget.supplierId) }}　·　{{ branchName(historyTarget.branchId) }}
           </p>
 
-          <h4 class="drawer-section-title">{{ t('purchasing.priceHistoryTitle') }}</h4>
-          <el-table :data="historyEntries" size="small" :empty-text="t('purchasing.noHistory')">
+          <div class="drawer-section-title history-title-row">
+            <h4>{{ t('purchasing.priceHistoryTitle') }}</h4>
+            <span class="history-scope-toggle" @click="showFullHistory = !showFullHistory">
+              {{ showFullHistory ? t('purchasing.priceHistoryShowRecentOnly') : t('purchasing.priceHistoryShowAll') }}
+            </span>
+          </div>
+          <p v-if="!showFullHistory" class="drawer-subject history-scope-hint">{{ t('purchasing.priceHistoryRecentHint') }}</p>
+          <el-table :data="visibleHistoryEntries" size="small" :empty-text="t('purchasing.noHistory')">
             <el-table-column prop="date" :label="t('purchasing.date')" width="110" />
             <el-table-column prop="quantity" :label="t('purchasing.quantity')" width="80" />
             <el-table-column :label="t('purchasing.unitPrice')" width="100">
@@ -516,6 +683,73 @@ async function openPriceHistory(record: PurchaseRecord) {
         </template>
       </div>
     </el-drawer>
+
+    <el-dialog v-model="bulkReplaceDialogVisible" :title="t('purchasing.bulkReplaceTitle')" width="480px">
+      <p class="bulk-replace-hint">{{ t('purchasing.bulkReplaceScopeHint') }}</p>
+
+      <div class="bulk-replace-field-row">
+        <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceField') }}</span>
+        <el-radio-group v-model="bulkReplaceForm.field">
+          <el-radio-button value="date">{{ t('purchasing.bulkReplaceFieldDate') }}</el-radio-button>
+          <el-radio-button value="supplier">{{ t('purchasing.bulkReplaceFieldSupplier') }}</el-radio-button>
+        </el-radio-group>
+      </div>
+
+      <template v-if="bulkReplaceForm.field === 'date'">
+        <div class="bulk-replace-field-row">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceOldValue') }}</span>
+          <el-date-picker v-model="bulkReplaceForm.oldDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+        </div>
+        <div class="bulk-replace-field-row">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceNewValue') }}</span>
+          <el-date-picker v-model="bulkReplaceForm.newDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+        </div>
+      </template>
+      <template v-else>
+        <div class="bulk-replace-field-row">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceOldValue') }}</span>
+          <el-select v-model="bulkReplaceForm.oldSupplierId" :placeholder="t('purchasing.bulkReplaceOldValuePlaceholder')" style="width: 100%">
+            <el-option v-for="s in suppliers" :key="s.id" :value="s.id" :label="s.name" />
+          </el-select>
+        </div>
+        <div class="bulk-replace-field-row">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceNewValue') }}</span>
+          <el-select v-model="bulkReplaceForm.newSupplierId" :placeholder="t('purchasing.bulkReplaceNewValuePlaceholder')" style="width: 100%">
+            <el-option v-for="s in suppliers" :key="s.id" :value="s.id" :label="s.name" />
+          </el-select>
+        </div>
+      </template>
+
+      <el-button :loading="bulkReplaceSubmitting" @click="handleBulkReplacePreview">
+        {{ t('purchasing.bulkReplacePreview') }}
+      </el-button>
+
+      <div v-if="bulkReplaceMatchedCount !== null" class="bulk-replace-preview">
+        <p v-if="bulkReplaceMatchedCount === 0" class="bulk-replace-no-match">{{ t('purchasing.bulkReplaceNoMatch') }}</p>
+        <template v-else>
+          <p class="bulk-replace-matched-count">{{ t('purchasing.bulkReplaceMatchedCount', { count: bulkReplaceMatchedCount }) }}</p>
+          <el-table :data="bulkReplacePreview ?? []" size="small" max-height="220">
+            <el-table-column prop="date" :label="t('purchasing.date')" width="100" />
+            <el-table-column :label="t('purchasing.supplier')" min-width="100">
+              <template #default="{ row: p }">{{ p.supplierName }}</template>
+            </el-table-column>
+            <el-table-column prop="itemName" :label="t('purchasing.itemName')" min-width="100" />
+          </el-table>
+        </template>
+      </div>
+
+      <template #footer>
+        <el-button @click="bulkReplaceDialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button
+          type="primary"
+          :loading="bulkReplaceSubmitting"
+          :disabled="!bulkReplaceMatchedCount"
+          @click="handleBulkReplaceConfirm"
+        >
+          {{ t('purchasing.bulkReplaceConfirm') }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -724,6 +958,15 @@ async function openPriceHistory(record: PurchaseRecord) {
   font-size: 12px;
 }
 
+.new-item-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
@@ -779,5 +1022,65 @@ async function openPriceHistory(record: PurchaseRecord) {
   font-weight: 600;
   color: var(--text-primary);
   margin: 18px 0 8px;
+}
+
+.history-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.history-title-row h4 {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+
+.history-scope-toggle {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.history-scope-hint {
+  margin: -4px 0 10px;
+  font-size: 11.5px;
+}
+
+.bulk-replace-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 0 0 16px;
+}
+
+.bulk-replace-field-row {
+  margin-bottom: 14px;
+}
+
+.bulk-replace-label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.bulk-replace-preview {
+  margin-top: 14px;
+}
+
+.bulk-replace-matched-count {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 8px;
+}
+
+.bulk-replace-no-match {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
 }
 </style>

@@ -7,6 +7,7 @@ from django.db import transaction
 
 from branches.models import Branch
 from purchasing.models import PurchaseRecord, Supplier
+from purchasing.utils import normalize_item_name
 
 DATA_FILE = Path(__file__).parent / 'import_data' / 'purchases_2026.json'
 BRANCH_ID = 'shinsaibashi'
@@ -45,6 +46,11 @@ class Command(BaseCommand):
                     branch=branch,
                     supplier=suppliers_by_name[r['supplier']],
                     item_name=r['item_name'],
+                    # bulk_create() never calls PurchaseRecord.save(), which is
+                    # the only place this normally gets computed — see
+                    # backfill_item_name_normalized for the fix to the rows
+                    # this command already inserted without it.
+                    item_name_normalized=normalize_item_name(r['item_name']),
                     quantity=Decimal(str(r['quantity'])),
                     unit_price=Decimal(str(r['unit_price'])),
                     amount=Decimal(str(r['quantity'])) * Decimal(str(r['unit_price'])),

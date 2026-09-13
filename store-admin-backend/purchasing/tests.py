@@ -318,3 +318,92 @@ class PriceComparisonTests(ApiTestCase):
         self.assertEqual(supplier_ids, {self.supplier.id, other_supplier.id})
         # cheapest first
         self.assertEqual(resp.data[0]['supplierId'], other_supplier.id)
+
+
+class BulkReplaceTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.supplier = Supplier.objects.create(organization=self.org, name='供应商A')
+        self.other_supplier = Supplier.objects.create(organization=self.org, name='供应商B')
+
+    def test_requires_at_least_one_match_condition(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {}, 'replace': {'date': '2026-02-01'},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_requires_at_least_one_replace_field(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {'date': '2026-01-01'}, 'replace': {},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_preview_does_not_write(self):
+        record = PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-01-15', supplier=self.supplier,
+            item_name='x', quantity=1, unit_price=100,
+        )
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {'date': '2026-01-15'}, 'replace': {'date': '2026-01-16'},
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['matchedCount'], 1)
+        record.refresh_from_db()
+        self.assertEqual(str(record.date), '2026-01-15')  # unchanged
+
+    def test_combining_date_and_supplier_narrows_to_exact_rows(self):
+        # Same date, two different suppliers — only one should match once
+        # both conditions are combined.
+        target = PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-01-15', supplier=self.supplier,
+            item_name='x', quantity=1, unit_price=100,
+        )
+        other = PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-01-15', supplier=self.other_supplier,
+            item_name='y', quantity=1, unit_price=200,
+        )
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {'date': '2026-01-15', 'supplier': self.supplier.id},
+            'replace': {'date': '2026-01-16'},
+            'confirm': True,
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['replacedCount'], 1)
+        target.refresh_from_db()
+        other.refresh_from_db()
+        self.assertEqual(str(target.date), '2026-01-16')
+        self.assertEqual(str(other.date), '2026-01-15')  # untouched
+
+    def test_replace_supplier(self):
+        record = PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-01-15', supplier=self.supplier,
+            item_name='x', quantity=1, unit_price=100,
+        )
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {'date': '2026-01-15'},
+            'replace': {'supplier': self.other_supplier.id},
+            'confirm': True,
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['replacedCount'], 1)
+        record.refresh_from_db()
+        self.assertEqual(record.supplier_id, self.other_supplier.id)
+
+    def test_branch_scoped_cannot_touch_other_branch(self):
+        other_branch_record = PurchaseRecord.objects.create(
+            branch=self.branch_b, date='2026-01-15', supplier=self.supplier,
+            item_name='x', quantity=1, unit_price=100,
+        )
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {'date': '2026-01-15'}, 'replace': {'date': '2026-01-16'}, 'confirm': True,
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['replacedCount'], 0)
+        other_branch_record.refresh_from_db()
+        self.assertEqual(str(other_branch_record.date), '2026-01-15')

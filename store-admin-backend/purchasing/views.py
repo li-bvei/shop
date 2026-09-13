@@ -126,42 +126,53 @@ class PurchaseRecordViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def bulk_replace(self, request):
-        """Find-and-replace one specific wrong value across every matching
-        record — e.g. a whole delivery was logged under the wrong date, or
-        under the wrong supplier. Narrow the search with the same query
-        params the list view accepts (branch/supplier/month/item_name),
-        then supply the exact `field` + `old_value` to find and the
-        `new_value` to replace it with. Always previews the match count
-        and a short sample first; only writes when `confirm: true` is
-        also sent, so a mistyped old_value can't silently rewrite more
-        rows than intended.
+        """Find-and-replace across every record matching a combination of
+        conditions — e.g. "everything on 2026-08-15 from supplier X" is
+        often the only way to pin down exactly the rows one bad delivery
+        entry produced, since date alone or supplier alone usually matches
+        far more than intended. `match` narrows the search (any combination
+        of date/date_from/date_to/supplier/item_name — at least one
+        required); `replace` says what to overwrite on every matching row
+        (date and/or supplier — at least one required). Always previews the
+        match count and a short sample first; only writes when
+        `confirm: true` is also sent.
 
         Only `date` and `supplier` are replaceable — item_name/quantity/
         unit_price are typed per row on purpose (batch-editing those would
         mean overwriting a mix of different real transactions, not fixing
         one repeated mistake)."""
-        field = request.data.get('field')
-        if field not in ('date', 'supplier'):
-            raise ValidationError({'field': ["Must be 'date' or 'supplier'."]})
+        match = request.data.get('match')
+        replace = request.data.get('replace')
+        if not isinstance(match, dict) or not any(match.get(k) for k in ('date', 'date_from', 'date_to', 'supplier', 'item_name')):
+            raise ValidationError({'match': ['At least one match condition is required.']})
+        if not isinstance(replace, dict) or not any(replace.get(k) for k in ('date', 'supplier')):
+            raise ValidationError({'replace': ['At least one field to replace is required.']})
 
-        old_value = request.data.get('old_value')
-        new_value = request.data.get('new_value')
-        if not old_value or not new_value:
-            raise ValidationError({'old_value': ['old_value and new_value are both required.']})
+        queryset = self.get_queryset()
+        try:
+            if match.get('date'):
+                queryset = queryset.filter(date=match['date'])
+            if match.get('date_from'):
+                queryset = queryset.filter(date__gte=match['date_from'])
+            if match.get('date_to'):
+                queryset = queryset.filter(date__lte=match['date_to'])
+            if match.get('supplier'):
+                queryset = queryset.filter(supplier_id=match['supplier'])
+        except (ValueError, TypeError) as exc:
+            raise ValidationError({'match': [str(exc)]})
+        if match.get('item_name'):
+            queryset = queryset.filter(item_name_normalized__icontains=normalize_item_name(match['item_name']))
 
-        lookup_field = 'supplier_id' if field == 'supplier' else field
-        if field == 'supplier':
+        update_fields = {}
+        if replace.get('date'):
+            update_fields['date'] = replace['date']
+        if replace.get('supplier'):
             new_supplier = Supplier.objects.filter(
-                id=new_value, organization_id=request.user.organization_id,
+                id=replace['supplier'], organization_id=request.user.organization_id,
             ).first()
             if not new_supplier:
-                raise ValidationError({'new_value': ['supplier-not-found']})
-
-        queryset = self.filter_queryset(self.get_queryset())
-        try:
-            queryset = queryset.filter(**{lookup_field: old_value})
-        except (ValueError, TypeError) as exc:
-            raise ValidationError({'old_value': [str(exc)]})
+                raise ValidationError({'replace': ['supplier-not-found']})
+            update_fields['supplier_id'] = replace['supplier']
 
         count = queryset.count()
         if not request.data.get('confirm'):
@@ -173,7 +184,7 @@ class PurchaseRecordViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
             return Response({'matchedCount': count, 'preview': preview})
 
         if count:
-            queryset.update(**{lookup_field: new_value})
+            queryset.update(**update_fields)
         return Response({'replacedCount': count})
 
     @action(detail=False, methods=['get'])

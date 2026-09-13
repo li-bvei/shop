@@ -191,22 +191,40 @@ function fromPreviewDto(row: BulkReplacePreviewRowDto): BulkReplacePreviewRow {
   }
 }
 
-/** Find-and-replace one specific wrong value (a date or a supplier) across
- * every record matching `filters` — the same query params the list view
- * accepts. Always call with confirm=false first to preview the match count
- * before actually writing anything. */
+export interface BulkReplaceMatch {
+  date?: string
+  dateFrom?: string
+  dateTo?: string
+  supplierId?: string
+  itemName?: string
+}
+
+export interface BulkReplaceWith {
+  date?: string
+  supplierId?: string
+}
+
+/** Find-and-replace across every record matching a combination of
+ * conditions (any mix of exact date / date range / supplier / item name —
+ * at least one required), overwriting date and/or supplier on every match.
+ * Always call with confirm=false first to preview the match count before
+ * actually writing anything. */
 export async function bulkReplacePurchases(options: {
-  field: 'date' | 'supplier'
-  oldValue: string
-  newValue: string
+  match: BulkReplaceMatch
+  replace: BulkReplaceWith
   confirm: boolean
-  filters?: PurchaseListParams
 }): Promise<BulkReplacePreview | { replacedCount: number }> {
-  const query = buildListQuery(options.filters ?? {})
-  const body = { field: options.field, old_value: options.oldValue, new_value: options.newValue, confirm: options.confirm }
+  const body = {
+    match: {
+      date: options.match.date, date_from: options.match.dateFrom, date_to: options.match.dateTo,
+      supplier: options.match.supplierId, item_name: options.match.itemName,
+    },
+    replace: { date: options.replace.date, supplier: options.replace.supplierId },
+    confirm: options.confirm,
+  }
   const result = await http.post<
     { matchedCount: number; preview: BulkReplacePreviewRowDto[] } | { replacedCount: number }
-  >(`/purchases/bulk_replace/?${query}`, body)
+  >('/purchases/bulk_replace/', body)
   if ('preview' in result) {
     return { matchedCount: result.matchedCount, preview: result.preview.map(fromPreviewDto) }
   }

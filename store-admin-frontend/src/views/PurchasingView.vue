@@ -21,7 +21,8 @@ import {
   type PriceHistoryEntry,
   type SupplierPriceComparisonEntry,
   type BulkReplacePreviewRow,
-  type PurchaseListParams,
+  type BulkReplaceMatch,
+  type BulkReplaceWith,
 } from '@/api/purchasing'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
@@ -327,67 +328,77 @@ async function handleDelete(record: PurchaseRecord) {
 }
 
 // ---- Batch find-and-replace (fixing one repeated wrong date/supplier) ----
+// Match conditions combine (AND) so a specific bad delivery — "everything
+// on 2026-08-15 from supplier X" — can be pinned down precisely; date alone
+// or supplier alone usually matches far more rows than intended.
 
 const bulkReplaceDialogVisible = ref(false)
 const bulkReplaceSubmitting = ref(false)
 const bulkReplaceForm = reactive({
-  field: 'date' as 'date' | 'supplier',
-  oldDate: '',
+  matchDate: '',
+  matchDateFrom: '',
+  matchDateTo: '',
+  matchSupplierId: '',
+  matchItemName: '',
   newDate: '',
-  oldSupplierId: '',
   newSupplierId: '',
 })
 const bulkReplacePreview = ref<BulkReplacePreviewRow[] | null>(null)
 const bulkReplaceMatchedCount = ref<number | null>(null)
 
 function openBulkReplace() {
-  bulkReplaceForm.field = 'date'
-  bulkReplaceForm.oldDate = ''
+  bulkReplaceForm.matchDate = ''
+  bulkReplaceForm.matchDateFrom = ''
+  bulkReplaceForm.matchDateTo = ''
+  bulkReplaceForm.matchSupplierId = ''
+  bulkReplaceForm.matchItemName = ''
   bulkReplaceForm.newDate = ''
-  bulkReplaceForm.oldSupplierId = ''
   bulkReplaceForm.newSupplierId = ''
   bulkReplacePreview.value = null
   bulkReplaceMatchedCount.value = null
   bulkReplaceDialogVisible.value = true
 }
 
-// Re-preview (never auto-apply) whenever the target field or its values
-// change, so the match count on screen never silently goes stale relative
-// to what "confirm" would actually act on.
+// Re-preview (never auto-apply) whenever any condition changes, so the
+// match count on screen never silently goes stale relative to what
+// "confirm" would actually act on.
 watch(
-  () => [bulkReplaceForm.field, bulkReplaceForm.oldDate, bulkReplaceForm.newDate, bulkReplaceForm.oldSupplierId, bulkReplaceForm.newSupplierId],
+  () => Object.values(bulkReplaceForm),
   () => {
     bulkReplacePreview.value = null
     bulkReplaceMatchedCount.value = null
   },
 )
 
-function bulkReplaceValues() {
-  return bulkReplaceForm.field === 'date'
-    ? { oldValue: bulkReplaceForm.oldDate, newValue: bulkReplaceForm.newDate }
-    : { oldValue: bulkReplaceForm.oldSupplierId, newValue: bulkReplaceForm.newSupplierId }
-}
-
-function currentListFilters(): PurchaseListParams {
+function bulkReplaceMatch(): BulkReplaceMatch {
   return {
-    branchId: filters.branchId || undefined,
-    supplierId: filters.supplierId || undefined,
-    month: filters.month || undefined,
-    itemName: filters.itemName || undefined,
+    date: bulkReplaceForm.matchDate || undefined,
+    dateFrom: bulkReplaceForm.matchDateFrom || undefined,
+    dateTo: bulkReplaceForm.matchDateTo || undefined,
+    supplierId: bulkReplaceForm.matchSupplierId || undefined,
+    itemName: bulkReplaceForm.matchItemName || undefined,
   }
 }
 
+function bulkReplaceWith(): BulkReplaceWith {
+  return { date: bulkReplaceForm.newDate || undefined, supplierId: bulkReplaceForm.newSupplierId || undefined }
+}
+
+const bulkReplaceHasMatch = computed(() => Object.values(bulkReplaceMatch()).some(Boolean))
+const bulkReplaceHasReplacement = computed(() => Object.values(bulkReplaceWith()).some(Boolean))
+
 async function handleBulkReplacePreview() {
-  const { oldValue, newValue } = bulkReplaceValues()
-  if (!oldValue || !newValue) {
-    ElMessage.warning(t('purchasing.bulkReplaceOldValue'))
+  if (!bulkReplaceHasMatch.value) {
+    ElMessage.warning(t('purchasing.bulkReplaceNeedMatch'))
+    return
+  }
+  if (!bulkReplaceHasReplacement.value) {
+    ElMessage.warning(t('purchasing.bulkReplaceNeedReplacement'))
     return
   }
   bulkReplaceSubmitting.value = true
   try {
-    const result = await bulkReplacePurchases({
-      field: bulkReplaceForm.field, oldValue, newValue, confirm: false, filters: currentListFilters(),
-    })
+    const result = await bulkReplacePurchases({ match: bulkReplaceMatch(), replace: bulkReplaceWith(), confirm: false })
     if ('preview' in result) {
       bulkReplacePreview.value = result.preview
       bulkReplaceMatchedCount.value = result.matchedCount
@@ -398,12 +409,9 @@ async function handleBulkReplacePreview() {
 }
 
 async function handleBulkReplaceConfirm() {
-  const { oldValue, newValue } = bulkReplaceValues()
   bulkReplaceSubmitting.value = true
   try {
-    const result = await bulkReplacePurchases({
-      field: bulkReplaceForm.field, oldValue, newValue, confirm: true, filters: currentListFilters(),
-    })
+    const result = await bulkReplacePurchases({ match: bulkReplaceMatch(), replace: bulkReplaceWith(), confirm: true })
     if ('replacedCount' in result) {
       ElMessage.success(t('purchasing.bulkReplaceSuccess', { count: result.replacedCount }))
       bulkReplaceDialogVisible.value = false
@@ -684,41 +692,49 @@ async function openPriceHistory(record: PurchaseRecord) {
       </div>
     </el-drawer>
 
-    <el-dialog v-model="bulkReplaceDialogVisible" :title="t('purchasing.bulkReplaceTitle')" width="480px">
+    <el-dialog v-model="bulkReplaceDialogVisible" :title="t('purchasing.bulkReplaceTitle')" width="520px">
       <p class="bulk-replace-hint">{{ t('purchasing.bulkReplaceScopeHint') }}</p>
 
-      <div class="bulk-replace-field-row">
-        <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceField') }}</span>
-        <el-radio-group v-model="bulkReplaceForm.field">
-          <el-radio-button value="date">{{ t('purchasing.bulkReplaceFieldDate') }}</el-radio-button>
-          <el-radio-button value="supplier">{{ t('purchasing.bulkReplaceFieldSupplier') }}</el-radio-button>
-        </el-radio-group>
+      <div class="bulk-replace-section-title">{{ t('purchasing.bulkReplaceMatchSection') }}</div>
+      <p class="bulk-replace-hint">{{ t('purchasing.bulkReplaceMatchHint') }}</p>
+      <div class="bulk-replace-grid">
+        <div class="bulk-replace-field-row">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceMatchDate') }}</span>
+          <el-date-picker v-model="bulkReplaceForm.matchDate" type="date" value-format="YYYY-MM-DD" clearable style="width: 100%" />
+        </div>
+        <div class="bulk-replace-field-row">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceMatchSupplier') }}</span>
+          <el-select v-model="bulkReplaceForm.matchSupplierId" :placeholder="t('purchasing.allSuppliers')" clearable style="width: 100%">
+            <el-option v-for="s in suppliers" :key="s.id" :value="s.id" :label="s.name" />
+          </el-select>
+        </div>
+        <div class="bulk-replace-field-row">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceMatchDateFrom') }}</span>
+          <el-date-picker v-model="bulkReplaceForm.matchDateFrom" type="date" value-format="YYYY-MM-DD" clearable style="width: 100%" />
+        </div>
+        <div class="bulk-replace-field-row">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceMatchDateTo') }}</span>
+          <el-date-picker v-model="bulkReplaceForm.matchDateTo" type="date" value-format="YYYY-MM-DD" clearable style="width: 100%" />
+        </div>
+        <div class="bulk-replace-field-row bulk-replace-span-2">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceMatchItemName') }}</span>
+          <el-input v-model="bulkReplaceForm.matchItemName" :placeholder="t('purchasing.filterItemNamePlaceholder')" clearable />
+        </div>
       </div>
 
-      <template v-if="bulkReplaceForm.field === 'date'">
+      <div class="bulk-replace-section-title">{{ t('purchasing.bulkReplaceReplaceSection') }}</div>
+      <div class="bulk-replace-grid">
         <div class="bulk-replace-field-row">
-          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceOldValue') }}</span>
-          <el-date-picker v-model="bulkReplaceForm.oldDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceNewDate') }}</span>
+          <el-date-picker v-model="bulkReplaceForm.newDate" type="date" value-format="YYYY-MM-DD" clearable style="width: 100%" />
         </div>
         <div class="bulk-replace-field-row">
-          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceNewValue') }}</span>
-          <el-date-picker v-model="bulkReplaceForm.newDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-        </div>
-      </template>
-      <template v-else>
-        <div class="bulk-replace-field-row">
-          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceOldValue') }}</span>
-          <el-select v-model="bulkReplaceForm.oldSupplierId" :placeholder="t('purchasing.bulkReplaceOldValuePlaceholder')" style="width: 100%">
+          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceNewSupplier') }}</span>
+          <el-select v-model="bulkReplaceForm.newSupplierId" :placeholder="t('purchasing.allSuppliers')" clearable style="width: 100%">
             <el-option v-for="s in suppliers" :key="s.id" :value="s.id" :label="s.name" />
           </el-select>
         </div>
-        <div class="bulk-replace-field-row">
-          <span class="bulk-replace-label">{{ t('purchasing.bulkReplaceNewValue') }}</span>
-          <el-select v-model="bulkReplaceForm.newSupplierId" :placeholder="t('purchasing.bulkReplaceNewValuePlaceholder')" style="width: 100%">
-            <el-option v-for="s in suppliers" :key="s.id" :value="s.id" :label="s.name" />
-          </el-select>
-        </div>
-      </template>
+      </div>
 
       <el-button :loading="bulkReplaceSubmitting" @click="handleBulkReplacePreview">
         {{ t('purchasing.bulkReplacePreview') }}
@@ -1055,6 +1071,23 @@ async function openPriceHistory(record: PurchaseRecord) {
   font-size: 12px;
   color: var(--text-tertiary);
   margin: 0 0 16px;
+}
+
+.bulk-replace-section-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 4px 0 4px;
+}
+
+.bulk-replace-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 14px;
+}
+
+.bulk-replace-span-2 {
+  grid-column: 1 / -1;
 }
 
 .bulk-replace-field-row {

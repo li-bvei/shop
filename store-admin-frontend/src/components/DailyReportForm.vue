@@ -85,19 +85,25 @@ export function computeDerived(
 }
 
 // `denominationDefaults` (the per-branch float reserve, keyed by denomination
-// string) is added on top of each counted quantity before multiplying — the
+// string) is added on top of each COUNTED quantity before multiplying — the
 // count entered on the report is only what's counted beyond the fixed float,
 // so the float itself must be added back in here rather than ever being
-// written into the count field.
+// written into the count field. The default only applies to a row that has
+// actually been counted (count !== null): a row nobody has touched yet —
+// including every row on every report saved before this feature existed,
+// which all come back as null — must stay at ¥0, or setting a branch
+// default would retroactively fabricate float money into reports that
+// never recorded a till count at all.
 export function computeCashRegisterTotal(
   counts: Record<string, number | null | undefined>,
   denominationDefaults: Record<string, number | null | undefined> = {},
 ) {
-  return CASH_REGISTER_DENOMINATIONS.reduce(
-    (sum, denomination) =>
-      sum + denomination * ((counts[String(denomination)] ?? 0) + (denominationDefaults[String(denomination)] ?? 0)),
-    0,
-  )
+  return CASH_REGISTER_DENOMINATIONS.reduce((sum, denomination) => {
+    const key = String(denomination)
+    const count = counts[key]
+    const defaultQuantity = count != null ? (denominationDefaults[key] ?? 0) : 0
+    return sum + denomination * ((count ?? 0) + defaultQuantity)
+  }, 0)
 }
 </script>
 
@@ -149,6 +155,15 @@ const cashRegisterDefaults = ref<CashRegisterDefaults>({
 })
 const savingDenominationDefault = ref<number | null>(null)
 const savingExpectedTotal = ref(false)
+
+// Mirrors computeCashRegisterTotal's per-row logic for the row subtotal
+// display: the default only counts once this row has actually been counted.
+function cashRegisterRowSubtotal(denomination: number) {
+  const key = String(denomination)
+  const count = data.value.cashRegisterCounts[key]
+  const defaultQuantity = count != null ? (cashRegisterDefaults.value.denominationDefaults[key] ?? 0) : 0
+  return denomination * ((count ?? 0) + defaultQuantity)
+}
 
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
 const cashRegister = computed(() => {
@@ -438,7 +453,7 @@ async function handleAddPaymentMethod() {
                   step="1"
                   class="cash-register-quantity"
                 />
-                <span class="cash-register-subtotal">{{ formatCurrency(denomination * ((data.cashRegisterCounts[String(denomination)] ?? 0) + (cashRegisterDefaults.denominationDefaults[String(denomination)] ?? 0))) }}</span>
+                <span class="cash-register-subtotal">{{ formatCurrency(cashRegisterRowSubtotal(denomination)) }}</span>
                 <el-input
                   v-if="allowCashRegisterDefaultEdits && (CASH_REGISTER_FLOAT_DENOMINATIONS as readonly number[]).includes(denomination)"
                   v-model.number="cashRegisterDefaults.denominationDefaults[String(denomination)]"

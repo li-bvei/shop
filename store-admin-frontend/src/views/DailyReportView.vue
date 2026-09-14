@@ -394,9 +394,9 @@ async function handleDownload() {
       t('dailyReport.cashRegisterSubtotal'),
     ]).font = { bold: true }
     for (const denomination of CASH_REGISTER_DENOMINATIONS) {
-      const quantity = reportForm.cashRegisterCounts[String(denomination)] ?? 0
-      const defaultQuantity = cashRegisterDenominationDefaults.value[String(denomination)] ?? 0
-      ws.addRow([denomination, quantity, denomination * (quantity + defaultQuantity)])
+      const rawQuantity = reportForm.cashRegisterCounts[String(denomination)]
+      const defaultQuantity = rawQuantity != null ? (cashRegisterDenominationDefaults.value[String(denomination)] ?? 0) : 0
+      ws.addRow([denomination, rawQuantity ?? 0, denomination * ((rawQuantity ?? 0) + defaultQuantity)])
     }
     const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, cashRegisterDenominationDefaults.value)
     ws.addRow([t('dailyReport.cashRegisterExpected'), cashRegisterExpectedTotal.value])

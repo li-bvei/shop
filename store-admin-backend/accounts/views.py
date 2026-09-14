@@ -1,3 +1,4 @@
+from django.contrib.auth.hashers import make_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -46,16 +47,26 @@ class OrganizationView(APIView):
         if request.user.role != request.user.Role.ADMIN:
             raise PermissionDenied('admin-only')
         org = request.user.organization
+        update_fields = ['updated_at']
         for field in ('name_zh', 'name_ja', 'logo_url'):
             if field in request.data:
                 setattr(org, field, (request.data[field] or '').strip())
+                update_fields.append(field)
         if 'logo_url' in request.data:
             org.logo_url = _clean_logo(org.logo_url)
+        if 'report_unlock_password' in request.data:
+            password = (request.data['report_unlock_password'] or '').strip()
+            if password and len(password) < 4:
+                raise ValidationError({'report_unlock_password': ['too-short']})
+            # Empty string explicitly clears it — that's how an admin turns
+            # the lock feature back off for the org (see report_lock.py).
+            org.report_unlock_password_hash = make_password(password) if password else ''
+            update_fields.append('report_unlock_password_hash')
         try:
             org.full_clean(exclude=['code'])
         except DjangoValidationError as exc:
             raise ValidationError(exc.message_dict)
-        org.save(update_fields=['name_zh', 'name_ja', 'logo_url', 'updated_at'])
+        org.save(update_fields=update_fields)
         return Response(_org_body(org))
 
 
@@ -82,6 +93,7 @@ def _org_body(org):
         'name_zh': org.name_zh,
         'name_ja': org.name_ja,
         'logo_url': org.logo_url,
+        'report_unlock_password_set': bool(org.report_unlock_password_hash),
     }
 
 

@@ -285,3 +285,28 @@ class OrganizationEndpointTests(ApiTestCase):
         self.assertEqual(
             self.client.patch('/api/organization/', {'logo_url': huge}).status_code, 400,
         )
+
+    def test_admin_can_set_and_clear_report_unlock_password(self):
+        self.login_as(self.admin)
+        self.assertFalse(self.client.get('/api/organization/').data['report_unlock_password_set'])
+
+        # branch cannot set it
+        self.login_as(self.branch_a_user)
+        self.assertEqual(
+            self.client.patch('/api/organization/', {'report_unlock_password': 'secret1'}).status_code, 403,
+        )
+
+        self.login_as(self.admin)
+        too_short = self.client.patch('/api/organization/', {'report_unlock_password': 'abc'})
+        self.assertEqual(too_short.status_code, 400)
+
+        ok = self.client.patch('/api/organization/', {'report_unlock_password': 'secret1'})
+        self.assertEqual(ok.status_code, 200, ok.content)
+        self.assertTrue(ok.data['report_unlock_password_set'])
+        # the hash itself is never exposed to the client
+        self.assertNotIn('report_unlock_password_hash', ok.data)
+        self.assertNotIn('report_unlock_password', ok.data)
+
+        cleared = self.client.patch('/api/organization/', {'report_unlock_password': ''})
+        self.assertEqual(cleared.status_code, 200)
+        self.assertFalse(cleared.data['report_unlock_password_set'])

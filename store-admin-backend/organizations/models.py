@@ -17,6 +17,12 @@ class Organization(models.Model):
     # Settings (the frontend shrinks it to ≤256px first, so it stays small).
     # TextField, not URLField, to hold the data: form. Empty = name only.
     logo_url = models.TextField(blank=True, default='')
+    # A shared operational secret (hashed with the same hasher as User
+    # passwords) that unlocks editing a daily report dated before today —
+    # see dailyreports.report_lock. Blank = the lock feature is off for this
+    # tenant, so every existing organization behaves exactly as before until
+    # an admin opts in by setting one in Settings.
+    report_unlock_password_hash = models.CharField(max_length=128, blank=True, default='')
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -98,27 +98,41 @@ export interface OrganizationInfo {
   nameZh: string
   nameJa: string
   logoUrl: string
+  /** Whether an admin has set a report-unlock password (see api/reportLock.ts)
+   * — the hash itself is never exposed to the client. */
+  reportUnlockPasswordSet: boolean
+}
+
+interface OrganizationDto {
+  code: string
+  name_zh: string
+  name_ja: string
+  logo_url: string
+  report_unlock_password_set: boolean
+}
+
+function fromOrgDto(d: OrganizationDto): OrganizationInfo {
+  return {
+    code: d.code, nameZh: d.name_zh, nameJa: d.name_ja, logoUrl: d.logo_url,
+    reportUnlockPasswordSet: d.report_unlock_password_set,
+  }
 }
 
 export async function fetchOrganization(): Promise<OrganizationInfo> {
-  const d = await http.get<{ code: string; name_zh: string; name_ja: string; logo_url: string }>(
-    '/organization/',
-  )
-  return { code: d.code, nameZh: d.name_zh, nameJa: d.name_ja, logoUrl: d.logo_url }
+  return fromOrgDto(await http.get<OrganizationDto>('/organization/'))
 }
 
 export async function updateOrganization(patch: {
   nameZh?: string
   nameJa?: string
   logoUrl?: string
+  /** Empty string clears it (turns the report-lock feature back off). */
+  reportUnlockPassword?: string
 }): Promise<OrganizationInfo> {
-  const d = await http.patch<{ code: string; name_zh: string; name_ja: string; logo_url: string }>(
-    '/organization/',
-    {
-      ...(patch.nameZh !== undefined ? { name_zh: patch.nameZh } : {}),
-      ...(patch.nameJa !== undefined ? { name_ja: patch.nameJa } : {}),
-      ...(patch.logoUrl !== undefined ? { logo_url: patch.logoUrl } : {}),
-    },
-  )
-  return { code: d.code, nameZh: d.name_zh, nameJa: d.name_ja, logoUrl: d.logo_url }
+  return fromOrgDto(await http.patch<OrganizationDto>('/organization/', {
+    ...(patch.nameZh !== undefined ? { name_zh: patch.nameZh } : {}),
+    ...(patch.nameJa !== undefined ? { name_ja: patch.nameJa } : {}),
+    ...(patch.logoUrl !== undefined ? { logo_url: patch.logoUrl } : {}),
+    ...(patch.reportUnlockPassword !== undefined ? { report_unlock_password: patch.reportUnlockPassword } : {}),
+  }))
 }

@@ -151,6 +151,10 @@ const props = defineProps<{
    * into the subtotal/total in both places, since a saved count always
    * means "counted beyond the float" regardless of where it's viewed. */
   allowCashRegisterDefaultEdits?: boolean
+  /** True while `reportDate` is locked and hasn't been unlocked this
+   * editing session (see DailyReportView.vue) — cascades disabled to
+   * every Element Plus input/select/etc. in the form via <el-form>. */
+  readonly?: boolean
 }>()
 const data = defineModel<DailyReportFormData>('data', { required: true })
 
@@ -350,6 +354,7 @@ async function handleAddPaymentMethod() {
 </script>
 
 <template>
+  <el-form :disabled="readonly">
   <div class="daily-report-form">
     <section class="report-section">
       <div class="form-field standalone person-field">
@@ -555,6 +560,7 @@ async function handleAddPaymentMethod() {
       <span class="value">{{ formatCurrency(derived.cashRemaining) }}</span>
     </div>
   </div>
+  </el-form>
 </template>
 
 <style scoped>

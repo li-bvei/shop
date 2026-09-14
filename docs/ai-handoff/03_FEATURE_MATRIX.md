@@ -36,7 +36,8 @@
 | 超管账号出现在企业自己账号列表（权限漏洞） | 已修复 | `UserViewSet.get_queryset`、`PlatformOrganizationUsersView` 均加 `is_superuser=False` |
 | 企业停用（`Organization.active`）未生效 | 已实现 | `OrganizationScopedJWTAuthentication`、`OrganizationScopedTokenObtainPairSerializer` |
 | 平台超管跨企业账号/分店管理、新建企业 | 已实现 | `organizations/views.py` Platform* 系列 view、`PlatformFeaturesView.vue` |
-| 日报零钱默认数量 + レジ固定金額可改 | 已实现 | `dailyreports/models.py` `CashRegisterDefaults`、`views.py` `CashRegisterDefaultsView`、前端 `api/cashRegisterDefaults.ts`、`DailyReportForm.vue` |
+| 日报零钱默认数量 + レジ固定金額可改（默认值只加算不预填，且有 2026-09-15 日期线保护旧日报） | 已实现 | `dailyreports/models.py` `CashRegisterDefaults`、`views.py` `CashRegisterDefaultsView`、`DailyReportForm.vue` `computeCashRegisterTotal`/`CASH_REGISTER_DEFAULTS_CUTOFF_DATE`、前端 `api/cashRegisterDefaults.ts` |
+| 旧日报锁定 + 企业共享密码解锁（仅本次编辑会话有效） | 已实现 | `dailyreports/report_lock.py`、`views.py` `ReportUnlockView`/`DailyReportViewSet._enforce_report_lock`、`organizations/models.py` `report_unlock_password_hash`、`accounts/views.py` `OrganizationView`、前端 `api/reportLock.ts`、`DailyReportView.vue` 解锁流程、`DailyReportForm.vue` `readonly` prop、`SettingsView.vue` 密码管理卡片 |
 
 ## 当前未完成或需要业务决定
 

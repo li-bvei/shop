@@ -1,7 +1,9 @@
+from django.contrib.auth.hashers import check_password
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import NotFound, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -9,6 +11,7 @@ from branches.models import Branch
 from common.permissions import BranchScopedQuerysetMixin
 
 from .models import CashRegisterDefaults, DailyReport, DailyReportHistory
+from .report_lock import UNLOCK_TOKEN_TTL_SECONDS, issue_unlock_token, unlock_token_is_valid
 from .serializers import CashRegisterDefaultsSerializer, DailyReportHistorySerializer, DailyReportSerializer
 
 
@@ -16,6 +19,27 @@ class DailyReportViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
     queryset = DailyReport.objects.all()
     serializer_class = DailyReportSerializer
     filterset_fields = ['branch', 'date']
+
+    def _enforce_report_lock(self, date):
+        """A report dated before today is locked once the org has opted in
+        (set a non-blank report_unlock_password_hash) — an org that never
+        configured one behaves exactly as before this feature existed."""
+        org = self.request.user.organization
+        if not org.report_unlock_password_hash:
+            return
+        if date is None or date >= timezone.localdate():
+            return
+        if not unlock_token_is_valid(self.request):
+            raise PermissionDenied('report-locked')
+
+    def perform_create(self, serializer):
+        self._enforce_report_lock(serializer.validated_data.get('date'))
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        date = serializer.validated_data.get('date') or serializer.instance.date
+        self._enforce_report_lock(date)
+        super().perform_update(serializer)
 
     @action(detail=False, methods=['get'])
     def expense_suggestions(self, request):
@@ -61,6 +85,38 @@ class DailyReportViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
         for r in results:
             r.pop('_score')
         return Response(results[:10])
+
+
+_UNLOCK_FAIL_LIMIT = 5
+_UNLOCK_FAIL_WINDOW_SECONDS = 600
+
+
+class ReportUnlockView(APIView):
+    """POST {password} — checks it against the org's shared unlock password
+    and, on success, issues a short-lived token that lets this user's next
+    daily-report writes through the date lock (see report_lock.py). Failed
+    attempts are rate-limited per user since this is a single shared
+    secret, not an individual account password."""
+
+    def post(self, request):
+        org = request.user.organization
+        if not org.report_unlock_password_hash:
+            raise NotFound('report-lock-not-configured')
+
+        fail_key = f'report-unlock-fail:{request.user.id}'
+        if cache.get(fail_key, 0) >= _UNLOCK_FAIL_LIMIT:
+            raise PermissionDenied('too-many-attempts')
+
+        password = request.data.get('password') or ''
+        if not check_password(password, org.report_unlock_password_hash):
+            cache.set(fail_key, cache.get(fail_key, 0) + 1, _UNLOCK_FAIL_WINDOW_SECONDS)
+            raise ValidationError({'password': ['incorrect-password']})
+
+        cache.delete(fail_key)
+        return Response({
+            'token': issue_unlock_token(request.user),
+            'expires_in_seconds': UNLOCK_TOKEN_TTL_SECONDS,
+        })
 
 
 class CashRegisterDefaultsView(APIView):

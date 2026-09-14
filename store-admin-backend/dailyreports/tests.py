@@ -1,7 +1,13 @@
+from datetime import timedelta
+
+from django.contrib.auth.hashers import make_password
+from django.utils import timezone
+
 from paymentmethods.models import PaymentMethodDef
 from common.test_utils import ApiTestCase
 
 from .models import CashRegisterDefaults, DailyReport, DailyReportHistory
+from .report_lock import issue_unlock_token
 
 
 class CashCalculationTests(ApiTestCase):
@@ -202,3 +208,107 @@ class CashRegisterDefaultsTests(ApiTestCase):
         }, format='json')
         report.refresh_from_db()
         self.assertEqual(report.cash_register_counts, {'500': 3})
+
+
+class ReportLockTests(ApiTestCase):
+    """A report dated before today is locked once the org has opted in by
+    setting a report_unlock_password_hash — writes need a valid unlock
+    token (see report_lock.py), obtained via /api/daily-reports-unlock/."""
+
+    def setUp(self):
+        super().setUp()
+        self.yesterday = (timezone.localdate() - timedelta(days=1)).isoformat()
+        self.today = timezone.localdate().isoformat()
+
+    def test_org_without_unlock_password_is_never_locked(self):
+        report = DailyReport.objects.create(branch=self.branch_a, date=self.yesterday, total_revenue=1000)
+        self.login_as(self.branch_a_user)
+        resp = self.client.patch(f'/api/daily-reports/{report.id}/', {'total_revenue': 2000}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_past_date_write_is_rejected_without_unlock_token(self):
+        self.org.report_unlock_password_hash = make_password('secret1')
+        self.org.save(update_fields=['report_unlock_password_hash'])
+        day_before = (timezone.localdate() - timedelta(days=2)).isoformat()
+        report = DailyReport.objects.create(branch=self.branch_a, date=self.yesterday, total_revenue=1000)
+
+        self.login_as(self.branch_a_user)
+        create_resp = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': day_before, 'total_revenue': 500,
+        }, format='json')
+        self.assertEqual(create_resp.status_code, 403)
+
+        update_resp = self.client.patch(f'/api/daily-reports/{report.id}/', {'total_revenue': 2000}, format='json')
+        self.assertEqual(update_resp.status_code, 403)
+        report.refresh_from_db()
+        self.assertEqual(report.total_revenue, 1000)
+
+    def test_todays_date_is_never_locked_even_with_password_configured(self):
+        self.org.report_unlock_password_hash = make_password('secret1')
+        self.org.save(update_fields=['report_unlock_password_hash'])
+        report = DailyReport.objects.create(branch=self.branch_a, date=self.today, total_revenue=1000)
+        self.login_as(self.branch_a_user)
+        resp = self.client.patch(f'/api/daily-reports/{report.id}/', {'total_revenue': 2000}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_valid_unlock_token_allows_past_date_write(self):
+        self.org.report_unlock_password_hash = make_password('secret1')
+        self.org.save(update_fields=['report_unlock_password_hash'])
+        report = DailyReport.objects.create(branch=self.branch_a, date=self.yesterday, total_revenue=1000)
+
+        self.login_as(self.branch_a_user)
+        token = issue_unlock_token(self.branch_a_user)
+        resp = self.client.patch(
+            f'/api/daily-reports/{report.id}/', {'total_revenue': 2000}, format='json',
+            HTTP_X_REPORT_UNLOCK_TOKEN=token,
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        report.refresh_from_db()
+        self.assertEqual(report.total_revenue, 2000)
+
+    def test_unlock_token_is_scoped_to_the_user_who_obtained_it(self):
+        self.org.report_unlock_password_hash = make_password('secret1')
+        self.org.save(update_fields=['report_unlock_password_hash'])
+        report = DailyReport.objects.create(branch=self.branch_a, date=self.yesterday, total_revenue=1000)
+
+        token = issue_unlock_token(self.branch_b_user)
+        self.login_as(self.branch_a_user)
+        resp = self.client.patch(
+            f'/api/daily-reports/{report.id}/', {'total_revenue': 2000}, format='json',
+            HTTP_X_REPORT_UNLOCK_TOKEN=token,
+        )
+        self.assertEqual(resp.status_code, 403)
+
+    def test_unlock_endpoint_rejects_wrong_password_and_grants_token_for_right_one(self):
+        self.org.report_unlock_password_hash = make_password('secret1')
+        self.org.save(update_fields=['report_unlock_password_hash'])
+        self.login_as(self.branch_a_user)
+
+        wrong = self.client.post('/api/daily-reports-unlock/', {'password': 'nope'}, format='json')
+        self.assertEqual(wrong.status_code, 400)
+
+        right = self.client.post('/api/daily-reports-unlock/', {'password': 'secret1'}, format='json')
+        self.assertEqual(right.status_code, 200, right.content)
+        self.assertIn('token', right.data)
+
+        report = DailyReport.objects.create(branch=self.branch_a, date=self.yesterday, total_revenue=1000)
+        resp = self.client.patch(
+            f'/api/daily-reports/{report.id}/', {'total_revenue': 2000}, format='json',
+            HTTP_X_REPORT_UNLOCK_TOKEN=right.data['token'],
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+    def test_unlock_endpoint_rate_limits_repeated_wrong_passwords(self):
+        self.org.report_unlock_password_hash = make_password('secret1')
+        self.org.save(update_fields=['report_unlock_password_hash'])
+        self.login_as(self.branch_a_user)
+        for _ in range(5):
+            resp = self.client.post('/api/daily-reports-unlock/', {'password': 'nope'}, format='json')
+            self.assertEqual(resp.status_code, 400)
+        locked_out = self.client.post('/api/daily-reports-unlock/', {'password': 'secret1'}, format='json')
+        self.assertEqual(locked_out.status_code, 403)
+
+    def test_unlock_endpoint_404s_when_org_has_not_configured_a_password(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/daily-reports-unlock/', {'password': 'anything'}, format='json')
+        self.assertEqual(resp.status_code, 404)

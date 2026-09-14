@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Clock, Printer, Refresh, WarningFilled } from '@element-plus/icons-vue'
+import { Download, Clock, Printer, Refresh, WarningFilled, Lock } from '@element-plus/icons-vue'
 import { usePrintFit } from '@/composables/usePrintFit'
 import { fetchPaymentMethods, type PaymentMethodDef } from '@/api/masterData'
 import { fetchStaffByBranch, type StaffMember } from '@/api/staff'
@@ -17,6 +17,9 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
 import { fetchCashRegisterDefaults } from '@/api/cashRegisterDefaults'
+import { fetchOrganization } from '@/api/accounts'
+import { verifyReportUnlockPassword } from '@/api/reportLock'
+import { ApiError } from '@/api/http'
 import DailyReportForm, {
   CASH_REGISTER_DENOMINATIONS,
   CASH_REGISTER_EXPECTED_TOTAL,
@@ -61,6 +64,60 @@ const syncingDrafts = ref(false)
 
 function refreshPendingDrafts() {
   pendingDrafts.value = listDrafts()
+}
+
+// Whether the org has opted into locking past reports at all (an admin sets
+// a shared unlock password in Settings) — orgs that never configure one
+// behave exactly as before this feature existed. A report is locked once
+// its date is before today AND this is true.
+const reportLockEnabled = ref(false)
+function isDateLocked(date: string) {
+  return reportLockEnabled.value && date < todayJst()
+}
+// In-memory only (never persisted) — a page reload or navigating to a
+// different date re-locks, matching "unlocked for this editing session
+// only". Separate tokens because the main form and the history-edit dialog
+// can be looking at two different dates at once.
+const mainUnlockToken = ref<string | null>(null)
+const historyEditUnlockToken = ref<string | null>(null)
+const mainFormLocked = computed(() => isDateLocked(reportDate.value) && !mainUnlockToken.value)
+const historyEditFormLocked = computed(
+  () => !!historyEditDate.value && isDateLocked(historyEditDate.value) && !historyEditUnlockToken.value,
+)
+
+/** Prompts for the shared unlock password and verifies it against the
+ * server; returns the short-lived unlock token on success, null if the
+ * user cancelled or got it wrong (an error is already shown for the
+ * latter). */
+async function promptForUnlockToken(): Promise<string | null> {
+  let password: string
+  try {
+    const result = await ElMessageBox.prompt(
+      t('dailyReport.reportLockPasswordPrompt'),
+      t('dailyReport.reportLockTitle'),
+      { confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel'), inputType: 'password' },
+    )
+    password = result.value
+  } catch {
+    return null // cancelled
+  }
+  try {
+    const { token } = await verifyReportUnlockPassword(password)
+    return token
+  } catch {
+    ElMessage.error(t('dailyReport.reportLockWrongPassword'))
+    return null
+  }
+}
+
+async function handleUnlockMainForm() {
+  const token = await promptForUnlockToken()
+  if (token) mainUnlockToken.value = token
+}
+
+async function handleUnlockHistoryEdit() {
+  const token = await promptForUnlockToken()
+  if (token) historyEditUnlockToken.value = token
 }
 
 const printRoot = ref<HTMLElement>()
@@ -154,6 +211,7 @@ onMounted(async () => {
     reportDate.value = route.query.date
   }
   await loadReport()
+  fetchOrganization().then((org) => { reportLockEnabled.value = org.reportUnlockPasswordSet }).catch(() => {})
   refreshPendingDrafts()
   // Best-effort: try once at page load (in case connectivity came back while
   // the tab was closed) and again whenever the browser reports the network
@@ -168,6 +226,7 @@ onBeforeUnmount(() => {
 })
 
 watch([branchId, reportDate], () => {
+  mainUnlockToken.value = null
   loadReport()
 })
 
@@ -177,7 +236,9 @@ async function handleSubmit() {
     const derived = computeDerived(reportForm, paymentMethods.value)
     const snapshot = JSON.parse(JSON.stringify(reportForm))
     try {
-      reportId.value = await saveDailyReport(reportId.value, branchId.value, reportDate.value, snapshot)
+      reportId.value = await saveDailyReport(
+        reportId.value, branchId.value, reportDate.value, snapshot, mainUnlockToken.value ?? undefined,
+      )
       await saveDailyReportHistorySnapshot({
         branchId: branchId.value,
         date: reportDate.value,
@@ -191,6 +252,14 @@ async function handleSubmit() {
       reportUpdatedAt.value = fresh.updatedAt
       ElMessage.success(t('dailyReport.savedSuccess'))
     } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        // The unlock token expired (or was never obtained) between opening
+        // the report and hitting save — re-lock so the button reappears
+        // instead of silently retrying as if it were a network blip.
+        mainUnlockToken.value = null
+        ElMessage.error(t('dailyReport.reportLockExpired'))
+        return
+      }
       if (!isNetworkFailure(err)) throw err
       // Offline (or the server is unreachable) — keep the entry instead of
       // losing it. `reportUpdatedAt` is the last version we know the server
@@ -310,6 +379,7 @@ watch(historyFilterDate, () => {
 function openHistoryEdit(entry: DailyReportHistoryEntry) {
   historyEditForm.value = JSON.parse(JSON.stringify(entry.data)) as DailyReportFormData
   historyEditDate.value = entry.date
+  historyEditUnlockToken.value = null
   historyEditDialogVisible.value = true
 }
 
@@ -325,7 +395,19 @@ async function handleSaveHistoryEdit() {
     // find whether a live report already exists for that date so we
     // update it instead of violating the branch+date unique constraint.
     const existing = await fetchDailyReport(branchId.value, historyEditDate.value)
-    const savedId = await saveDailyReport(existing.id, branchId.value, historyEditDate.value, snapshot)
+    let savedId: number
+    try {
+      savedId = await saveDailyReport(
+        existing.id, branchId.value, historyEditDate.value, snapshot, historyEditUnlockToken.value ?? undefined,
+      )
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        historyEditUnlockToken.value = null
+        ElMessage.error(t('dailyReport.reportLockExpired'))
+        return
+      }
+      throw err
+    }
     if (historyEditDate.value === reportDate.value) reportId.value = savedId
     await saveDailyReportHistorySnapshot({
       branchId: branchId.value,
@@ -437,13 +519,26 @@ async function handleDownload() {
         </el-button>
       </div>
 
+      <div v-if="mainFormLocked" class="no-print report-lock-banner">
+        <el-icon><Lock /></el-icon>
+        <span>{{ t('dailyReport.reportLockedHint') }}</span>
+        <el-button size="small" type="primary" @click="handleUnlockMainForm">
+          {{ t('dailyReport.reportLockUnlock') }}
+        </el-button>
+      </div>
+
       <div ref="printRoot">
-        <DailyReportForm v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate" allow-cash-register-default-edits />
+        <DailyReportForm
+          v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate"
+          :readonly="mainFormLocked" allow-cash-register-default-edits
+        />
       </div>
 
       <div class="submit-row no-print">
         <el-button :icon="Clock" @click="openHistory">{{ t('dailyReport.viewHistory') }}</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">{{ t('dailyReport.submit') }}</el-button>
+        <el-button type="primary" :loading="submitting" :disabled="mainFormLocked" @click="handleSubmit">
+          {{ t('dailyReport.submit') }}
+        </el-button>
       </div>
     </div>
 
@@ -491,10 +586,20 @@ async function handleDownload() {
       class="history-edit-dialog"
       append-to-body
     >
-      <DailyReportForm v-if="historyEditForm" v-model:data="historyEditForm" :branch-id="branchId" :report-date="historyEditDate" />
+      <div v-if="historyEditFormLocked" class="no-print report-lock-banner">
+        <el-icon><Lock /></el-icon>
+        <span>{{ t('dailyReport.reportLockedHint') }}</span>
+        <el-button size="small" type="primary" @click="handleUnlockHistoryEdit">
+          {{ t('dailyReport.reportLockUnlock') }}
+        </el-button>
+      </div>
+      <DailyReportForm
+        v-if="historyEditForm" v-model:data="historyEditForm" :branch-id="branchId"
+        :report-date="historyEditDate" :readonly="historyEditFormLocked"
+      />
       <template #footer>
         <el-button @click="historyEditDialogVisible = false">{{ t('common.cancel') }}</el-button>
-        <el-button type="primary" :loading="historyEditSubmitting" @click="handleSaveHistoryEdit">
+        <el-button type="primary" :loading="historyEditSubmitting" :disabled="historyEditFormLocked" @click="handleSaveHistoryEdit">
           {{ t('common.save') }}
         </el-button>
       </template>
@@ -553,6 +658,23 @@ async function handleDownload() {
 }
 
 .draft-banner span {
+  flex: 1;
+}
+
+.report-lock-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  margin-bottom: 16px;
+  font-size: 12.5px;
+}
+
+.report-lock-banner span {
   flex: 1;
 }
 

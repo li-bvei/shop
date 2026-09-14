@@ -215,8 +215,10 @@ CORS_ALLOW_CREDENTIALS = True
 
 # The public guest card client sends its card_token in this header when the
 # dev frontend and API are on different ports (no shared cookie). Same-origin
-# production uses the pc_guest cookie and never needs this.
-CORS_ALLOW_HEADERS = (*cors_default_headers, 'x-guest-token')
+# production uses the pc_guest cookie and never needs this. x-report-unlock-
+# token carries the short-lived report-lock unlock token (see
+# dailyreports.report_lock) on a locked-date daily-report save.
+CORS_ALLOW_HEADERS = (*cors_default_headers, 'x-guest-token', 'x-report-unlock-token')
 
 
 # Deploy-time security settings — every one of these defaults to the

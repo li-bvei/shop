@@ -90,18 +90,23 @@ export async function fetchDailyReport(branchId: string, date: string): Promise<
   return rows[0] ? fromDto(rows[0]) : { ...EMPTY_SEED }
 }
 
-/** Upserts the branch+date's live report; returns its id (new or existing). */
+/** Upserts the branch+date's live report; returns its id (new or existing).
+ * `unlockToken` is required when writing a date the server considers
+ * locked (see api/reportLock.ts) — passed through untouched, so a write
+ * that doesn't need it just omits it. */
 export async function saveDailyReport(
   id: number | null,
   branchId: string,
   date: string,
   data: DailyReportFormData,
+  unlockToken?: string,
 ): Promise<number> {
+  const headers = unlockToken ? { 'X-Report-Unlock-Token': unlockToken } : undefined
   if (id) {
-    await http.patch(`/daily-reports/${id}/`, toDto(branchId, date, data))
+    await http.patch(`/daily-reports/${id}/`, toDto(branchId, date, data), headers)
     return id
   }
-  const created = await http.post<DailyReportDto>('/daily-reports/', toDto(branchId, date, data))
+  const created = await http.post<DailyReportDto>('/daily-reports/', toDto(branchId, date, data), headers)
   return created.id
 }
 

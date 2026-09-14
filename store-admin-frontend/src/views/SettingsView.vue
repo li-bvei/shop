@@ -52,14 +52,66 @@ const orgDirty = computed(
     orgForm.value.logoUrl !== orgSaved.value.logoUrl,
 )
 
+// Report-lock (past daily reports) unlock password — a shared operational
+// secret, not tied to any one account, so it's managed separately from the
+// self-service change-password form below.
+const reportUnlockPasswordSet = ref(false)
+const reportUnlockForm = ref({ password: '', confirm: '' })
+const reportUnlockSaving = ref(false)
+const reportUnlockClearing = ref(false)
+
 async function loadOrg() {
   if (!isAdmin.value) return
   try {
     const org = await fetchOrganization()
     orgForm.value = { nameZh: org.nameZh, nameJa: org.nameJa, logoUrl: org.logoUrl }
     orgSaved.value = { ...orgForm.value }
+    reportUnlockPasswordSet.value = org.reportUnlockPasswordSet
   } catch {
     /* non-critical */
+  }
+}
+
+async function handleSetReportUnlockPassword() {
+  const { password, confirm } = reportUnlockForm.value
+  if (password.length < 4) {
+    ElMessage.error(t('settings.reportUnlockTooShort'))
+    return
+  }
+  if (password !== confirm) {
+    ElMessage.error(t('settings.reportUnlockMismatch'))
+    return
+  }
+  reportUnlockSaving.value = true
+  try {
+    const org = await updateOrganization({ reportUnlockPassword: password })
+    reportUnlockPasswordSet.value = org.reportUnlockPasswordSet
+    reportUnlockForm.value = { password: '', confirm: '' }
+    ElMessage.success(t('common.savedSuccess'))
+  } catch (e) {
+    ElMessage.error(e instanceof Error && e.message ? e.message : t('common.unexpectedError'))
+  } finally {
+    reportUnlockSaving.value = false
+  }
+}
+
+async function handleClearReportUnlockPassword() {
+  try {
+    await ElMessageBox.confirm(t('settings.reportUnlockClearConfirm'), t('common.confirm'), {
+      type: 'warning',
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
+    })
+  } catch {
+    return
+  }
+  reportUnlockClearing.value = true
+  try {
+    const org = await updateOrganization({ reportUnlockPassword: '' })
+    reportUnlockPasswordSet.value = org.reportUnlockPasswordSet
+    ElMessage.success(t('common.savedSuccess'))
+  } finally {
+    reportUnlockClearing.value = false
   }
 }
 
@@ -625,6 +677,36 @@ async function handleChangePassword() {
       </div>
     </div>
 
+    <div v-if="isAdmin" class="card">
+      <h3>{{ t('settings.reportUnlockSection') }}</h3>
+      <p class="section-hint">{{ t('settings.reportUnlockHint') }}</p>
+      <p class="report-unlock-status">
+        {{ reportUnlockPasswordSet ? t('settings.reportUnlockStatusSet') : t('settings.reportUnlockStatusUnset') }}
+      </p>
+      <div class="report-unlock-form">
+        <el-input
+          v-model="reportUnlockForm.password" type="password" show-password
+          :placeholder="t('settings.reportUnlockNewPassword')"
+        />
+        <el-input
+          v-model="reportUnlockForm.confirm" type="password" show-password
+          :placeholder="t('settings.reportUnlockConfirmPassword')"
+        />
+      </div>
+      <div class="report-unlock-actions">
+        <el-button
+          type="primary" :loading="reportUnlockSaving"
+          :disabled="!reportUnlockForm.password && !reportUnlockForm.confirm"
+          @click="handleSetReportUnlockPassword"
+        >
+          {{ reportUnlockPasswordSet ? t('settings.reportUnlockChange') : t('settings.reportUnlockSet') }}
+        </el-button>
+        <el-button v-if="reportUnlockPasswordSet" :loading="reportUnlockClearing" @click="handleClearReportUnlockPassword">
+          {{ t('settings.reportUnlockClear') }}
+        </el-button>
+      </div>
+    </div>
+
     <div v-if="!isAdmin" class="card">
       <h3>{{ t('settings.branchInfoSection') }}</h3>
       <p class="section-hint">{{ t('settings.branchInfoHint') }}</p>
@@ -950,6 +1032,30 @@ async function handleChangePassword() {
 
 @media (max-width: 640px) {
   .brand-names {
+    flex-direction: column;
+    gap: 10px;
+  }
+}
+
+.report-unlock-status {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+
+.report-unlock-form {
+  display: flex;
+  gap: 16px;
+}
+
+.report-unlock-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .report-unlock-form {
     flex-direction: column;
     gap: 10px;
   }

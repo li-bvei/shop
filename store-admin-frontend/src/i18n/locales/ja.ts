@@ -240,7 +240,6 @@ export default {
     cashRegisterShort: '{amount} 不足',
     cashRegisterEmpty: '額面ごとの確認を入力してください',
     cashRegisterDefaultQuantity: 'デフォルト枚数',
-    cashRegisterDefaultHint: 'この列を変更すると即座に保存されます。以後新規作成する日報にのみ反映され、保存済みの記録は変更されません',
   },
   paymentMethod: {
     cash: '現金',

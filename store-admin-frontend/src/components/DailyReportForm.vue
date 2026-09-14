@@ -452,9 +452,6 @@ async function handleAddPaymentMethod() {
                 <span v-else-if="allowCashRegisterDefaultEdits" class="cash-register-default-empty" />
               </div>
             </div>
-            <p v-if="allowCashRegisterDefaultEdits" class="cash-register-default-hint">
-              {{ t('dailyReport.cashRegisterDefaultHint') }}
-            </p>
             <div class="cash-register-summary">
               <div class="cash-register-summary-row">
                 <span>{{ t('dailyReport.cashRegisterExpected') }}</span>
@@ -915,13 +912,6 @@ async function handleAddPaymentMethod() {
 }
 
 .cash-register-default :deep(.el-input__inner) {
-  text-align: right;
-}
-
-.cash-register-default-hint {
-  margin: 4px 0 0;
-  font-size: 10.5px;
-  color: var(--text-tertiary);
   text-align: right;
 }
 

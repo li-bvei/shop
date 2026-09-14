@@ -20,6 +20,7 @@ import { fetchCashRegisterDefaults } from '@/api/cashRegisterDefaults'
 import DailyReportForm, {
   CASH_REGISTER_DENOMINATIONS,
   CASH_REGISTER_EXPECTED_TOTAL,
+  CASH_REGISTER_DEFAULTS_CUTOFF_DATE,
   computeCashRegisterTotal,
   computeDerived,
   normalizeDailyReportFormData,
@@ -393,12 +394,13 @@ async function handleDownload() {
       t('dailyReport.cashRegisterQuantity'),
       t('dailyReport.cashRegisterSubtotal'),
     ]).font = { bold: true }
+    const defaultsEligible = reportDate.value >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
     for (const denomination of CASH_REGISTER_DENOMINATIONS) {
       const rawQuantity = reportForm.cashRegisterCounts[String(denomination)]
-      const defaultQuantity = rawQuantity != null ? (cashRegisterDenominationDefaults.value[String(denomination)] ?? 0) : 0
+      const defaultQuantity = defaultsEligible && rawQuantity != null ? (cashRegisterDenominationDefaults.value[String(denomination)] ?? 0) : 0
       ws.addRow([denomination, rawQuantity ?? 0, denomination * ((rawQuantity ?? 0) + defaultQuantity)])
     }
-    const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, cashRegisterDenominationDefaults.value)
+    const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, cashRegisterDenominationDefaults.value, reportDate.value)
     ws.addRow([t('dailyReport.cashRegisterExpected'), cashRegisterExpectedTotal.value])
     ws.addRow([t('dailyReport.cashRegisterActual'), cashRegisterTotal])
     ws.addRow([t('dailyReport.cashRegisterDifference'), cashRegisterTotal - cashRegisterExpectedTotal.value])
@@ -436,7 +438,7 @@ async function handleDownload() {
       </div>
 
       <div ref="printRoot">
-        <DailyReportForm v-model:data="reportForm" :branch-id="branchId" allow-cash-register-default-edits />
+        <DailyReportForm v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate" allow-cash-register-default-edits />
       </div>
 
       <div class="submit-row no-print">
@@ -489,7 +491,7 @@ async function handleDownload() {
       class="history-edit-dialog"
       append-to-body
     >
-      <DailyReportForm v-if="historyEditForm" v-model:data="historyEditForm" :branch-id="branchId" />
+      <DailyReportForm v-if="historyEditForm" v-model:data="historyEditForm" :branch-id="branchId" :report-date="historyEditDate" />
       <template #footer>
         <el-button @click="historyEditDialogVisible = false">{{ t('common.cancel') }}</el-button>
         <el-button type="primary" :loading="historyEditSubmitting" @click="handleSaveHistoryEdit">

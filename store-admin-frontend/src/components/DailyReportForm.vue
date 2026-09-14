@@ -14,6 +14,12 @@ export const CASH_REGISTER_FLOAT_DENOMINATIONS = [500, 100, 50, 10, 5] as const
 // fetched, or the fetch hasn't resolved) compares against this, matching
 // what every branch used before the per-branch setting existed.
 export const CASH_REGISTER_EXPECTED_TOTAL = 130000
+// Every report dated before this shipped before the register-defaults
+// feature existed — cash_register_counts on those often comes back as {}
+// entirely (see computeCashRegisterTotal). Their data predates the concept
+// of a "float default", so the default must never be added to them, no
+// matter which rows do or don't have a value.
+export const CASH_REGISTER_DEFAULTS_CUTOFF_DATE = '2026-09-15'
 
 export interface DailyReportFormData {
   personInCharge: string
@@ -88,20 +94,22 @@ export function computeDerived(
 // string) is added on top of each COUNTED quantity before multiplying — the
 // count entered on the report is only what's counted beyond the fixed float,
 // so the float itself must be added back in here rather than ever being
-// written into the count field. The default only applies to a row that has
-// actually been counted (count !== null): a row nobody has touched yet —
-// including every row on every report saved before this feature existed,
-// which all come back as null — must stay at ¥0, or setting a branch
-// default would retroactively fabricate float money into reports that
-// never recorded a till count at all.
+// written into the count field. The default applies only when BOTH:
+//  - `reportDate` is on/after CASH_REGISTER_DEFAULTS_CUTOFF_DATE — a report
+//    dated before the feature existed must never have the default added,
+//    full stop, regardless of what its rows contain; and
+//  - the individual row was actually counted this time (count !== null) —
+//    an untouched row stays at ¥0.
 export function computeCashRegisterTotal(
   counts: Record<string, number | null | undefined>,
   denominationDefaults: Record<string, number | null | undefined> = {},
+  reportDate?: string,
 ) {
+  const defaultsEligible = !!reportDate && reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
   return CASH_REGISTER_DENOMINATIONS.reduce((sum, denomination) => {
     const key = String(denomination)
     const count = counts[key]
-    const defaultQuantity = count != null ? (denominationDefaults[key] ?? 0) : 0
+    const defaultQuantity = defaultsEligible && count != null ? (denominationDefaults[key] ?? 0) : 0
     return sum + denomination * ((count ?? 0) + defaultQuantity)
   }, 0)
 }
@@ -131,6 +139,11 @@ import MoneyInput from '@/components/MoneyInput.vue'
 
 const props = defineProps<{
   branchId: string
+  /** The business date of the report currently loaded — used only to gate
+   * whether the register float default is eligible to apply at all (see
+   * CASH_REGISTER_DEFAULTS_CUTOFF_DATE); reports from before the feature
+   * existed must never have it added, regardless of row content. */
+  reportDate: string
   /** Only the live "fill out today's report" screen should let staff edit
    * the register float defaults / expected total — editing a past report
    * (the history dialog) must never let someone change what today's count
@@ -161,13 +174,14 @@ const savingExpectedTotal = ref(false)
 function cashRegisterRowSubtotal(denomination: number) {
   const key = String(denomination)
   const count = data.value.cashRegisterCounts[key]
-  const defaultQuantity = count != null ? (cashRegisterDefaults.value.denominationDefaults[key] ?? 0) : 0
+  const defaultsEligible = props.reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
+  const defaultQuantity = defaultsEligible && count != null ? (cashRegisterDefaults.value.denominationDefaults[key] ?? 0) : 0
   return denomination * ((count ?? 0) + defaultQuantity)
 }
 
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
 const cashRegister = computed(() => {
-  const actual = computeCashRegisterTotal(data.value.cashRegisterCounts, cashRegisterDefaults.value.denominationDefaults)
+  const actual = computeCashRegisterTotal(data.value.cashRegisterCounts, cashRegisterDefaults.value.denominationDefaults, props.reportDate)
   const difference = actual - cashRegisterDefaults.value.expectedTotal
   const hasInput = CASH_REGISTER_DENOMINATIONS.some(
     (denomination) => data.value.cashRegisterCounts[String(denomination)] != null,

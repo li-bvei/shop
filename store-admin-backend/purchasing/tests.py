@@ -407,3 +407,38 @@ class BulkReplaceTests(ApiTestCase):
         self.assertEqual(resp.data['replacedCount'], 0)
         other_branch_record.refresh_from_db()
         self.assertEqual(str(other_branch_record.date), '2026-01-15')
+
+    def test_whitespace_only_item_name_is_not_treated_as_no_filter(self):
+        # Regression: normalize_item_name('   ') == '' and
+        # icontains='' matches every row — a whitespace-only item_name must
+        # not silently widen the match to "everything in scope".
+        PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-01-15', supplier=self.supplier,
+            item_name='x', quantity=1, unit_price=100,
+        )
+        PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-01-16', supplier=self.supplier,
+            item_name='y', quantity=1, unit_price=200,
+        )
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {'item_name': '   '}, 'replace': {'date': '2026-02-01'},
+        }, format='json')
+        # No real match condition survived stripping — must fail validation,
+        # not report matchedCount == 2.
+        self.assertEqual(resp.status_code, 400)
+
+    def test_invalid_date_returns_400_not_500(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {'date': 'not-a-date'}, 'replace': {'date': '2026-02-01'},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_date_from_after_date_to_is_rejected(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/purchases/bulk_replace/', {
+            'match': {'date_from': '2026-02-01', 'date_to': '2026-01-01'},
+            'replace': {'supplier': self.other_supplier.id},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)

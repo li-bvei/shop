@@ -75,35 +75,33 @@ class Command(BaseCommand):
         excel_rows = [r for r in rows if r['date'] != PROTECTED_DATE]
         protected_skipped = len(rows) - len(excel_rows)
 
-        # Resolve every distinct supplier name to a Supplier row, creating
-        # any that don't exist yet — same convention import_purchases_2026
-        # already established for this same data source.
+        # Resolve every distinct supplier name against existing Supplier rows
+        # — without creating anything yet. A name with no match is given a
+        # per-name placeholder key instead: harmless for the diff (such a
+        # supplier has zero existing PurchaseRecord rows by definition, so
+        # every key built from it always reports as a deficit, the same as
+        # a real but brand-new pk would), and it means supplier creation can
+        # be deferred into the same atomic block as the record inserts below
+        # — no risk of a supplier landing in the DB while the run that
+        # needed it then fails partway through.
         supplier_names = sorted({r['supplier'] for r in excel_rows})
         suppliers_by_norm_name = {}
         for s in Supplier.objects.filter(organization=branch.organization):
             suppliers_by_norm_name.setdefault(normalize_supplier_name(s.name), s)
 
-        supplier_by_name = {}
-        created_suppliers = []
+        supplier_key_by_name = {}
+        new_supplier_names = []
         for name in supplier_names:
             existing = suppliers_by_norm_name.get(normalize_supplier_name(name))
             if existing:
-                supplier_by_name[name] = existing
+                supplier_key_by_name[name] = existing.pk
             else:
-                supplier = Supplier(organization=branch.organization, name=name)
-                if not dry_run:
-                    supplier.save()
-                supplier_by_name[name] = supplier
-                created_suppliers.append(name)
+                supplier_key_by_name[name] = f'new:{name}'
+                new_supplier_names.append(name)
 
         def excel_key(r):
-            # `.pk` is None for a brand-new (not yet saved) supplier during a
-            # --dry-run — harmless: such a supplier has zero existing
-            # PurchaseRecord rows by definition, so every key built from it
-            # will never collide with a real (integer pk) key from db_counter
-            # and its full excel count always reports as a deficit.
             return (
-                r['date'], supplier_by_name[r['supplier']].pk,
+                r['date'], supplier_key_by_name[r['supplier']],
                 normalize_item_name(r['item_name']), dec_qty(r['quantity']), dec_price(r['unit_price']),
             )
 
@@ -140,9 +138,9 @@ class Command(BaseCommand):
 
         prefix = '[DRY RUN] ' if dry_run else ''
         self.stdout.write(f'{prefix}Spreadsheet rows: {len(rows)} ({protected_skipped} on {PROTECTED_DATE} excluded)')
-        if created_suppliers:
+        if new_supplier_names:
             self.stdout.write(self.style.WARNING(
-                f'{prefix}New suppliers {"would be " if dry_run else ""}created: {created_suppliers}',
+                f'{prefix}New suppliers {"would be " if dry_run else ""}created: {new_supplier_names}',
             ))
         self.stdout.write(f'{prefix}Rows to insert: {len(to_insert)}, total amount {total_amount:,}')
         for month in sorted(by_month):
@@ -151,11 +149,22 @@ class Command(BaseCommand):
         if dry_run:
             return
 
+        # Supplier creation and the record inserts that depend on it share
+        # one atomic block — if bulk_create fails partway through, the new
+        # supplier(s) roll back with it instead of being left behind
+        # unreferenced by anything.
         with transaction.atomic():
             today = timezone.localdate()
+            for name in new_supplier_names:
+                supplier = Supplier.objects.create(organization=branch.organization, name=name)
+                suppliers_by_norm_name[normalize_supplier_name(name)] = supplier
+
+            def resolve_supplier(name):
+                return suppliers_by_norm_name[normalize_supplier_name(name)]
+
             records = [
                 PurchaseRecord(
-                    date=r['date'], branch=branch, supplier=supplier_by_name[r['supplier']],
+                    date=r['date'], branch=branch, supplier=resolve_supplier(r['supplier']),
                     item_name=r['item_name'], item_name_normalized=normalize_item_name(r['item_name']),
                     quantity=dec_qty(r['quantity']), unit_price=dec_price(r['unit_price']),
                     amount=dec_qty(r['quantity']) * dec_price(r['unit_price']),
@@ -167,5 +176,5 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(
             f'Inserted {len(to_insert)} purchase records ({today.isoformat()} run) '
-            f'and created {len(created_suppliers)} new supplier(s).',
+            f'and created {len(new_supplier_names)} new supplier(s).',
         ))

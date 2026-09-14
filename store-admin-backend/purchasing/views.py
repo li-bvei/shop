@@ -2,7 +2,7 @@ import django_filters
 from django.db.models import Count, Sum
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
-from rest_framework import filters as drf_filters, viewsets
+from rest_framework import filters as drf_filters, serializers, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
@@ -143,36 +143,63 @@ class PurchaseRecordViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
         one repeated mistake)."""
         match = request.data.get('match')
         replace = request.data.get('replace')
-        if not isinstance(match, dict) or not any(match.get(k) for k in ('date', 'date_from', 'date_to', 'supplier', 'item_name')):
+        if not isinstance(match, dict):
+            raise ValidationError({'match': ['Must be an object.']})
+        if not isinstance(replace, dict):
+            raise ValidationError({'replace': ['Must be an object.']})
+
+        # Parsed eagerly (not left to the queryset's lazy evaluation) so a
+        # malformed date reliably surfaces as 400 here, not as an unhandled
+        # exception whenever the queryset later gets evaluated.
+        date_field = serializers.DateField()
+
+        def parse_date(value, field_name):
+            try:
+                return date_field.to_internal_value(value)
+            except serializers.ValidationError as exc:
+                raise ValidationError({field_name: exc.detail})
+
+        match_date = parse_date(match['date'], 'match.date') if match.get('date') else None
+        match_date_from = parse_date(match['date_from'], 'match.date_from') if match.get('date_from') else None
+        match_date_to = parse_date(match['date_to'], 'match.date_to') if match.get('date_to') else None
+        if match_date_from and match_date_to and match_date_from > match_date_to:
+            raise ValidationError({'match.date_from': ['must not be after match.date_to']})
+        # Whitespace-only is not "no filter" by accident — normalize_item_name
+        # would reduce it to '', and item_name_normalized__icontains('')
+        # matches every row in scope instead of narrowing anything.
+        match_item_name = (match.get('item_name') or '').strip() or None
+        match_supplier = match.get('supplier') or None
+
+        if not any([match_date, match_date_from, match_date_to, match_supplier, match_item_name]):
             raise ValidationError({'match': ['At least one match condition is required.']})
-        if not isinstance(replace, dict) or not any(replace.get(k) for k in ('date', 'supplier')):
+
+        replace_date = parse_date(replace['date'], 'replace.date') if replace.get('date') else None
+        replace_supplier = replace.get('supplier') or None
+        if not replace_date and not replace_supplier:
             raise ValidationError({'replace': ['At least one field to replace is required.']})
 
         queryset = self.get_queryset()
-        try:
-            if match.get('date'):
-                queryset = queryset.filter(date=match['date'])
-            if match.get('date_from'):
-                queryset = queryset.filter(date__gte=match['date_from'])
-            if match.get('date_to'):
-                queryset = queryset.filter(date__lte=match['date_to'])
-            if match.get('supplier'):
-                queryset = queryset.filter(supplier_id=match['supplier'])
-        except (ValueError, TypeError) as exc:
-            raise ValidationError({'match': [str(exc)]})
-        if match.get('item_name'):
-            queryset = queryset.filter(item_name_normalized__icontains=normalize_item_name(match['item_name']))
+        if match_date:
+            queryset = queryset.filter(date=match_date)
+        if match_date_from:
+            queryset = queryset.filter(date__gte=match_date_from)
+        if match_date_to:
+            queryset = queryset.filter(date__lte=match_date_to)
+        if match_supplier:
+            queryset = queryset.filter(supplier_id=match_supplier)
+        if match_item_name:
+            queryset = queryset.filter(item_name_normalized__icontains=normalize_item_name(match_item_name))
 
         update_fields = {}
-        if replace.get('date'):
-            update_fields['date'] = replace['date']
-        if replace.get('supplier'):
+        if replace_date:
+            update_fields['date'] = replace_date
+        if replace_supplier:
             new_supplier = Supplier.objects.filter(
-                id=replace['supplier'], organization_id=request.user.organization_id,
+                id=replace_supplier, organization_id=request.user.organization_id,
             ).first()
             if not new_supplier:
                 raise ValidationError({'replace': ['supplier-not-found']})
-            update_fields['supplier_id'] = replace['supplier']
+            update_fields['supplier_id'] = replace_supplier
 
         count = queryset.count()
         if not request.data.get('confirm'):

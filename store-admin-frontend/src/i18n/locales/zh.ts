@@ -228,7 +228,7 @@ export default {
     historyCountEmpty: '{date} 暂无修改记录',
     editHistoryTitle: '编辑历史版本',
     cashRegisterTitle: '收银机现有金额',
-    cashRegisterHint: '请按面额填写盘点到的数量；500/100/50/10/5日元这几档的备用（默认）数量会自动加进小计和合计，不用把备用数量也数进去',
+    cashRegisterHint: '请按面额填写收银机内纸币和硬币的数量',
     cashRegisterDenomination: '面额',
     cashRegisterQuantity: '数量',
     cashRegisterSubtotal: '小计',
@@ -240,7 +240,7 @@ export default {
     cashRegisterShort: '少 {amount}',
     cashRegisterEmpty: '请完成面额盘点',
     cashRegisterDefaultQuantity: '默认数量',
-    cashRegisterDefaultHint: '这一列的数值会自动加进左边的"小计"，不会写入"数量"输入框；改这一列会立刻保存，只影响以后新建的日报，不会改动已经保存过的记录',
+    cashRegisterDefaultHint: '改这一列会立刻保存，只影响以后新建的日报，不会改动已经保存过的记录',
   },
   // Payment method names are kept in their original Japanese/brand form even
   // in Chinese mode — staff recognize 電子マネー/大阪プレミアム券/掛金 on

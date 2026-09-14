@@ -228,7 +228,7 @@ export default {
     historyCountEmpty: '{date} の変更履歴はありません',
     editHistoryTitle: '履歴バージョンを編集',
     cashRegisterTitle: 'レジ内現金残高',
-    cashRegisterHint: 'カウントした枚数を額面ごとに入力してください。500/100/50/10/5円のデフォルト枚数は小計・合計に自動で加算されるため、デフォルト分は数えずに入力してください',
+    cashRegisterHint: 'レジ内の紙幣・硬貨を額面ごとに入力してください',
     cashRegisterDenomination: '額面',
     cashRegisterQuantity: '枚数',
     cashRegisterSubtotal: '小計',
@@ -240,7 +240,7 @@ export default {
     cashRegisterShort: '{amount} 不足',
     cashRegisterEmpty: '額面ごとの確認を入力してください',
     cashRegisterDefaultQuantity: 'デフォルト枚数',
-    cashRegisterDefaultHint: 'この列の値は左の「小計」に自動で加算され、「枚数」欄には反映されません。この列を変更すると即座に保存されます。以後新規作成する日報にのみ反映され、保存済みの記録は変更されません',
+    cashRegisterDefaultHint: 'この列を変更すると即座に保存されます。以後新規作成する日報にのみ反映され、保存済みの記録は変更されません',
   },
   paymentMethod: {
     cash: '現金',

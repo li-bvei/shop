@@ -19,6 +19,24 @@
 | 停用对应账号权限 | 已实现 | `User.is_active`、`guard_account_deactivation`、平台/设置账号开关 |
 | 总店账号禁止扫码核销 | 已实现 | promotions views 的 `head-office-account-cannot-scan` 错误码及 kiosk 提示 |
 | 新建第二个机构并测试多分店 | 已覆盖测试 | `organizations/tests.py` 有跨机构平台总览、账号停用和功能开关测试；生产数据需另行确认 |
+| 进货筛选/翻页数秒延迟 | 已实现 | `purchasing/views.py` `month_total` action，前端 `fetchPurchaseMonthTotal` |
+| 进货同日多条记录排序 | 已实现 | `PurchaseRecordViewSet.filter_queryset` 补 `-id` 兜底排序 |
+| 价格履历/涨跌对比长期为空（数据 bug） | 已修复 | `backfill_item_name_normalized` 命令，已在生产执行 |
+| 价格履历对比口径改为"上次进货"，历史默认只显示近2月 | 已实现 | `compute_prior_purchase_deltas`、`PurchasingView.vue` 历史抽屉 |
+| 进货品目联想不提示是否新商品 | 已实现 | `PurchasingView.vue` `isNewItem` + 新商品提示 |
+| 进货 IME 回车误提交/数量单价可空提交 | 已实现 | `handleRowEnter` 组字保护、`commitRow` 数量/单价校验 |
+| 进货批量替换（多条件组合） | 已实现 | `purchasing/views.py` `bulk_replace` action，`purchasing/tests.py` 6+3 个用例 |
+| 2026年进货明细与 Excel 对比补漏 | 已执行 | `reconcile_purchases_2026` 命令，生产已跑（453 条，验证幂等） |
+| 日报报销明细缩放/窄屏可读性 | 已实现 | `DailyReportForm.vue` `.expense-row` 最小宽度 + 自动换行 |
+| 日报报销联想词不自动带金额 | 已实现 | `DailyReportForm.vue` `handleSelectSuggestion` |
+| 日报打印自适应单页、隐藏0元支付方式 | 已实现 | `usePrintFit`、`DailyReportForm.vue` `pm-zero-print-hide` |
+| 日报离线保存与冲突处理 | 已实现 | `utils/dailyReportDraft.ts`、`DailyReportView.vue` 同步/冲突逻辑 |
+| 首页问候语按时间变化 | 已实现 | `AppShell.vue` `greetingKey()` |
+| 全局屏蔽鼠标滚轮改数字输入框 | 已实现 | `main.ts` 全局 `wheel` 监听 |
+| 超管账号出现在企业自己账号列表（权限漏洞） | 已修复 | `UserViewSet.get_queryset`、`PlatformOrganizationUsersView` 均加 `is_superuser=False` |
+| 企业停用（`Organization.active`）未生效 | 已实现 | `OrganizationScopedJWTAuthentication`、`OrganizationScopedTokenObtainPairSerializer` |
+| 平台超管跨企业账号/分店管理、新建企业 | 已实现 | `organizations/views.py` Platform* 系列 view、`PlatformFeaturesView.vue` |
+| 日报零钱默认数量 + レジ固定金額可改 | 方案已确认，代码未写 | 见 `01_CURRENT_STATE.md` 待处理 |
 
 ## 当前未完成或需要业务决定
 
@@ -26,3 +44,5 @@
 - 生产安全配置、正式域名 HTTPS 和服务器版本需要部署时确认。
 - 前端仍有较大的构建 chunk，可后续拆包，不是当前功能阻塞。
 - 早期方案中的一些匿名会话、复杂反作弊、POS 交易号联动未纳入当前第一版。
+- 日报零钱默认数量（500/100/50/10/5）+ レジ固定金額可改：方案已和用户确认（按分店存默认值，改了立刻保存、只影响以后新建/未填的日报，不改历史记录），代码尚未写，是本次会话下一步任务。
+- `docs/ai-handoff/05_TESTS_AND_RISKS.md` 记录的 P1-02/P1-04/P1-05/P1-06/P1-07（进货负数口径、部署脚本回滚方式、密码强度、生产安全配置现场验证、积分流水语义）都是需要业务负责人决策或较大范围改动的项，本次会话未处理。

@@ -91,15 +91,18 @@ export function computeDerived(
 }
 
 // `denominationDefaults` (the per-branch float reserve, keyed by denomination
-// string) is added on top of each COUNTED quantity before multiplying — the
+// string) is added on top of each counted quantity before multiplying — the
 // count entered on the report is only what's counted beyond the fixed float,
 // so the float itself must be added back in here rather than ever being
-// written into the count field. The default applies only when BOTH:
-//  - `reportDate` is on/after CASH_REGISTER_DEFAULTS_CUTOFF_DATE — a report
-//    dated before the feature existed must never have the default added,
-//    full stop, regardless of what its rows contain; and
-//  - the individual row was actually counted this time (count !== null) —
-//    an untouched row stays at ¥0.
+// written into the count field. This happens unconditionally for every row
+// (including one nobody touched this time — that's the whole point: the
+// float is presumed present without re-entering it) as long as `reportDate`
+// is on/after CASH_REGISTER_DEFAULTS_CUTOFF_DATE. A report dated before the
+// feature existed must never have the default added, full stop — that cutoff
+// is the only gate; per-row null-checking was tried and removed; it broke
+// the "don't need to type anything to get the float counted" behaviour for
+// eligible dates without being needed once the date gate exists (a report
+// before the cutoff never got the default even when a row had a real value).
 export function computeCashRegisterTotal(
   counts: Record<string, number | null | undefined>,
   denominationDefaults: Record<string, number | null | undefined> = {},
@@ -108,9 +111,9 @@ export function computeCashRegisterTotal(
   const defaultsEligible = !!reportDate && reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
   return CASH_REGISTER_DENOMINATIONS.reduce((sum, denomination) => {
     const key = String(denomination)
-    const count = counts[key]
-    const defaultQuantity = defaultsEligible && count != null ? (denominationDefaults[key] ?? 0) : 0
-    return sum + denomination * ((count ?? 0) + defaultQuantity)
+    const count = counts[key] ?? 0
+    const defaultQuantity = defaultsEligible ? (denominationDefaults[key] ?? 0) : 0
+    return sum + denomination * (count + defaultQuantity)
   }, 0)
 }
 </script>
@@ -174,20 +177,32 @@ const savingDenominationDefault = ref<number | null>(null)
 const savingExpectedTotal = ref(false)
 
 // Mirrors computeCashRegisterTotal's per-row logic for the row subtotal
-// display: the default only counts once this row has actually been counted.
+// display — see that function's comment for why the default applies
+// unconditionally (not just to rows that were touched) once the date gate
+// is eligible.
 function cashRegisterRowSubtotal(denomination: number) {
   const key = String(denomination)
-  const count = data.value.cashRegisterCounts[key]
+  const count = data.value.cashRegisterCounts[key] ?? 0
   const defaultsEligible = props.reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
-  const defaultQuantity = defaultsEligible && count != null ? (cashRegisterDefaults.value.denominationDefaults[key] ?? 0) : 0
-  return denomination * ((count ?? 0) + defaultQuantity)
+  const defaultQuantity = defaultsEligible ? (cashRegisterDefaults.value.denominationDefaults[key] ?? 0) : 0
+  return denomination * (count + defaultQuantity)
 }
+
+// The デフォルト枚数 column only makes sense — and only gets shown — for a
+// report dated on/after the cutoff: showing it (even read-only) on an older
+// report implies the default applies there, which it never does.
+const showDefaultsColumn = computed(
+  () => !!props.allowCashRegisterDefaultEdits && props.reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE,
+)
 
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
 const cashRegister = computed(() => {
   const actual = computeCashRegisterTotal(data.value.cashRegisterCounts, cashRegisterDefaults.value.denominationDefaults, props.reportDate)
   const difference = actual - cashRegisterDefaults.value.expectedTotal
-  const hasInput = CASH_REGISTER_DENOMINATIONS.some(
+  const defaultsEligible = props.reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
+  const hasDefaultContribution = defaultsEligible
+    && Object.values(cashRegisterDefaults.value.denominationDefaults).some((v) => (v ?? 0) > 0)
+  const hasInput = hasDefaultContribution || CASH_REGISTER_DENOMINATIONS.some(
     (denomination) => data.value.cashRegisterCounts[String(denomination)] != null,
   )
   return {
@@ -456,12 +471,12 @@ async function handleAddPaymentMethod() {
           </div>
           <p class="cash-register-hint">{{ t('dailyReport.cashRegisterHint') }}</p>
           <div class="cash-register-layout">
-            <div class="cash-register-table" :class="{ 'has-defaults-column': allowCashRegisterDefaultEdits }">
+            <div class="cash-register-table" :class="{ 'has-defaults-column': showDefaultsColumn }">
               <div class="cash-register-row cash-register-header">
                 <span>{{ t('dailyReport.cashRegisterDenomination') }}</span>
                 <span>{{ t('dailyReport.cashRegisterQuantity') }}</span>
                 <span>{{ t('dailyReport.cashRegisterSubtotal') }}</span>
-                <span v-if="allowCashRegisterDefaultEdits">{{ t('dailyReport.cashRegisterDefaultQuantity') }}</span>
+                <span v-if="showDefaultsColumn">{{ t('dailyReport.cashRegisterDefaultQuantity') }}</span>
               </div>
               <div v-for="denomination in CASH_REGISTER_DENOMINATIONS" :key="denomination" class="cash-register-row">
                 <strong>{{ formatCurrency(denomination) }}</strong>
@@ -474,7 +489,7 @@ async function handleAddPaymentMethod() {
                 />
                 <span class="cash-register-subtotal">{{ formatCurrency(cashRegisterRowSubtotal(denomination)) }}</span>
                 <el-input
-                  v-if="allowCashRegisterDefaultEdits && (CASH_REGISTER_FLOAT_DENOMINATIONS as readonly number[]).includes(denomination)"
+                  v-if="showDefaultsColumn && (CASH_REGISTER_FLOAT_DENOMINATIONS as readonly number[]).includes(denomination)"
                   v-model.number="cashRegisterDefaults.denominationDefaults[String(denomination)]"
                   type="number"
                   min="0"
@@ -483,7 +498,7 @@ async function handleAddPaymentMethod() {
                   :disabled="savingDenominationDefault === denomination"
                   @change="handleUpdateDenominationDefault(denomination)"
                 />
-                <span v-else-if="allowCashRegisterDefaultEdits" class="cash-register-default-empty" />
+                <span v-else-if="showDefaultsColumn" class="cash-register-default-empty" />
               </div>
             </div>
             <div class="cash-register-summary">

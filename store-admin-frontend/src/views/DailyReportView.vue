@@ -478,9 +478,9 @@ async function handleDownload() {
     ]).font = { bold: true }
     const defaultsEligible = reportDate.value >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
     for (const denomination of CASH_REGISTER_DENOMINATIONS) {
-      const rawQuantity = reportForm.cashRegisterCounts[String(denomination)]
-      const defaultQuantity = defaultsEligible && rawQuantity != null ? (cashRegisterDenominationDefaults.value[String(denomination)] ?? 0) : 0
-      ws.addRow([denomination, rawQuantity ?? 0, denomination * ((rawQuantity ?? 0) + defaultQuantity)])
+      const rawQuantity = reportForm.cashRegisterCounts[String(denomination)] ?? 0
+      const defaultQuantity = defaultsEligible ? (cashRegisterDenominationDefaults.value[String(denomination)] ?? 0) : 0
+      ws.addRow([denomination, rawQuantity, denomination * (rawQuantity + defaultQuantity)])
     }
     const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, cashRegisterDenominationDefaults.value, reportDate.value)
     ws.addRow([t('dailyReport.cashRegisterExpected'), cashRegisterExpectedTotal.value])

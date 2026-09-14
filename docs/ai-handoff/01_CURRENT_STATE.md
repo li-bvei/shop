@@ -2,8 +2,8 @@
 
 ## 仓库基线
 
-- 当前 HEAD：`1fc5fa1 purchasing: fix bulk_replace empty-filter and unvalidated-date bugs`
-- 上一个重要提交：`960bbac`（进货批量替换重构为多条件组合 + 2026注文書 数据核对，同一天被后续提交修了其中两个 bug）。
+- 当前 HEAD：`1453cc5 dailyreports: per-branch cash-register defaults (float qty + expected total)`
+- 上一个重要提交：`1fc5fa1`（批量替换空字符串/日期校验 bug 修复）→ `960bbac`（进货批量替换重构为多条件组合 + 2026注文書 数据核对）。
 - 再往前：`34eee9e`（进货性能/数据修复、日报离线保存、平台租户管理批次）。
 - 再往前的历史基线：`ec54c2d docs: 2026-09-06 batch — ops fixes, org feature gates, platform console, check-in tiers`。
 - 工作区已知未跟踪：`store-admin-frontend/.claude/`。本次不处理。

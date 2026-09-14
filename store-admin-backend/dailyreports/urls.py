@@ -1,9 +1,12 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
-from .views import DailyReportHistoryViewSet, DailyReportViewSet
+from .views import CashRegisterDefaultsView, DailyReportHistoryViewSet, DailyReportViewSet
 
 router = DefaultRouter()
 router.register('daily-reports', DailyReportViewSet, basename='daily-report')
 router.register('daily-report-history', DailyReportHistoryViewSet, basename='daily-report-history')
 
-urlpatterns = router.urls
+urlpatterns = router.urls + [
+    path('cash-register-defaults/', CashRegisterDefaultsView.as_view(), name='cash-register-defaults'),
+]

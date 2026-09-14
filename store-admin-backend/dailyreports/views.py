@@ -1,12 +1,15 @@
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
+from branches.models import Branch
 from common.permissions import BranchScopedQuerysetMixin
 
-from .models import DailyReport, DailyReportHistory
-from .serializers import DailyReportHistorySerializer, DailyReportSerializer
+from .models import CashRegisterDefaults, DailyReport, DailyReportHistory
+from .serializers import CashRegisterDefaultsSerializer, DailyReportHistorySerializer, DailyReportSerializer
 
 
 class DailyReportViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
@@ -58,6 +61,42 @@ class DailyReportViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
         for r in results:
             r.pop('_score')
         return Response(results[:10])
+
+
+class CashRegisterDefaultsView(APIView):
+    """GET/PATCH /api/cash-register-defaults/?branch=<id> — the branch's
+    standing float default for the 5 small denominations plus its レジ固定
+    金額 (expected total). `branch` is required for admin accounts (which
+    aren't tied to one branch); branch/staff accounts always act on their
+    own branch and the query param is ignored for them. Lazily created on
+    first access, same convention as accounts.UserPreference."""
+
+    def _resolve_branch(self, request):
+        user = request.user
+        if user.role == user.Role.ADMIN:
+            branch_id = request.query_params.get('branch') or request.data.get('branch')
+            if not branch_id:
+                raise ValidationError({'branch': ['This field is required for admin accounts.']})
+            branch = Branch.objects.filter(id=branch_id, organization_id=user.organization_id).first()
+            if not branch:
+                raise NotFound('branch-not-found')
+            return branch
+        if not user.branch_id:
+            raise ValidationError({'branch': ['This account has no branch.']})
+        return user.branch
+
+    def get(self, request):
+        branch = self._resolve_branch(request)
+        defaults, _ = CashRegisterDefaults.objects.get_or_create(branch=branch)
+        return Response(CashRegisterDefaultsSerializer(defaults).data)
+
+    def patch(self, request):
+        branch = self._resolve_branch(request)
+        defaults, _ = CashRegisterDefaults.objects.get_or_create(branch=branch)
+        serializer = CashRegisterDefaultsSerializer(defaults, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        return Response(serializer.data)
 
 
 class DailyReportHistoryViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):

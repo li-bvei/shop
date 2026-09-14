@@ -36,7 +36,7 @@
 | 超管账号出现在企业自己账号列表（权限漏洞） | 已修复 | `UserViewSet.get_queryset`、`PlatformOrganizationUsersView` 均加 `is_superuser=False` |
 | 企业停用（`Organization.active`）未生效 | 已实现 | `OrganizationScopedJWTAuthentication`、`OrganizationScopedTokenObtainPairSerializer` |
 | 平台超管跨企业账号/分店管理、新建企业 | 已实现 | `organizations/views.py` Platform* 系列 view、`PlatformFeaturesView.vue` |
-| 日报零钱默认数量 + レジ固定金額可改 | 方案已确认，代码未写 | 见 `01_CURRENT_STATE.md` 待处理 |
+| 日报零钱默认数量 + レジ固定金額可改 | 已实现 | `dailyreports/models.py` `CashRegisterDefaults`、`views.py` `CashRegisterDefaultsView`、前端 `api/cashRegisterDefaults.ts`、`DailyReportForm.vue` |
 
 ## 当前未完成或需要业务决定
 
@@ -44,5 +44,4 @@
 - 生产安全配置、正式域名 HTTPS 和服务器版本需要部署时确认。
 - 前端仍有较大的构建 chunk，可后续拆包，不是当前功能阻塞。
 - 早期方案中的一些匿名会话、复杂反作弊、POS 交易号联动未纳入当前第一版。
-- 日报零钱默认数量（500/100/50/10/5）+ レジ固定金額可改：方案已和用户确认（按分店存默认值，改了立刻保存、只影响以后新建/未填的日报，不改历史记录），代码尚未写，是本次会话下一步任务。
 - `docs/ai-handoff/05_TESTS_AND_RISKS.md` 记录的 P1-02/P1-04/P1-05/P1-06/P1-07（进货负数口径、部署脚本回滚方式、密码强度、生产安全配置现场验证、积分流水语义）都是需要业务负责人决策或较大范围改动的项，本次会话未处理。

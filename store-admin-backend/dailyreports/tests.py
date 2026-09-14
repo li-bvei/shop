@@ -1,7 +1,7 @@
 from paymentmethods.models import PaymentMethodDef
 from common.test_utils import ApiTestCase
 
-from .models import DailyReport, DailyReportHistory
+from .models import CashRegisterDefaults, DailyReport, DailyReportHistory
 
 
 class CashCalculationTests(ApiTestCase):
@@ -135,3 +135,70 @@ class BranchScopingTests(ApiTestCase):
         }, format='json')
         self.assertEqual(resp.status_code, 201)
         self.assertEqual(resp.data['branch'], self.branch_a.id)
+
+
+class CashRegisterDefaultsTests(ApiTestCase):
+    def test_lazily_created_with_documented_defaults(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.get('/api/cash-register-defaults/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['denomination_defaults'], {})
+        self.assertEqual(resp.data['expected_total'], 130000)
+        self.assertEqual(CashRegisterDefaults.objects.filter(branch=self.branch_a).count(), 1)
+
+    def test_branch_account_can_update_own_defaults(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.patch('/api/cash-register-defaults/', {
+            'denomination_defaults': {'500': 10, '100': 20, '50': 5, '10': 10, '5': 4},
+            'expected_total': 150000,
+        }, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['denomination_defaults']['100'], 20)
+        self.assertEqual(resp.data['expected_total'], 150000)
+
+    def test_unknown_denomination_rejected(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.patch('/api/cash-register-defaults/', {
+            'denomination_defaults': {'10000': 1},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_negative_count_rejected(self):
+        self.login_as(self.branch_a_user)
+        resp = self.client.patch('/api/cash-register-defaults/', {
+            'denomination_defaults': {'500': -1},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_branch_accounts_are_isolated(self):
+        self.login_as(self.branch_a_user)
+        self.client.patch('/api/cash-register-defaults/', {
+            'denomination_defaults': {'500': 10},
+        }, format='json')
+        self.login_as(self.branch_b_user)
+        resp = self.client.get('/api/cash-register-defaults/')
+        self.assertEqual(resp.data['denomination_defaults'], {})
+
+    def test_admin_requires_branch_param(self):
+        self.login_as(self.admin)
+        resp = self.client.get('/api/cash-register-defaults/')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_admin_can_read_specific_branch(self):
+        CashRegisterDefaults.objects.create(branch=self.branch_a, expected_total=99999)
+        self.login_as(self.admin)
+        resp = self.client.get(f'/api/cash-register-defaults/?branch={self.branch_a.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['expected_total'], 99999)
+
+    def test_editing_defaults_never_touches_saved_reports(self):
+        report = DailyReport.objects.create(
+            branch=self.branch_a, date='2026-01-01', total_revenue=1000,
+            cash_register_counts={'500': 3},
+        )
+        self.login_as(self.branch_a_user)
+        self.client.patch('/api/cash-register-defaults/', {
+            'denomination_defaults': {'500': 99},
+        }, format='json')
+        report.refresh_from_db()
+        self.assertEqual(report.cash_register_counts, {'500': 3})

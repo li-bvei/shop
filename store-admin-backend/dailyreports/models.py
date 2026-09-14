@@ -73,6 +73,42 @@ class DailyReport(models.Model):
         super().save(*args, **kwargs)
 
 
+class CashRegisterDefaults(models.Model):
+    """Per-branch defaults for the daily report's cash-register count
+    section. Small-denomination change (500/100/50/10/5 yen) is normally
+    kept as a fixed float in the register and barely changes day to day —
+    without this, staff re-enter the same counts on every single report.
+    Large bills and 1-yen coins vary too much with actual business to have
+    a meaningful default, so they're deliberately not covered here.
+
+    Only ever read to *pre-fill* a still-blank count on a report that
+    hasn't been touched yet (see DailyReportView.vue) — editing this row
+    never rewrites an already-saved DailyReport.cash_register_counts.
+    """
+
+    FLOAT_DENOMINATIONS = ('500', '100', '50', '10', '5')
+
+    branch = models.OneToOneField(
+        'branches.Branch', on_delete=models.CASCADE, related_name='cash_register_defaults',
+    )
+    # Keyed by yen value as a string (JSON keys must be strings), same
+    # convention as DailyReport.cash_register_counts — only ever holds keys
+    # from FLOAT_DENOMINATIONS.
+    denomination_defaults = models.JSONField(default=dict, blank=True)
+    # The register's expected/target total (レジ固定金額) actual counts are
+    # compared against. Was a hardcoded constant (130000) on every branch;
+    # this default keeps that exact behavior for a branch that hasn't set
+    # its own value yet.
+    expected_total = models.PositiveIntegerField(default=130000)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f'{self.branch_id} cash register defaults'
+
+
 class DailyReportHistory(models.Model):
     """Append-only edit trail. `saved_at` and `edited_by` are always set from
     the request, never trusted from the client, so the "who/when" record the

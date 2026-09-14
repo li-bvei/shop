@@ -16,6 +16,7 @@ import {
 } from '@/api/dailyReport'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
+import { fetchCashRegisterDefaults } from '@/api/cashRegisterDefaults'
 import DailyReportForm, {
   CASH_REGISTER_DENOMINATIONS,
   CASH_REGISTER_EXPECTED_TOTAL,
@@ -38,6 +39,7 @@ const isAdmin = computed(() => auth.role === 'admin')
 
 const staffList = ref<StaffMember[]>([])
 const paymentMethods = ref<PaymentMethodDef[]>([])
+const cashRegisterExpectedTotal = ref(CASH_REGISTER_EXPECTED_TOTAL)
 const branchId = ref(auth.branchId ?? 'shinsaibashi')
 const reportDate = ref(todayJst())
 const reportId = ref<number | null>(null)
@@ -102,14 +104,18 @@ function formatDateTime(iso: string) {
 }
 
 async function loadReport() {
-  const [staff, methods, seed] = await Promise.all([
+  const [staff, methods, seed, cashRegisterDefaults] = await Promise.all([
     fetchStaffByBranch(branchId.value),
     fetchPaymentMethods(branchId.value),
     fetchDailyReport(branchId.value, reportDate.value),
+    fetchCashRegisterDefaults(branchId.value),
   ])
 
   staffList.value = staff
   paymentMethods.value = methods
+  // Only used for the Excel export's 予定金額 line — DailyReportForm.vue
+  // fetches and owns its own copy for the on-screen comparison/editing.
+  cashRegisterExpectedTotal.value = cashRegisterDefaults.expectedTotal
 
   reportId.value = seed.id
   reportUpdatedAt.value = seed.updatedAt
@@ -390,9 +396,9 @@ async function handleDownload() {
       ws.addRow([denomination, quantity, denomination * quantity])
     }
     const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts)
-    ws.addRow([t('dailyReport.cashRegisterExpected'), CASH_REGISTER_EXPECTED_TOTAL])
+    ws.addRow([t('dailyReport.cashRegisterExpected'), cashRegisterExpectedTotal.value])
     ws.addRow([t('dailyReport.cashRegisterActual'), cashRegisterTotal])
-    ws.addRow([t('dailyReport.cashRegisterDifference'), cashRegisterTotal - CASH_REGISTER_EXPECTED_TOTAL])
+    ws.addRow([t('dailyReport.cashRegisterDifference'), cashRegisterTotal - cashRegisterExpectedTotal.value])
     ws.columns.forEach((col) => { col.width = 18 })
   })
 }
@@ -427,7 +433,7 @@ async function handleDownload() {
       </div>
 
       <div ref="printRoot">
-        <DailyReportForm v-model:data="reportForm" :branch-id="branchId" />
+        <DailyReportForm v-model:data="reportForm" :branch-id="branchId" allow-cash-register-default-edits />
       </div>
 
       <div class="submit-row no-print">

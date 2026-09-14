@@ -239,6 +239,8 @@ export default {
     cashRegisterOver: '多出 {amount}',
     cashRegisterShort: '少 {amount}',
     cashRegisterEmpty: '请完成面额盘点',
+    cashRegisterDefaultQuantity: '默认数量',
+    cashRegisterDefaultHint: '改这一列会立刻保存，只影响以后新建的日报，不会改动已经保存过的记录',
   },
   // Payment method names are kept in their original Japanese/brand form even
   // in Chinese mode — staff recognize 電子マネー/大阪プレミアム券/掛金 on

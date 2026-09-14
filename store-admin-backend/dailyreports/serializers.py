@@ -4,10 +4,34 @@ from rest_framework import serializers
 
 from paymentmethods.models import PaymentMethodDef
 
-from .models import DailyReport, DailyReportHistory
+from .models import CashRegisterDefaults, DailyReport, DailyReportHistory
 
 
 CASH_REGISTER_DENOMINATIONS = ('10000', '5000', '1000', '500', '100', '50', '10', '5', '1')
+
+
+class CashRegisterDefaultsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CashRegisterDefaults
+        fields = ['denomination_defaults', 'expected_total', 'updated_at']
+        read_only_fields = ['updated_at']
+
+    def validate_denomination_defaults(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('Must be an object.')
+        unknown = sorted(set(value) - set(CashRegisterDefaults.FLOAT_DENOMINATIONS))
+        if unknown:
+            raise serializers.ValidationError(f'unknown denominations: {unknown}')
+        cleaned = {}
+        for key, raw in value.items():
+            try:
+                count = int(raw)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError(f'invalid count for {key}')
+            if count < 0:
+                raise serializers.ValidationError(f'negative count for {key}')
+            cleaned[key] = count
+        return cleaned
 
 
 class DailyReportSerializer(serializers.ModelSerializer):

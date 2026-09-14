@@ -6,6 +6,13 @@ export interface ExpenseRow {
 }
 
 export const CASH_REGISTER_DENOMINATIONS = [10000, 5000, 1000, 500, 100, 50, 10, 5, 1] as const
+// The subset that behaves like a fixed till float and gets a per-branch
+// default (see api/cashRegisterDefaults.ts) — large bills and 1-yen coins
+// move too much with actual business to have a meaningful default.
+export const CASH_REGISTER_FLOAT_DENOMINATIONS = [500, 100, 50, 10, 5] as const
+// Fallback only — a branch with no CashRegisterDefaults row yet (never
+// fetched, or the fetch hasn't resolved) compares against this, matching
+// what every branch used before the per-branch setting existed.
 export const CASH_REGISTER_EXPECTED_TOTAL = 130000
 
 export interface DailyReportFormData {
@@ -103,10 +110,20 @@ import {
 } from '@/api/masterData'
 import { fetchStaffByBranch, type StaffMember } from '@/api/staff'
 import type { PaymentMethodDef } from '@/api/masterData'
+import { fetchCashRegisterDefaults, updateCashRegisterDefaults, type CashRegisterDefaults } from '@/api/cashRegisterDefaults'
 import { formatCurrency } from '@/utils/format'
 import MoneyInput from '@/components/MoneyInput.vue'
 
-const props = defineProps<{ branchId: string }>()
+const props = defineProps<{
+  branchId: string
+  /** Only the live "fill out today's report" screen should let staff edit
+   * the register float defaults / expected total, and only there should a
+   * still-blank count get pre-filled from them — editing a past report
+   * (the history dialog) must never silently rewrite what was actually
+   * counted that day, or invent a default for a day that genuinely had
+   * none entered. */
+  allowCashRegisterDefaultEdits?: boolean
+}>()
 const data = defineModel<DailyReportFormData>('data', { required: true })
 
 const { t } = useI18n()
@@ -118,11 +135,16 @@ interface SuggestionOption extends ExpenseSuggestion {
 const staffList = ref<StaffMember[]>([])
 const paymentMethods = ref<PaymentMethodDef[]>([])
 const topSuggestions = ref<SuggestionOption[]>([])
+const cashRegisterDefaults = ref<CashRegisterDefaults>({
+  denominationDefaults: {}, expectedTotal: CASH_REGISTER_EXPECTED_TOTAL,
+})
+const savingDenominationDefault = ref<number | null>(null)
+const savingExpectedTotal = ref(false)
 
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
 const cashRegister = computed(() => {
   const actual = computeCashRegisterTotal(data.value.cashRegisterCounts)
-  const difference = actual - CASH_REGISTER_EXPECTED_TOTAL
+  const difference = actual - cashRegisterDefaults.value.expectedTotal
   const hasInput = CASH_REGISTER_DENOMINATIONS.some(
     (denomination) => data.value.cashRegisterCounts[String(denomination)] != null,
   )
@@ -164,20 +186,71 @@ async function refreshPaymentMethods() {
   syncPaymentAmountKeys(methods)
 }
 
+// A still-blank count (never entered on this report) gets pre-filled from
+// the branch's saved default — an explicit 0 or any other already-entered
+// value is left alone, and this only ever runs for the live report screen
+// (see the allowCashRegisterDefaultEdits prop doc comment).
+function prefillCashRegisterCountsFromDefaults() {
+  if (!props.allowCashRegisterDefaultEdits) return
+  for (const denomination of CASH_REGISTER_FLOAT_DENOMINATIONS) {
+    const key = String(denomination)
+    if (data.value.cashRegisterCounts[key] != null) continue
+    const defaultValue = cashRegisterDefaults.value.denominationDefaults[key]
+    if (defaultValue != null) data.value.cashRegisterCounts[key] = defaultValue
+  }
+}
+
 async function loadReferenceData() {
-  const [methods, staff, suggestions] = await Promise.all([
+  const [methods, staff, suggestions, defaults] = await Promise.all([
     fetchPaymentMethods(props.branchId),
     fetchStaffByBranch(props.branchId),
     fetchExpenseSuggestions(props.branchId),
+    fetchCashRegisterDefaults(props.branchId),
   ])
   paymentMethods.value = methods
   syncPaymentAmountKeys(methods)
   staffList.value = staff
   topSuggestions.value = suggestions.slice(0, 3).map((s) => ({ ...s, value: s.itemName }))
+  cashRegisterDefaults.value = defaults
+  prefillCashRegisterCountsFromDefaults()
 }
 
 onMounted(loadReferenceData)
 watch(() => props.branchId, loadReferenceData)
+
+// The parent (DailyReportView) swaps in a whole new `cashRegisterCounts`
+// object every time it loads a different date's report — branchId alone
+// doesn't change then, so loadReferenceData's watcher above never refires
+// and a freshly-loaded blank day would never get pre-filled. Watching the
+// object reference itself (not a deep watch) fires exactly on that swap,
+// never on an in-place edit to one denomination's count.
+watch(() => data.value.cashRegisterCounts, prefillCashRegisterCountsFromDefaults)
+
+async function handleUpdateDenominationDefault(denomination: number) {
+  const key = String(denomination)
+  savingDenominationDefault.value = denomination
+  try {
+    cashRegisterDefaults.value = await updateCashRegisterDefaults(props.branchId, {
+      denominationDefaults: {
+        ...cashRegisterDefaults.value.denominationDefaults,
+        [key]: cashRegisterDefaults.value.denominationDefaults[key] ?? 0,
+      },
+    })
+  } finally {
+    savingDenominationDefault.value = null
+  }
+}
+
+async function handleUpdateExpectedTotal() {
+  savingExpectedTotal.value = true
+  try {
+    cashRegisterDefaults.value = await updateCashRegisterDefaults(props.branchId, {
+      expectedTotal: cashRegisterDefaults.value.expectedTotal,
+    })
+  } finally {
+    savingExpectedTotal.value = false
+  }
+}
 
 function addExpenseRow() {
   data.value.expenses.push({ itemName: '', amount: null, purpose: '' })
@@ -363,11 +436,12 @@ async function handleAddPaymentMethod() {
           </div>
           <p class="cash-register-hint">{{ t('dailyReport.cashRegisterHint') }}</p>
           <div class="cash-register-layout">
-            <div class="cash-register-table">
+            <div class="cash-register-table" :class="{ 'has-defaults-column': allowCashRegisterDefaultEdits }">
               <div class="cash-register-row cash-register-header">
                 <span>{{ t('dailyReport.cashRegisterDenomination') }}</span>
                 <span>{{ t('dailyReport.cashRegisterQuantity') }}</span>
                 <span>{{ t('dailyReport.cashRegisterSubtotal') }}</span>
+                <span v-if="allowCashRegisterDefaultEdits">{{ t('dailyReport.cashRegisterDefaultQuantity') }}</span>
               </div>
               <div v-for="denomination in CASH_REGISTER_DENOMINATIONS" :key="denomination" class="cash-register-row">
                 <strong>{{ formatCurrency(denomination) }}</strong>
@@ -379,12 +453,37 @@ async function handleAddPaymentMethod() {
                   class="cash-register-quantity"
                 />
                 <span class="cash-register-subtotal">{{ formatCurrency(denomination * (data.cashRegisterCounts[String(denomination)] ?? 0)) }}</span>
+                <el-input
+                  v-if="allowCashRegisterDefaultEdits && (CASH_REGISTER_FLOAT_DENOMINATIONS as readonly number[]).includes(denomination)"
+                  v-model.number="cashRegisterDefaults.denominationDefaults[String(denomination)]"
+                  type="number"
+                  min="0"
+                  step="1"
+                  class="cash-register-default"
+                  :disabled="savingDenominationDefault === denomination"
+                  @change="handleUpdateDenominationDefault(denomination)"
+                />
+                <span v-else-if="allowCashRegisterDefaultEdits" class="cash-register-default-empty" />
               </div>
             </div>
+            <p v-if="allowCashRegisterDefaultEdits" class="cash-register-default-hint">
+              {{ t('dailyReport.cashRegisterDefaultHint') }}
+            </p>
             <div class="cash-register-summary">
               <div class="cash-register-summary-row">
                 <span>{{ t('dailyReport.cashRegisterExpected') }}</span>
-                <strong>{{ formatCurrency(CASH_REGISTER_EXPECTED_TOTAL) }}</strong>
+                <el-input
+                  v-if="allowCashRegisterDefaultEdits"
+                  v-model.number="cashRegisterDefaults.expectedTotal"
+                  type="number"
+                  min="0"
+                  step="1"
+                  size="small"
+                  class="cash-register-expected-input"
+                  :disabled="savingExpectedTotal"
+                  @change="handleUpdateExpectedTotal"
+                />
+                <strong v-else>{{ formatCurrency(cashRegisterDefaults.expectedTotal) }}</strong>
               </div>
               <div class="cash-register-summary-row actual">
                 <span>{{ t('dailyReport.cashRegisterActual') }}</span>
@@ -796,6 +895,10 @@ async function handleAddPaymentMethod() {
   font-size: 12px;
 }
 
+.cash-register-table.has-defaults-column .cash-register-row {
+  grid-template-columns: 82px 84px minmax(0, 1fr) 76px;
+}
+
 .cash-register-header {
   min-height: 26px;
   color: var(--text-tertiary);
@@ -806,7 +909,9 @@ async function handleAddPaymentMethod() {
   min-width: 0;
 }
 
-.cash-register-row > :last-child {
+.cash-register-subtotal {
+  color: var(--text-secondary);
+  white-space: nowrap;
   text-align: right;
 }
 
@@ -818,9 +923,29 @@ async function handleAddPaymentMethod() {
   text-align: right;
 }
 
-.cash-register-subtotal {
-  color: var(--text-secondary);
-  white-space: nowrap;
+.cash-register-default,
+.cash-register-default-empty {
+  width: 76px;
+}
+
+.cash-register-default :deep(.el-input__inner) {
+  text-align: right;
+}
+
+.cash-register-default-hint {
+  margin: 4px 0 0;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
+.cash-register-expected-input {
+  width: 110px;
+}
+
+.cash-register-expected-input :deep(.el-input__inner) {
+  text-align: right;
+  font-weight: 600;
 }
 
 .cash-register-summary {
@@ -884,8 +1009,17 @@ async function handleAddPaymentMethod() {
     grid-template-columns: minmax(58px, 1fr) 76px minmax(60px, 1fr);
   }
 
+  .cash-register-table.has-defaults-column .cash-register-row {
+    grid-template-columns: minmax(50px, 1fr) 64px minmax(50px, 1fr) 64px;
+  }
+
   .cash-register-quantity {
     width: 76px;
+  }
+
+  .cash-register-default,
+  .cash-register-default-empty {
+    width: 64px;
   }
 }
 

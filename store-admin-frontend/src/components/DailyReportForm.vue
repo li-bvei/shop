@@ -84,9 +84,18 @@ export function computeDerived(
   return { afternoonRevenue, afternoonCustomers, afternoonGroupCount, expenseTotal, cashAmount, cashRemaining }
 }
 
-export function computeCashRegisterTotal(counts: Record<string, number | null | undefined>) {
+// `denominationDefaults` (the per-branch float reserve, keyed by denomination
+// string) is added on top of each counted quantity before multiplying — the
+// count entered on the report is only what's counted beyond the fixed float,
+// so the float itself must be added back in here rather than ever being
+// written into the count field.
+export function computeCashRegisterTotal(
+  counts: Record<string, number | null | undefined>,
+  denominationDefaults: Record<string, number | null | undefined> = {},
+) {
   return CASH_REGISTER_DENOMINATIONS.reduce(
-    (sum, denomination) => sum + denomination * (counts[String(denomination)] ?? 0),
+    (sum, denomination) =>
+      sum + denomination * ((counts[String(denomination)] ?? 0) + (denominationDefaults[String(denomination)] ?? 0)),
     0,
   )
 }
@@ -117,11 +126,11 @@ import MoneyInput from '@/components/MoneyInput.vue'
 const props = defineProps<{
   branchId: string
   /** Only the live "fill out today's report" screen should let staff edit
-   * the register float defaults / expected total, and only there should a
-   * still-blank count get pre-filled from them — editing a past report
-   * (the history dialog) must never silently rewrite what was actually
-   * counted that day, or invent a default for a day that genuinely had
-   * none entered. */
+   * the register float defaults / expected total — editing a past report
+   * (the history dialog) must never let someone change what today's count
+   * gets added to after the fact. The defaults are still fetched and added
+   * into the subtotal/total in both places, since a saved count always
+   * means "counted beyond the float" regardless of where it's viewed. */
   allowCashRegisterDefaultEdits?: boolean
 }>()
 const data = defineModel<DailyReportFormData>('data', { required: true })
@@ -143,7 +152,7 @@ const savingExpectedTotal = ref(false)
 
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
 const cashRegister = computed(() => {
-  const actual = computeCashRegisterTotal(data.value.cashRegisterCounts)
+  const actual = computeCashRegisterTotal(data.value.cashRegisterCounts, cashRegisterDefaults.value.denominationDefaults)
   const difference = actual - cashRegisterDefaults.value.expectedTotal
   const hasInput = CASH_REGISTER_DENOMINATIONS.some(
     (denomination) => data.value.cashRegisterCounts[String(denomination)] != null,
@@ -186,20 +195,6 @@ async function refreshPaymentMethods() {
   syncPaymentAmountKeys(methods)
 }
 
-// A still-blank count (never entered on this report) gets pre-filled from
-// the branch's saved default — an explicit 0 or any other already-entered
-// value is left alone, and this only ever runs for the live report screen
-// (see the allowCashRegisterDefaultEdits prop doc comment).
-function prefillCashRegisterCountsFromDefaults() {
-  if (!props.allowCashRegisterDefaultEdits) return
-  for (const denomination of CASH_REGISTER_FLOAT_DENOMINATIONS) {
-    const key = String(denomination)
-    if (data.value.cashRegisterCounts[key] != null) continue
-    const defaultValue = cashRegisterDefaults.value.denominationDefaults[key]
-    if (defaultValue != null) data.value.cashRegisterCounts[key] = defaultValue
-  }
-}
-
 async function loadReferenceData() {
   const [methods, staff, suggestions, defaults] = await Promise.all([
     fetchPaymentMethods(props.branchId),
@@ -212,19 +207,10 @@ async function loadReferenceData() {
   staffList.value = staff
   topSuggestions.value = suggestions.slice(0, 3).map((s) => ({ ...s, value: s.itemName }))
   cashRegisterDefaults.value = defaults
-  prefillCashRegisterCountsFromDefaults()
 }
 
 onMounted(loadReferenceData)
 watch(() => props.branchId, loadReferenceData)
-
-// The parent (DailyReportView) swaps in a whole new `cashRegisterCounts`
-// object every time it loads a different date's report — branchId alone
-// doesn't change then, so loadReferenceData's watcher above never refires
-// and a freshly-loaded blank day would never get pre-filled. Watching the
-// object reference itself (not a deep watch) fires exactly on that swap,
-// never on an in-place edit to one denomination's count.
-watch(() => data.value.cashRegisterCounts, prefillCashRegisterCountsFromDefaults)
 
 async function handleUpdateDenominationDefault(denomination: number) {
   const key = String(denomination)
@@ -452,7 +438,7 @@ async function handleAddPaymentMethod() {
                   step="1"
                   class="cash-register-quantity"
                 />
-                <span class="cash-register-subtotal">{{ formatCurrency(denomination * (data.cashRegisterCounts[String(denomination)] ?? 0)) }}</span>
+                <span class="cash-register-subtotal">{{ formatCurrency(denomination * ((data.cashRegisterCounts[String(denomination)] ?? 0) + (cashRegisterDefaults.denominationDefaults[String(denomination)] ?? 0))) }}</span>
                 <el-input
                   v-if="allowCashRegisterDefaultEdits && (CASH_REGISTER_FLOAT_DENOMINATIONS as readonly number[]).includes(denomination)"
                   v-model.number="cashRegisterDefaults.denominationDefaults[String(denomination)]"

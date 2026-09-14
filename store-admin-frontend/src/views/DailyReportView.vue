@@ -40,6 +40,7 @@ const isAdmin = computed(() => auth.role === 'admin')
 const staffList = ref<StaffMember[]>([])
 const paymentMethods = ref<PaymentMethodDef[]>([])
 const cashRegisterExpectedTotal = ref(CASH_REGISTER_EXPECTED_TOTAL)
+const cashRegisterDenominationDefaults = ref<Record<string, number>>({})
 const branchId = ref(auth.branchId ?? 'shinsaibashi')
 const reportDate = ref(todayJst())
 const reportId = ref<number | null>(null)
@@ -113,9 +114,10 @@ async function loadReport() {
 
   staffList.value = staff
   paymentMethods.value = methods
-  // Only used for the Excel export's 予定金額 line — DailyReportForm.vue
-  // fetches and owns its own copy for the on-screen comparison/editing.
+  // Only used for the Excel export — DailyReportForm.vue fetches and owns
+  // its own copy for the on-screen comparison/editing.
   cashRegisterExpectedTotal.value = cashRegisterDefaults.expectedTotal
+  cashRegisterDenominationDefaults.value = cashRegisterDefaults.denominationDefaults
 
   reportId.value = seed.id
   reportUpdatedAt.value = seed.updatedAt
@@ -393,9 +395,10 @@ async function handleDownload() {
     ]).font = { bold: true }
     for (const denomination of CASH_REGISTER_DENOMINATIONS) {
       const quantity = reportForm.cashRegisterCounts[String(denomination)] ?? 0
-      ws.addRow([denomination, quantity, denomination * quantity])
+      const defaultQuantity = cashRegisterDenominationDefaults.value[String(denomination)] ?? 0
+      ws.addRow([denomination, quantity, denomination * (quantity + defaultQuantity)])
     }
-    const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts)
+    const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, cashRegisterDenominationDefaults.value)
     ws.addRow([t('dailyReport.cashRegisterExpected'), cashRegisterExpectedTotal.value])
     ws.addRow([t('dailyReport.cashRegisterActual'), cashRegisterTotal])
     ws.addRow([t('dailyReport.cashRegisterDifference'), cashRegisterTotal - cashRegisterExpectedTotal.value])

@@ -30,6 +30,17 @@ class ProvisionOrganizationCommandTests(TwoOrganizationApiTestCase):
         self.assertFalse(user.is_superuser)
         self.assertEqual(organization.branches.count(), 1)
 
+    def test_weak_admin_password_rejected_and_creates_nothing(self):
+        before = Organization.objects.count()
+        with self.assertRaises(CommandError):
+            call_command(
+                'provision_organization', code='weak-pw-co', name_zh='X', name_ja='X',
+                admin_account='weak-pw-admin', admin_password='weak1', stdout=StringIO(),
+            )
+        self.assertEqual(Organization.objects.count(), before)
+        self.assertFalse(Organization.objects.filter(code='weak-pw-co').exists())
+        self.assertFalse(User.objects.filter(username='weak-pw-admin').exists())
+
     def test_duplicate_global_account_creates_nothing(self):
         before = Organization.objects.count()
         with self.assertRaises(CommandError):
@@ -361,6 +372,24 @@ class PlatformAccountManagementTests(TwoOrganizationApiTestCase):
             f'/api/platform/users/{self.admin_b.id}/set_active/', {'is_active': False}, format='json',
         )
         self.assertEqual(resp.status_code, 400)
+
+    def test_weak_password_rejected_on_platform_account_creation(self):
+        self.login_as(self.superuser)
+        resp = self.client.post(f'/api/platform/organizations/{self.org_b.id}/users/', {
+            'account': 'org-b-new-branch', 'password': 'weak1', 'role': 'branch',
+            'branch_id': self.branch_b1.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(User.objects.filter(username='org-b-new-branch').exists())
+
+    def test_weak_password_rejected_on_platform_reset(self):
+        self.login_as(self.superuser)
+        resp = self.client.post(
+            f'/api/platform/users/{self.branch_b1_user.id}/reset_password/', {'password': 'weak1'},
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.branch_b1_user.refresh_from_db()
+        self.assertTrue(self.branch_b1_user.check_password(TEST_PASSWORD))
 
     def test_non_superuser_blocked_from_platform_user_endpoints(self):
         self.login_as(self.admin_a)

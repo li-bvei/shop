@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import User
-from accounts.services import guard_account_deactivation, guard_account_deletion
+from accounts.services import guard_account_deactivation, guard_account_deletion, validate_new_password
 from branches.models import Branch
 from common.features import FEATURE_REGISTRY, feature_state_for_org
 from common.permissions import IsPlatformSuperuser
@@ -220,8 +220,7 @@ class PlatformOrganizationUsersView(APIView):
         role = data.get('role')
         if not account:
             raise ValidationError({'account': ['This field is required.']})
-        if len(password) < 6:
-            raise ValidationError({'password': ['Password must be at least 6 characters.']})
+        validate_new_password(password, user=User(username=account, first_name=display_name))
         if role not in (User.Role.ADMIN, User.Role.BRANCH, User.Role.STAFF):
             raise ValidationError({'role': ['Must be admin, branch or staff.']})
         if User.objects.filter(username=account).exists():
@@ -296,8 +295,7 @@ class PlatformUserResetPasswordView(APIView):
         if not user:
             raise NotFound('user-not-found')
         password = request.data.get('password', '')
-        if len(password) < 6:
-            raise ValidationError({'password': ['Password must be at least 6 characters.']})
+        validate_new_password(password, user=user)
         user.set_password(password)
         user.save()
         return Response({'status': 'ok'})

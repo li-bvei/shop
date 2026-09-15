@@ -139,6 +139,7 @@ export default {
     validateAccount: 'アカウントを入力してください',
     validatePassword: 'パスワードを入力してください',
     invalidCredentials: 'アカウントまたはパスワードが正しくありません',
+    tooManyAttempts: '試行回数が多すぎます。しばらくしてから再度お試しください',
     multiAccountHint: 'ここでログインするとこのタブだけ切り替わります。他のタブの管理者/店舗アカウントはそのまま使えます。',
   },
   dashboard: {
@@ -809,7 +810,7 @@ export default {
     cannotDisableLastAdmin: '有効な管理者アカウントを最低1つ残す必要があります',
     password: 'パスワード',
     validatePassword: 'パスワードを入力してください',
-    validatePasswordLength: 'パスワードは6文字以上で入力してください',
+    validatePasswordLength: 'パスワードは10文字以上で入力してください',
     resetPasswordTitle: '{account} のパスワードをリセット',
     newPasswordPlaceholder: '新しいパスワードを入力',
     passwordResetSuccess: 'パスワードをリセットしました',

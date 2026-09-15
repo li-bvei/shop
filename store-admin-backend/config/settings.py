@@ -133,7 +133,9 @@ CACHES = {
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
-    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
+    # Django's own default is 8 — bumped for this admin system, which is
+    # reachable from the public internet and guards real financial data.
+    {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator', 'OPTIONS': {'min_length': 10}},
     {'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator'},
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
@@ -180,6 +182,12 @@ REST_FRAMEWORK = {
         'promo_guest_read': '120/min',
         'promo_guest_write': '20/min',
         'promo_staff_verify': '40/min',
+        # /api/token/ login — see accounts/throttling.py. IP-scoped is
+        # generous enough for a branch's whole staff sharing one router;
+        # account-scoped is the real brute-force stop since it follows the
+        # target regardless of source IP.
+        'login_ip': '30/min',
+        'login_account': '8/min',
     },
 }
 

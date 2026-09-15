@@ -15,11 +15,13 @@ from .models import User, UserPreference
 from .serializers import (
     MeSerializer, OrganizationScopedTokenObtainPairSerializer, UserPreferenceSerializer, UserSerializer,
 )
-from .services import guard_account_deactivation, guard_account_deletion
+from .services import guard_account_deactivation, guard_account_deletion, validate_new_password
+from .throttling import LoginAccountThrottle, LoginIpThrottle
 
 
 class OrganizationScopedTokenObtainPairView(TokenObtainPairView):
     serializer_class = OrganizationScopedTokenObtainPairSerializer
+    throttle_classes = [LoginIpThrottle, LoginAccountThrottle]
 
 
 class MeView(RetrieveAPIView):
@@ -145,8 +147,7 @@ class UserViewSet(viewsets.ModelViewSet):
     def reset_password(self, request, pk=None):
         user = self.get_object()
         new_password = request.data.get('password', '')
-        if len(new_password) < 6:
-            raise ValidationError({'password': ['Password must be at least 6 characters.']})
+        validate_new_password(new_password, user=user)
         user.set_password(new_password)
         user.save()
         return Response({'status': 'ok'})
@@ -175,8 +176,13 @@ class ChangePasswordView(APIView):
         user = request.user
         if not user.check_password(old_password):
             raise ValidationError({'old_password': ['invalid-old-password']})
-        if len(new_password) < 6:
-            raise ValidationError({'new_password': ['Password must be at least 6 characters.']})
+        try:
+            validate_new_password(new_password, user=user)
+        except ValidationError as exc:
+            # Same shape as every other error this endpoint raises: a
+            # `new_password` key, not `password` — validate_new_password is
+            # shared across endpoints that each name the field differently.
+            raise ValidationError({'new_password': exc.detail.get('password', exc.detail)})
         user.set_password(new_password)
         user.save()
         return Response({'status': 'ok'})

@@ -7,6 +7,7 @@ from common.features import enabled_features_for_org
 from staff.models import StaffMember
 
 from .models import User, UserPreference
+from .services import validate_new_password
 
 
 class OrganizationScopedTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -67,7 +68,7 @@ class UserSerializer(serializers.ModelSerializer):
     silently overwritten by an unrelated PATCH."""
 
     account = serializers.CharField(source='username')
-    password = serializers.CharField(write_only=True, required=False, min_length=6)
+    password = serializers.CharField(write_only=True, required=False)
     displayName = serializers.CharField(source='first_name')
     # Deactivated accounts can't log in and any live token stops working
     # immediately (simplejwt re-checks is_active on every request).
@@ -100,6 +101,12 @@ class UserSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if self.instance is None and not attrs.get('password'):
             raise serializers.ValidationError({'password': ['This field is required when creating an account.']})
+        if attrs.get('password'):
+            probe = User(
+                username=attrs.get('username', getattr(self.instance, 'username', '')),
+                first_name=attrs.get('first_name', getattr(self.instance, 'first_name', '')),
+            )
+            validate_new_password(attrs['password'], user=probe)
 
         role = attrs.get('role', self.instance.role if self.instance else None)
         if role == User.Role.STAFF:

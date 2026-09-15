@@ -27,6 +27,22 @@ class LoginTests(ApiTestCase):
         resp = self.client.get('/api/auth/me/')
         self.assertEqual(resp.status_code, 401)
 
+    def test_repeated_wrong_password_attempts_against_one_account_get_throttled(self):
+        # login_account rate is 8/min (see settings.DEFAULT_THROTTLE_RATES) —
+        # the 9th attempt against the same account within the window must be
+        # rejected outright, regardless of whether the password was right.
+        for _ in range(8):
+            resp = self.client.post('/api/token/', {'username': self.admin.username, 'password': 'wrong'})
+            self.assertEqual(resp.status_code, 401)
+        throttled = self.client.post('/api/token/', {'username': self.admin.username, 'password': 'wrong'})
+        self.assertEqual(throttled.status_code, 429)
+        # A different account from the same client isn't affected — the
+        # throttle bucket is keyed per-account, not per-IP-only.
+        other_ok = self.client.post(
+            '/api/token/', {'username': self.branch_a_user.username, 'password': TEST_PASSWORD},
+        )
+        self.assertEqual(other_ok.status_code, 200)
+
 
 class ChangePasswordTests(ApiTestCase):
     def test_self_service_change_password(self):
@@ -44,6 +60,16 @@ class ChangePasswordTests(ApiTestCase):
             'old_password': 'not-the-real-password', 'new_password': 'newpass456',
         })
         self.assertEqual(resp.status_code, 400)
+        self.branch_a_user.refresh_from_db()
+        self.assertTrue(self.branch_a_user.check_password(TEST_PASSWORD))
+
+    def test_weak_new_password_rejected(self):
+        self.login_as(self.branch_a_user)
+        for weak in ('short1', '1234567890', 'password123'):
+            resp = self.client.post('/api/auth/change-password/', {
+                'old_password': TEST_PASSWORD, 'new_password': weak,
+            })
+            self.assertEqual(resp.status_code, 400, weak)
         self.branch_a_user.refresh_from_db()
         self.assertTrue(self.branch_a_user.check_password(TEST_PASSWORD))
 
@@ -111,6 +137,31 @@ class UserViewSetTests(ApiTestCase):
         resp = self.client.delete(f'/api/users/{second_admin.id}/')
         self.assertEqual(resp.status_code, 204)
         self.assertEqual(User.objects.filter(role=User.Role.ADMIN).count(), 1)
+
+    def test_weak_password_rejected_on_account_creation(self):
+        self.login_as(self.admin)
+        resp = self.client.post('/api/users/', {
+            'account': 'new-branch-user', 'password': 'weak1', 'displayName': 'New',
+            'role': 'branch', 'branchId': self.branch_a.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('password', resp.data)
+        self.assertFalse(User.objects.filter(username='new-branch-user').exists())
+
+    def test_weak_password_rejected_on_admin_reset(self):
+        self.login_as(self.admin)
+        resp = self.client.post(f'/api/users/{self.branch_a_user.id}/reset_password/', {'password': 'weak1'})
+        self.assertEqual(resp.status_code, 400)
+        self.branch_a_user.refresh_from_db()
+        self.assertTrue(self.branch_a_user.check_password(TEST_PASSWORD))
+
+    def test_strong_password_accepted_on_account_creation(self):
+        self.login_as(self.admin)
+        resp = self.client.post('/api/users/', {
+            'account': 'new-branch-user-2', 'password': 'correcthorsebattery9', 'displayName': 'New',
+            'role': 'branch', 'branchId': self.branch_a.id,
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
 
 
 class AccountDeactivationTests(ApiTestCase):

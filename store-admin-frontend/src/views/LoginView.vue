@@ -36,8 +36,9 @@ async function handleSubmit() {
       await auth.login(form.account, form.password)
       const redirect = (route.query.redirect as string) || '/dashboard'
       router.push(redirect)
-    } catch {
-      ElMessage.error(t('login.invalidCredentials'))
+    } catch (err) {
+      const tooManyAttempts = err instanceof Error && err.message === 'too-many-attempts'
+      ElMessage.error(tooManyAttempts ? t('login.tooManyAttempts') : t('login.invalidCredentials'))
     } finally {
       submitting.value = false
     }

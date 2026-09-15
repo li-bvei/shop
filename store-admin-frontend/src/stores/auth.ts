@@ -38,9 +38,12 @@ export const useAuthStore = defineStore('auth', {
           password,
         })
         setTokens(access, refresh)
-      } catch {
-        // Same error for "no such account" and "wrong password" — a failed
-        // login can't be used to enumerate valid account names.
+      } catch (err) {
+        // Repeated attempts against this account/IP got rate-limited — a
+        // real, distinguishable reason worth telling the user, unlike a
+        // wrong password vs. no-such-account (never distinguished, so a
+        // failed login can't be used to enumerate valid account names).
+        if (err instanceof ApiError && err.status === 429) throw new Error('too-many-attempts')
         throw new Error('invalid-credentials')
       }
       await this.loadMe()

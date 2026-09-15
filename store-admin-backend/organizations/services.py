@@ -1,3 +1,5 @@
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 
 from accounts.models import User
@@ -41,6 +43,12 @@ def provision_organization(
 
     if admin_account and User.objects.filter(username=admin_account).exists():
         raise ProvisionError('admin-account-already-exists')
+
+    if admin_password:
+        try:
+            validate_password(admin_password, user=User(username=admin_account, first_name=admin_account))
+        except DjangoValidationError as exc:
+            raise ProvisionError(f'admin-password-invalid: {"; ".join(exc.messages)}')
 
     with transaction.atomic():
         organization = Organization.objects.create(code=code, name_zh=name_zh, name_ja=name_ja)

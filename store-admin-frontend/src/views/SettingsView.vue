@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, EditPen, Delete, Key, Rank, ArrowUp, ArrowDown, Upload } from '@element-plus/icons-vue'
+import { ApiError } from '@/api/http'
 import {
   fetchPaymentMethods,
   renamePaymentMethod,
@@ -490,6 +491,13 @@ async function handleSubmitAccount() {
         ElMessage.warning(t('settings.employeeAlreadyHasAccount'))
       } else if (err instanceof Error && err.message === 'account-exists') {
         ElMessage.warning(t('settings.accountExists'))
+      } else if (err instanceof ApiError) {
+        // Most commonly a weak password (common password, all numeric,
+        // too similar to the account name) — the create form doesn't
+        // replicate the server's full password-strength check client-side.
+        ElMessage.error(err.messages().join(' ') || t('common.unexpectedError'))
+      } else {
+        ElMessage.error(t('common.unexpectedError'))
       }
     } finally {
       accountSubmitting.value = false
@@ -546,22 +554,29 @@ async function handleToggleActive(record: AccountRecord, nextActive: boolean) {
 }
 
 async function handleResetPassword(record: AccountRecord) {
+  let value: string
   try {
-    const { value } = await ElMessageBox.prompt(
+    ;({ value } = await ElMessageBox.prompt(
       t('settings.newPasswordPlaceholder'),
       t('settings.resetPasswordTitle', { account: record.account }),
       {
         confirmButtonText: t('common.confirm'),
         cancelButtonText: t('common.cancel'),
         inputType: 'password',
-        inputValidator: (value: string) => !!value?.trim() && value.trim().length >= 6,
+        inputValidator: (value: string) => !!value?.trim() && value.trim().length >= 10,
         inputErrorMessage: t('settings.validatePasswordLength'),
       },
-    )
+    ))
+  } catch {
+    return // cancelled
+  }
+  try {
     await adminResetPassword(record.id, value.trim())
     ElMessage.success(t('settings.passwordResetSuccess'))
-  } catch {
-    // cancelled
+  } catch (err) {
+    // The length rule above can't catch a common/too-similar/all-numeric
+    // password — only the server's own validators know that.
+    ElMessage.error(err instanceof ApiError ? err.messages().join(' ') || t('common.unexpectedError') : t('common.unexpectedError'))
   }
 }
 
@@ -574,7 +589,7 @@ const passwordRules = computed<FormRules>(() => ({
   oldPassword: [{ required: true, message: t('settings.validateOldPassword'), trigger: 'blur' }],
   newPassword: [
     { required: true, message: t('settings.validateNewPassword'), trigger: 'blur' },
-    { min: 6, message: t('settings.validatePasswordLength'), trigger: 'blur' },
+    { min: 10, message: t('settings.validatePasswordLength'), trigger: 'blur' },
   ],
   confirmPassword: [
     { required: true, message: t('settings.validateConfirmPassword'), trigger: 'blur' },
@@ -602,6 +617,14 @@ async function handleChangePassword() {
     } catch (err) {
       if (err instanceof Error && err.message === 'invalid-old-password') {
         ElMessage.error(t('settings.invalidOldPassword'))
+      } else if (err instanceof ApiError) {
+        // A weak-but-not-too-short new password (common password, all
+        // numeric, too similar to the account name, …) — the client-side
+        // length rule can't catch these, so the server's own message is
+        // the only place this reason exists.
+        ElMessage.error(err.messages().join(' ') || t('common.unexpectedError'))
+      } else {
+        ElMessage.error(t('common.unexpectedError'))
       }
     } finally {
       passwordSubmitting.value = false

@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, EditPen, Delete, Key } from '@element-plus/icons-vue'
+import { ApiError } from '@/api/http'
 import {
   fetchPlatformOrganizations,
   fetchOrganizationUsers,
@@ -249,6 +250,7 @@ async function handleSubmitAccount() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : ''
       if (msg.includes('account-exists')) ElMessage.warning(t('settings.accountExists'))
+      else if (err instanceof ApiError) ElMessage.error(err.messages().join(' ') || t('common.saveFailed'))
       else ElMessage.error(t('common.saveFailed'))
     } finally {
       accountSubmitting.value = false
@@ -272,19 +274,24 @@ async function handleDeleteAccount(org: PlatformOrg, user: PlatformUser) {
 }
 
 async function handleResetPassword(user: PlatformUser) {
+  let value: string
   try {
-    const { value } = await ElMessageBox.prompt(
+    ;({ value } = await ElMessageBox.prompt(
       t('settings.newPasswordPlaceholder'), t('settings.resetPasswordTitle', { account: user.account }),
       {
         confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel'), inputType: 'password',
-        inputValidator: (value: string) => !!value?.trim() && value.trim().length >= 6,
+        inputValidator: (value: string) => !!value?.trim() && value.trim().length >= 10,
         inputErrorMessage: t('settings.validatePasswordLength'),
       },
-    )
+    ))
+  } catch {
+    return // cancelled
+  }
+  try {
     await resetPlatformUserPassword(user.id, value.trim())
     ElMessage.success(t('settings.passwordResetSuccess'))
-  } catch {
-    // cancelled
+  } catch (err) {
+    ElMessage.error(err instanceof ApiError ? err.messages().join(' ') || t('common.unexpectedError') : t('common.unexpectedError'))
   }
 }
 
@@ -426,6 +433,7 @@ async function handleSubmitNewOrg() {
       const msg = err instanceof Error ? err.message : ''
       if (msg.includes('organization-code-already-exists')) ElMessage.warning(t('platformFeatures.orgCodeExists'))
       else if (msg.includes('admin-account-already-exists')) ElMessage.warning(t('settings.accountExists'))
+      else if (err instanceof ApiError) ElMessage.error(err.messages().join(' ') || t('common.saveFailed'))
       else ElMessage.error(t('common.saveFailed'))
     } finally {
       newOrgSubmitting.value = false

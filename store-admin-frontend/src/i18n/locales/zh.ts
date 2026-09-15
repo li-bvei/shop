@@ -139,6 +139,7 @@ export default {
     validateAccount: '请输入账号',
     validatePassword: '请输入密码',
     invalidCredentials: '账号或密码错误，请重试',
+    tooManyAttempts: '尝试次数过多，请稍后再试',
     multiAccountHint: '在这里登录只会切换当前标签页，其他标签页里已登录的管理员/分店账号不受影响。',
   },
   dashboard: {
@@ -813,7 +814,7 @@ export default {
     cannotDisableLastAdmin: '至少需要保留一个启用的管理员账号',
     password: '密码',
     validatePassword: '请输入密码',
-    validatePasswordLength: '密码至少需要6位',
+    validatePasswordLength: '密码至少需要10位',
     resetPasswordTitle: '重置 {account} 的密码',
     newPasswordPlaceholder: '输入新密码',
     passwordResetSuccess: '密码已重置',

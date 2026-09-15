@@ -28,6 +28,10 @@ const editingId = ref<string | null>(null)
 const submitting = ref(false)
 const formRef = ref<FormInstance>()
 
+// 口座種類 is a fixed, small set of standard Japanese bank account types —
+// a free-text field just invited spelling drift ("普通"/"普通預金"/"ふつう").
+const ACCOUNT_TYPE_OPTIONS = ['普通', '当座', '貯蓄'] as const
+
 const form = reactive({
   name: '',
   category: '',
@@ -176,20 +180,25 @@ async function handleDownload() {
         row.appendChild(el('td', cellStyle, s.contact))
         row.appendChild(el('td', cellStyle, s.phone))
 
-        // The account holder's kana reading sits in its own small line
-        // directly above the account details, the way furigana annotates
-        // the kanji it belongs to, rather than as its own column. Overflow
-        // handling is set on each line individually (not just the td) so a
-        // too-long reading truncates on its own line instead of pushing
-        // the account details below it out of view.
+        // The bank's own kana reading sits in its own small line directly
+        // above the bank name, the way furigana annotates the kanji it
+        // belongs to — not the account holder's reading, which instead
+        // goes right after the bank name on the same line (that's whose
+        // reading it is: the 口座名義, not the bank's). Overflow handling
+        // is set on each line individually (not just the td) so a too-long
+        // line truncates on its own instead of pushing the rest out of view.
         const lineStyle: Partial<CSSStyleDeclaration> = {
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }
         const bankCell = el('td', { ...cellStyle, whiteSpace: 'normal' })
-        if (s.accountHolderFurigana) {
-          bankCell.appendChild(el('div', { ...lineStyle, fontSize: '7px', color: '#888', lineHeight: '1.3' }, s.accountHolderFurigana))
+        if (s.bankNameFurigana) {
+          bankCell.appendChild(el('div', { ...lineStyle, fontSize: '7px', color: '#888', lineHeight: '1.3' }, s.bankNameFurigana))
         }
-        bankCell.appendChild(el('div', lineStyle, bankSummary(s)))
+        const bankNameLine = [s.bankName, s.accountHolderFurigana].filter(Boolean).join(' ')
+        const restLine = [s.branchName, s.accountType, s.accountNumber].filter(Boolean).join(' ')
+        if (bankNameLine) bankCell.appendChild(el('div', lineStyle, bankNameLine))
+        if (restLine) bankCell.appendChild(el('div', lineStyle, restLine))
+        if (!bankNameLine && !restLine) bankCell.appendChild(el('div', lineStyle, '—'))
         row.appendChild(bankCell)
 
         row.appendChild(el('td', { ...cellStyle, textAlign: 'right' }, formatCurrency(payableFor(s))))
@@ -380,7 +389,9 @@ async function handleEditPayable(row: Supplier) {
         </div>
         <div class="field-pair">
           <el-form-item :label="t('suppliers.accountType')">
-            <el-input v-model="form.accountType" :placeholder="t('suppliers.accountTypePlaceholder')" />
+            <el-select v-model="form.accountType" clearable :placeholder="t('suppliers.accountTypePlaceholder')">
+              <el-option v-for="opt in ACCOUNT_TYPE_OPTIONS" :key="opt" :value="opt" :label="opt" />
+            </el-select>
           </el-form-item>
           <el-form-item :label="t('suppliers.accountNumber')">
             <el-input v-model="form.accountNumber" />

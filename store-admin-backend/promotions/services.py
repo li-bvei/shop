@@ -831,6 +831,11 @@ def draw_lottery(*, campaign, branch, customer, source, request_id,
             elif source == LotteryDraw.Source.DIRECT:
                 locked.draw_chances -= 1
                 fields.append('draw_chances')
+            # Snapshot the balance right after the spend, before any refund
+            # is applied — each ledger row's balance_after must reflect the
+            # running balance at the point that row was written, not the
+            # final balance once every mutation in this draw has landed.
+            balance_after_spend = locked.points_balance
             if refund:
                 locked.points_balance += refund
                 if 'points_balance' not in fields:
@@ -843,7 +848,7 @@ def draw_lottery(*, campaign, branch, customer, source, request_id,
             if points_spent:
                 PointsLedger.objects.create(
                     customer=locked, delta=-points_spent, reason=PointsLedger.Reason.DRAW,
-                    source_ref=f'draw:{draw.pk}', balance_after=locked.points_balance,
+                    source_ref=f'draw:{draw.pk}', balance_after=balance_after_spend,
                 )
             if refund:
                 PointsLedger.objects.create(

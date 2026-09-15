@@ -967,6 +967,15 @@ class DrawLotteryServiceTests(ApiTestCase):
         self.assertEqual(draw.points_refunded, 30)
         self.assertEqual(self.customer.points_balance, 1000 - 100 + 30)
         self.assertEqual(self.customer.vouchers.count(), 0)
+        # Each ledger row's balance_after must be the running balance at the
+        # moment that row was written, not the final balance once every
+        # mutation in this draw has landed — the DRAW row precedes the
+        # refund and must show the balance mid-way through (just spent, not
+        # yet refunded), not the same final value as the DRAW_REFUND row.
+        spend_entry = self.customer.points_ledger.get(reason=PointsLedger.Reason.DRAW)
+        refund_entry = self.customer.points_ledger.get(reason=PointsLedger.Reason.DRAW_REFUND)
+        self.assertEqual(spend_entry.balance_after, 1000 - 100)
+        self.assertEqual(refund_entry.balance_after, 1000 - 100 + 30)
 
     def test_draw_is_idempotent_on_request_id(self):
         make_prize(self.campaign, weight=1)

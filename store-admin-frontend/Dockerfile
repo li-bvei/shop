@@ -9,6 +9,11 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
 RUN echo "VITE_API_BASE_URL=/api" > .env.production.local
+# Stamped fresh on every image build, served unhashed at /version.txt (see
+# public/) — src/utils/versionCheck.ts polls it so a tab left open across a
+# deploy notices and prompts to reload instead of quietly breaking against
+# a backend that's moved on.
+RUN date +%s > public/version.txt
 RUN npm run build-only
 
 # Serve stage

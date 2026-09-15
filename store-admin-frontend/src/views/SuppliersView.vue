@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Edit, Delete, EditPen, Download } from '@element-plus/icons-vue'
@@ -49,22 +49,30 @@ const rules: FormRules = {
 }
 
 const currentMonth = currentMonthJst()
+// Defaults to the current month; picking a different one re-fetches that
+// month's purchases and switches the payable column to show its total.
+const selectedMonth = ref(currentMonth)
 
 const autoPayableBySupplier = computed(() => {
   const totals = new Map<string, number>()
   for (const purchase of purchases.value) {
-    if (!purchase.date.startsWith(currentMonth)) continue
+    if (!purchase.date.startsWith(selectedMonth.value)) continue
     totals.set(purchase.supplierId, (totals.get(purchase.supplierId) ?? 0) + purchase.amount)
   }
   return totals
 })
 
+// The manual override represents an adjustment to what's currently owed —
+// it doesn't mean anything for a past/future month, so browsing to any
+// month other than the current one always shows the plain auto-computed
+// total for that month, ignoring the override.
 function payableFor(supplier: Supplier) {
+  if (selectedMonth.value !== currentMonth) return autoPayableBySupplier.value.get(supplier.id) ?? 0
   return supplier.payableOverride ?? autoPayableBySupplier.value.get(supplier.id) ?? 0
 }
 
 function isManual(supplier: Supplier) {
-  return supplier.payableOverride !== null
+  return selectedMonth.value === currentMonth && supplier.payableOverride !== null
 }
 
 function bankSummary(supplier: Supplier) {
@@ -75,7 +83,7 @@ function bankSummary(supplier: Supplier) {
 async function fetchData() {
   const [supplierList, purchaseList] = await Promise.all([
     fetchSuppliers(),
-    fetchAllPurchases({ month: currentMonth }),
+    fetchAllPurchases({ month: selectedMonth.value }),
     branchStore.ensureLoaded(),
   ])
   suppliers.value = supplierList
@@ -85,6 +93,8 @@ async function fetchData() {
 async function load() {
   await run(fetchData)
 }
+
+watch(selectedMonth, load)
 
 // After a single row's create/update/delete/payable edit the user just
 // closed a dialog or clicked one icon — a full-table loading mask on top of
@@ -273,6 +283,10 @@ async function handleEditPayable(row: Supplier) {
       <div class="page-header">
         <h3>{{ t('suppliers.pageTitle') }}</h3>
         <div class="header-actions">
+          <el-date-picker
+            v-model="selectedMonth" type="month" value-format="YYYY-MM" :clearable="false"
+            :placeholder="t('purchasing.filterMonth')"
+          />
           <el-button :icon="Download" :loading="downloading" @click="handleDownload">{{ t('common.downloadPdf') }}</el-button>
           <el-button type="primary" :icon="Plus" @click="openCreate">{{ t('suppliers.add') }}</el-button>
         </div>

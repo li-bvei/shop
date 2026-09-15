@@ -38,6 +38,9 @@
 | 平台超管跨企业账号/分店管理、新建企业 | 已实现 | `organizations/views.py` Platform* 系列 view、`PlatformFeaturesView.vue` |
 | 日报零钱默认数量 + レジ固定金額可改（默认值只加算不预填，且有 2026-09-15 日期线保护旧日报） | 已实现 | `dailyreports/models.py` `CashRegisterDefaults`、`views.py` `CashRegisterDefaultsView`、`DailyReportForm.vue` `computeCashRegisterTotal`/`CASH_REGISTER_DEFAULTS_CUTOFF_DATE`、前端 `api/cashRegisterDefaults.ts` |
 | 旧日报锁定 + 企业共享密码解锁（仅本次编辑会话有效） | 已实现 | `dailyreports/report_lock.py`、`views.py` `ReportUnlockView`/`DailyReportViewSet._enforce_report_lock`、`organizations/models.py` `report_unlock_password_hash`、`accounts/views.py` `OrganizationView`、前端 `api/reportLock.ts`、`DailyReportView.vue` 解锁流程、`DailyReportForm.vue` `readonly` prop、`SettingsView.vue` 密码管理卡片 |
+| 仕入先管理按月筛选未払金 | 已实现 | `SuppliersView.vue` `selectedMonth`/`autoPayableBySupplier`，覆盖值只在当月生效 |
+| 仕入先管理/仕入管理供应商数据是否同步 | 已确认无问题 | 两处共用同一张 `purchasing.Supplier` 表，无重复模型；未做代码改动 |
+| 部署后页面缓存导致功能异常，需强刷才生效 | 已实现（部分） | `Dockerfile` 构建时写 `public/version.txt`，`utils/versionCheck.ts` 轮询 + `App.vue` 提示条；仅覆盖本仓库内 nginx 这一层，生产外层宝塔 Nginx 的缓存配置未核实，不在本次改动范围 |
 
 ## 当前未完成或需要业务决定
 

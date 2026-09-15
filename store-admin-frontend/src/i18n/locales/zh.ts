@@ -12,6 +12,8 @@ export default {
     currencyUnit: '¥',
     savedSuccess: '已保存',
     deletedSuccess: '已删除',
+    newVersionAvailable: '系统已更新，刷新后可使用最新功能',
+    reloadNow: '立即刷新',
     note: '备注',
     weekdayShort: '日,一,二,三,四,五,六',
     print: '打印/导出',

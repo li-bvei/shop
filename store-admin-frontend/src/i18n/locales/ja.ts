@@ -12,6 +12,8 @@ export default {
     currencyUnit: '¥',
     savedSuccess: '保存しました',
     deletedSuccess: '削除しました',
+    newVersionAvailable: 'システムが更新されました。更新後に最新機能をご利用いただけます',
+    reloadNow: '今すぐ更新',
     note: '備考',
     weekdayShort: '日,月,火,水,木,金,土',
     print: '印刷／出力',

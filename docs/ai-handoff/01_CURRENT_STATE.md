@@ -2,8 +2,8 @@
 
 ## 仓库基线
 
-- 当前 HEAD：`4bc23df suppliers: rework PDF export layout`
-- 上一个重要提交：`829e531`（仕入先管理按月筛选 + 前端新版本检测）→ `c58287c`（旧日报锁定）→ `1453cc5`（收银机零钱默认数量 + レジ固定金額可改）→ `1fc5fa1`（批量替换空字符串/日期校验 bug 修复）→ `960bbac`（进货批量替换重构为多条件组合 + 2026注文書 数据核对）。
+- 当前 HEAD：`72949a0 accounts: enforce real password strength + throttle login attempts`
+- 上一个重要提交：`b5c700c`（积分抽奖返还流水余额修复，P1-07）→ `4bc23df`（仕入先管理 PDF 导出重排）→ `829e531`（仕入先管理按月筛选 + 前端新版本检测）→ `c58287c`（旧日报锁定）→ `1453cc5`（收银机零钱默认数量 + レジ固定金額可改）→ `1fc5fa1`（批量替换空字符串/日期校验 bug 修复）→ `960bbac`（进货批量替换重构为多条件组合 + 2026注文書 数据核对）。
 - 再往前：`34eee9e`（进货性能/数据修复、日报离线保存、平台租户管理批次）。
 - 再往前的历史基线：`ec54c2d docs: 2026-09-06 batch — ops fixes, org feature gates, platform console, check-in tiers`。
 - 工作区已知未跟踪：`store-admin-frontend/.claude/`。本次不处理。
@@ -47,11 +47,13 @@
 - **权限漏洞修复**：平台超级管理员（`is_superuser=True`）账号如果和某个企业共用 Organization，之前会出现在该企业自己 Settings 的账号列表里，可以被该企业管理员重置密码/删除。已在 `UserViewSet` 和平台级账号接口都加上 `is_superuser=False` 过滤。
 - 新增 `Organization.active` 真正生效：停用后该企业全部账号登录直接拒绝（新增 `OrganizationScopedTokenObtainPairSerializer` + `OrganizationScopedJWTAuthentication`），已登录的 token 在停用后的下一次请求也会立刻失效，和账号停用的即时性一致。之前这个字段只是存着、界面显示，从未被检查。
 - 平台"运营管理"页新增：跨企业账号增/改/重置密码/删除，跨企业分店增/改/删除，"新建企业"一步创建组织+第一家分店+第一个管理员账号（替代原来只能用命令行 `provision_organization`）。
+- **密码强度统一 + 登录限流**（05_TESTS_AND_RISKS.md P1-05）：新增 `accounts/services.py` `validate_new_password()`，所有设置密码的入口（账号创建、自助改密、管理员重置、平台跨企业创建/重置、`provision_organization`）统一改为调用 Django `AUTH_PASSWORD_VALIDATORS`（长度 6→10，加常见密码库/纯数字/与账号名过于相似校验），不再各处各写一份 `len(password) < 6`。`/api/token/` 登录端点新增 `accounts/throttling.py`：IP 维度 30/min + 账号维度 8/min 双重限流，复用 `promotions` 已有的 DB-cache 限流模式。顺带修了几处前端"服务端拒绝了弱密码，但界面完全没反应"的静默失败（`SettingsView.vue`、`platform/PlatformFeaturesView.vue` 的账号创建/改密/重置密码/新建企业）。
+- **积分流水余额语义修复**（05_TESTS_AND_RISKS.md P1-07）：`promotions/services.py` `draw_lottery` 中奖"积分返还"奖品时，原来先扣分再加返还金额，两条 `PointsLedger` 流水的 `balance_after` 都写成了最终余额；现在扣分后先快照 `balance_after` 再应用返还，扣分流水记录的是返还前的中间余额。最终余额本来就是对的，这个 bug 只影响逐笔流水回看时的运行余额。新增测试断言两条流水各自的 `balance_after`，不再只断言 `sum(delta) == balance`。
 
 ## 需要接手者确认的事项
 
 - 生产服务器是否确实已运行当前 HEAD；以服务器 `git rev-parse HEAD` 为准。**`1fc5fa1` 的 bug 修复截至本文撰写时尚未部署**，生产仍在跑有 bug 的 `960bbac`（批量替换空字符串问题），应尽快 `bash deploy.sh`。
-- `docs/ai-handoff/05_TESTS_AND_RISKS.md` 里 P1-02（进货负数/金额精度口径）、P1-04（部署脚本 `reset --hard`）、P1-05（密码强度/登录限流）、P1-06（生产安全配置）、P1-07（积分流水语义）等属于产品决策或更大范围的加固工作，本次会话没有处理，需要业务负责人确认口径后再排期。
+- `docs/ai-handoff/05_TESTS_AND_RISKS.md` 里 P1-02（进货负数/金额精度口径，需业务负责人核对原始单据）、P1-03（JAN 并发唯一性）、P1-04（部署脚本 `reset --hard`/回滚）、P1-06（生产安全配置现场核实）仍未处理；P1-05（密码强度/登录限流）和 P1-07（积分流水语义）已在本次会话修复，见上文"权限与平台管理"小节。
 - 生产平台超级管理员的用户名、密码和组织归属必须由运营者确认，不要从文档猜密码。
 - 正式域名、HTTPS、真实 `SECRET_KEY`、安全 Cookie、HSTS 和 `DEBUG=False`。
 - 旧 `lottery` 是历史名单/导入模块；新积分营销逻辑在 `promotions`，不要混用模型。

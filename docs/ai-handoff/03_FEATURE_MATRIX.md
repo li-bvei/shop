@@ -41,6 +41,8 @@
 | 仕入先管理按月筛选未払金 | 已实现 | `SuppliersView.vue` `selectedMonth`/`autoPayableBySupplier`，覆盖值只在当月生效 |
 | 仕入先管理/仕入管理供应商数据是否同步 | 已确认无问题 | 两处共用同一张 `purchasing.Supplier` 表，无重复模型；未做代码改动 |
 | 部署后页面缓存导致功能异常，需强刷才生效 | 已实现（部分） | `Dockerfile` 构建时写 `public/version.txt`，`utils/versionCheck.ts` 轮询 + `App.vue` 提示条；仅覆盖本仓库内 nginx 这一层，生产外层宝塔 Nginx 的缓存配置未核实，不在本次改动范围 |
+| 密码强度统一 + 登录限流（P1-05） | 已实现 | `accounts/services.py` `validate_new_password`、`accounts/throttling.py`、`config/settings.py` `AUTH_PASSWORD_VALIDATORS`/`login_ip`/`login_account`；前端 `SettingsView.vue`/`PlatformFeaturesView.vue` 补了弱密码报错的静默失败 |
+| 积分抽奖返还流水逐笔余额错误（P1-07） | 已修复 | `promotions/services.py` `draw_lottery`，`DrawLotteryServiceTests` 新增逐行 `balance_after` 断言 |
 
 ## 当前未完成或需要业务决定
 

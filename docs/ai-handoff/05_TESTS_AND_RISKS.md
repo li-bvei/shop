@@ -16,7 +16,26 @@
 > 29 个增加到 32 个，全部通过。P1-01 里"预览与确认之间没有服务端
 > token/version""没有批量操作审计记录""没有最大影响行数限制"这几点
 > **仍未处理**——属于要不要做审计日志/操作留痕这类产品决定，不是单纯 bug，
-> 留给下一轮按需排期。P1-02、P1-04、P1-05、P1-06、P1-07 均未处理，以下
+> 留给下一轮按需排期。
+>
+> **2026-09-15 更新（之后一批提交）**：P1-07 已修复——`draw_lottery` 里
+> "先扣分再返还，两条流水都写最终余额"改成扣分后先快照 `balance_after`
+> 再应用返还，`DrawLotteryServiceTests` 新增逐行余额断言（不再只断言
+> `sum(delta) == balance`）。P1-05 已修复——`accounts/services.py` 新增
+> `validate_new_password()`，账号创建（`UserSerializer`）、自助改密
+> （`ChangePasswordView`）、管理员重置（`UserViewSet.reset_password`）、
+> 平台跨企业创建账号/重置密码（`organizations/views.py` 两处）、
+> `provision_organization` 服务函数的 admin 密码全部改为统一走 Django
+> `AUTH_PASSWORD_VALIDATORS`（长度从 6 提到 10，另加常见密码库/纯数字/
+> 与账号名过于相似校验），不再各处各写一份 `len(password) < 6`；`/api/
+> token/` 登录端点新增 IP 维度（30/min）+ 账号维度（8/min）双重限流
+> （`accounts/throttling.py`，复用 `promotions` 已有的 DB-cache 限流模式）。
+> 顺带修了三处前端"弱密码被服务端拒绝后界面完全没反应"的静默失败
+> （`SettingsView.vue` 自助改密/账号创建/管理员重置密码，
+> `platform/PlatformFeaturesView.vue` 账号创建/重置密码/新建企业）——这些
+> 调用点原本只认识少数几个自定义错误码，服务端新增的校验失败信息不在其中，
+> 之前会被无声吞掉。P1-05 建议里的"超级管理员 MFA/限制管理入口来源"未做，
+> 属于更大范围的加固，留待后续。P1-02、P1-03、P1-04、P1-06 仍未处理，以下
 > 原始审计内容保持不变。
 
 ## 1. 本轮范围与工作区状态

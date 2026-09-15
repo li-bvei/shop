@@ -122,28 +122,34 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node
 }
 
+function monthTitle(month: string) {
+  const [year, monthNum] = month.split('-')
+  return `${year}年${Number(monthNum)}月材料費`
+}
+
 async function handleDownload() {
   downloading.value = true
   try {
+    // Suppliers with nothing owed this month just pad out the sheet.
+    const rows = suppliers.value.filter((s) => payableFor(s) !== 0)
+
     await renderOffscreenToPdf(`供应商-${todayJst()}`, PDF_PAGE_WIDTH_PX, (root) => {
       root.style.padding = '28px 32px'
       root.style.fontFamily = '"Hiragino Sans", "Microsoft YaHei", sans-serif'
       root.style.color = '#1a1a1a'
 
       const header = el('div', { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '14px' })
-      header.appendChild(el('div', { fontSize: '18px', fontWeight: '700' }, t('suppliers.pageTitle')))
+      header.appendChild(el('div', { fontSize: '18px', fontWeight: '700' }, monthTitle(selectedMonth.value)))
       header.appendChild(el('div', { fontSize: '11px', color: '#666' }, todayJst()))
       root.appendChild(header)
 
-      const table = el('table', { width: '100%', borderCollapse: 'collapse', fontSize: '10px' })
+      const table = el('table', { width: '100%', borderCollapse: 'collapse', fontSize: '10px', tableLayout: 'fixed' })
       const columns: [string, string][] = [
-        [t('suppliers.name'), '26%'],
-        [t('suppliers.category'), '9%'],
-        [t('suppliers.contact'), '9%'],
-        [t('suppliers.phone'), '11%'],
-        [t('suppliers.bankAccount'), '24%'],
-        [t('suppliers.accountHolderFurigana'), '13%'],
-        [t('suppliers.monthlyPayable'), '8%'],
+        [t('suppliers.name'), '22%'],
+        [t('suppliers.contact'), '10%'],
+        [t('suppliers.phone'), '13%'],
+        [t('suppliers.bankAccount'), '42%'],
+        [t('suppliers.monthlyPayable'), '13%'],
       ]
 
       const thead = document.createElement('thead')
@@ -159,19 +165,34 @@ async function handleDownload() {
       table.appendChild(thead)
 
       const tbody = document.createElement('tbody')
-      suppliers.value.forEach((s, index) => {
+      rows.forEach((s, index) => {
         const row = document.createElement('tr')
         if (index % 2 === 1) row.style.backgroundColor = '#f7f7f7'
         const cellStyle: Partial<CSSStyleDeclaration> = {
-          padding: '4px 6px', borderBottom: '0.5px solid #ddd', verticalAlign: 'top', wordBreak: 'break-word',
+          padding: '4px 6px', borderBottom: '0.5px solid #ddd', verticalAlign: 'top',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }
         row.appendChild(el('td', cellStyle, s.name))
-        row.appendChild(el('td', cellStyle, s.category))
         row.appendChild(el('td', cellStyle, s.contact))
         row.appendChild(el('td', cellStyle, s.phone))
-        row.appendChild(el('td', cellStyle, bankSummary(s)))
-        row.appendChild(el('td', cellStyle, s.accountHolderFurigana))
-        row.appendChild(el('td', { ...cellStyle, textAlign: 'right', whiteSpace: 'nowrap' }, formatCurrency(payableFor(s))))
+
+        // The account holder's kana reading sits in its own small line
+        // directly above the account details, the way furigana annotates
+        // the kanji it belongs to, rather than as its own column. Overflow
+        // handling is set on each line individually (not just the td) so a
+        // too-long reading truncates on its own line instead of pushing
+        // the account details below it out of view.
+        const lineStyle: Partial<CSSStyleDeclaration> = {
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }
+        const bankCell = el('td', { ...cellStyle, whiteSpace: 'normal' })
+        if (s.accountHolderFurigana) {
+          bankCell.appendChild(el('div', { ...lineStyle, fontSize: '7px', color: '#888', lineHeight: '1.3' }, s.accountHolderFurigana))
+        }
+        bankCell.appendChild(el('div', lineStyle, bankSummary(s)))
+        row.appendChild(bankCell)
+
+        row.appendChild(el('td', { ...cellStyle, textAlign: 'right' }, formatCurrency(payableFor(s))))
         tbody.appendChild(row)
       })
       table.appendChild(tbody)

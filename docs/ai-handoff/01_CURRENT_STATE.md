@@ -2,7 +2,7 @@
 
 ## 仓库基线
 
-- 当前 HEAD / GitHub / 生产服务器：`b6247a1 purchasing: support monthly overrides and branch item seeds`（2026-09-17 已部署）。
+- 当前生产代码版本：`a293455 ui: show branch name instead of internal id`（2026-09-18 已部署）；GitHub 在其后可能仅有文档提交。
 - 上一个重要提交：`b5c700c`（积分抽奖返还流水余额修复，P1-07）→ `4bc23df`（仕入先管理 PDF 导出重排）→ `829e531`（仕入先管理按月筛选 + 前端新版本检测）→ `c58287c`（旧日报锁定）→ `1453cc5`（收银机零钱默认数量 + レジ固定金額可改）→ `1fc5fa1`（批量替换空字符串/日期校验 bug 修复）→ `960bbac`（进货批量替换重构为多条件组合 + 2026注文書 数据核对）。
 - 再往前：`34eee9e`（进货性能/数据修复、日报离线保存、平台租户管理批次）。
 - 再往前的历史基线：`ec54c2d docs: 2026-09-06 batch — ops fixes, org feature gates, platform console, check-in tiers`。

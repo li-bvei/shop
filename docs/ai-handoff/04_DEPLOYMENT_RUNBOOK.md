@@ -12,11 +12,12 @@
 
 ## 最近一次生产部署
 
-- 日期：2026-09-17
-- 提交：`b6247a1 purchasing: support monthly overrides and branch item seeds`
+- 日期：2026-09-18
+- 提交：`a293455 ui: show branch name instead of internal id`
 - 路径与命令：`cd /www/wwwroot/shop && bash deploy.sh`
 - 迁移：`purchasing.0008_suppliermonthlypayableoverride_purchaseitemseed_and_more` 已成功应用。
 - 验证：backend/frontend 容器重建成功，`python manage.py check` 无错误。
+- 顶栏分店标签修复：`/api/auth/me/` 直接返回中日文分店名，分店账号不再短暂或持续显示 `shinsaibashi` 等内部 ID。
 - 梅田店品目种子已执行：
 
   ```bash

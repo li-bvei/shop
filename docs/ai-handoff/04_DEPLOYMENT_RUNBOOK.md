@@ -10,6 +10,22 @@
 
 历史记录中的生产服务器为 `43.132.201.45`。后续 AI 不得再以“不知道服务器目录”为由拒绝编写或执行部署步骤。如果当前执行环境没有服务器登录权限，应准确说明“缺少 SSH/终端权限”，而不是说服务器位置未知。
 
+## 最近一次生产部署
+
+- 日期：2026-09-17
+- 提交：`b6247a1 purchasing: support monthly overrides and branch item seeds`
+- 路径与命令：`cd /www/wwwroot/shop && bash deploy.sh`
+- 迁移：`purchasing.0008_suppliermonthlypayableoverride_purchaseitemseed_and_more` 已成功应用。
+- 验证：backend/frontend 容器重建成功，`python manage.py check` 无错误。
+- 梅田店品目种子已执行：
+
+  ```bash
+  cd /www/wwwroot/shop
+  docker compose exec -T backend python manage.py seed_purchase_catalog --source shinsaibashi --target umeda
+  ```
+
+  首次写入 540 项；之后用相同命令加 `--dry-run` 复核为 `0 create, 0 update`。该命令只写 `PurchaseItemSeed`，不会复制 `PurchaseRecord`，不会影响梅田店材料费。
+
 ## 本地上传代码到 GitHub
 
 已确认的 GitHub 远端和分支：

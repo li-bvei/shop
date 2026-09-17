@@ -42,12 +42,15 @@ class MeSerializer(serializers.ModelSerializer):
     # picks a display locale on the backend, the frontend always does.
     organizationNameZh = serializers.CharField(source='organization.name_zh', read_only=True)
     organizationNameJa = serializers.CharField(source='organization.name_ja', read_only=True)
+    branchNameZh = serializers.CharField(source='branch.name_zh', read_only=True, allow_null=True)
+    branchNameJa = serializers.CharField(source='branch.name_ja', read_only=True, allow_null=True)
 
     class Meta:
         model = User
         fields = [
             'account', 'displayName', 'role', 'branchId', 'staffMemberId',
             'organizationId', 'organizationNameZh', 'organizationNameJa',
+            'branchNameZh', 'branchNameJa',
             'isSuperuser', 'enabledFeatures',
         ]
 

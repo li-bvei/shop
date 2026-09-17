@@ -9,6 +9,8 @@ interface MeResponse {
   displayName: string
   role: UserRole
   branchId: string | null
+  branchNameZh: string | null
+  branchNameJa: string | null
   staffMemberId: string | null
   isSuperuser: boolean
   enabledFeatures: string[]
@@ -21,6 +23,8 @@ export const useAuthStore = defineStore('auth', {
     displayName: '',
     role: 'branch' as UserRole,
     branchId: null as string | null,
+    branchNameZh: null as string | null,
+    branchNameJa: null as string | null,
     staffMemberId: null as string | null,
     isSuperuser: false,
     // Module keys this account's Organization is entitled to. Empty until
@@ -59,6 +63,8 @@ export const useAuthStore = defineStore('auth', {
       this.displayName = me.displayName
       this.role = me.role
       this.branchId = me.branchId
+      this.branchNameZh = me.branchNameZh
+      this.branchNameJa = me.branchNameJa
       this.staffMemberId = me.staffMemberId
       this.isSuperuser = me.isSuperuser ?? false
       this.enabledFeatures = me.enabledFeatures ?? []
@@ -80,6 +86,8 @@ export const useAuthStore = defineStore('auth', {
       this.displayName = ''
       this.role = 'branch'
       this.branchId = null
+      this.branchNameZh = null
+      this.branchNameJa = null
       this.staffMemberId = null
       this.isSuperuser = false
       this.enabledFeatures = []

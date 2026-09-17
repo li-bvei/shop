@@ -18,6 +18,8 @@ class LoginTests(ApiTestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.data['role'], 'branch')
         self.assertEqual(resp.data['branchId'], self.branch_a.id)
+        self.assertEqual(resp.data['branchNameZh'], self.branch_a.name_zh)
+        self.assertEqual(resp.data['branchNameJa'], self.branch_a.name_ja)
 
     def test_wrong_password_rejected(self):
         resp = self.client.post('/api/token/', {'username': self.admin.username, 'password': 'wrong'})

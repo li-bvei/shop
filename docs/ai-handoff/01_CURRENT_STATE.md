@@ -41,6 +41,7 @@
 ### 首页 / 全局
 - 经营看板问候语按时间段变化（早上好/下午好/晚上好/辛苦了），不再固定写死"早上好"。
 - 全局屏蔽鼠标滚轮改动数字输入框的值（焦点在 number 输入框上滚动会自动失焦，不再误改）。
+- 顶栏分店标签直接使用 `/api/auth/me/` 返回的 `branchNameZh` / `branchNameJa`，不再在分店列表异步加载前把内部 ID（例如 `shinsaibashi`）显示给用户。
 
 ### 部署 / 前端版本检测
 - 新增"新版本检测"：`store-admin-frontend/Dockerfile` 在 `npm run build-only` 之前把当前时间戳写进 `public/version.txt`（Vite 会原样复制到构建产物根目录，未加 hash，随 `index.html` 一样按 `nginx.conf` 的 `no-cache` 规则served），前端 `src/utils/versionCheck.ts` 每 5 分钟 + 每次标签页切回前台时用 `cache:'no-store'` 请求这个文件，和当前标签页加载时的版本号不一致就在 `App.vue` 弹一个固定在底部的提示条（"系统已更新，刷新后可使用最新功能" + 按钮），点按钮才 `location.reload()`——不做静默强刷，避免正在填的日报之类表单数据被自动刷没。仅在生产构建生效（`import.meta.env.PROD` 门控），本地 `npm run dev` 不受影响。

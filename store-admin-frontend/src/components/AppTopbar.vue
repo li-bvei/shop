@@ -23,7 +23,8 @@ onMounted(() => branchStore.ensureLoaded())
 // would be misleading; show their actual branch name instead.
 const branchPillLabel = computed(() => {
   if (auth.role === 'admin') return t('topbar.allBranches', { count: branchStore.list.length })
-  return branchDisplayName(branchStore.list.find((b) => b.id === auth.branchId), locale.value, auth.branchId ?? '')
+  const nameFromLogin = locale.value === 'ja' ? auth.branchNameJa : auth.branchNameZh
+  return nameFromLogin || branchDisplayName(branchStore.list.find((b) => b.id === auth.branchId), locale.value)
 })
 
 function onUserCommand(cmd: string) {

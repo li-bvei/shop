@@ -296,6 +296,7 @@ export default {
     monthlyPayableManual: '手动',
     editPayable: '修改应付货款金额',
     payableOverridePlaceholder: '留空则恢复自动按进货记录计算',
+    restoreAutomatic: '恢复自动计算',
     validateName: '请输入供应商名称',
     deleteConfirm: '确定删除该供应商吗？',
     empty: '暂无供应商，点击右上角添加',

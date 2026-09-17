@@ -2,7 +2,7 @@
 
 ## 仓库基线
 
-- 当前 HEAD：`72949a0 accounts: enforce real password strength + throttle login attempts`
+- 当前代码基线：`e91f521 suppliers: fix PDF furigana placement, make account type a fixed select`；其后工作区正在追加仕入先月别手动金额与梅田店品目种子功能。
 - 上一个重要提交：`b5c700c`（积分抽奖返还流水余额修复，P1-07）→ `4bc23df`（仕入先管理 PDF 导出重排）→ `829e531`（仕入先管理按月筛选 + 前端新版本检测）→ `c58287c`（旧日报锁定）→ `1453cc5`（收银机零钱默认数量 + レジ固定金額可改）→ `1fc5fa1`（批量替换空字符串/日期校验 bug 修复）→ `960bbac`（进货批量替换重构为多条件组合 + 2026注文書 数据核对）。
 - 再往前：`34eee9e`（进货性能/数据修复、日报离线保存、平台租户管理批次）。
 - 再往前的历史基线：`ec54c2d docs: 2026-09-06 batch — ops fixes, org feature gates, platform console, check-in tiers`。
@@ -22,7 +22,8 @@
 - 2026-09-15 修复：批量替换的品目关键词全是空格时会归一化成空字符串，`icontains=''` 匹配范围内全部记录而不是报错；日期字段原来没有提前校验，非法值可能在查询求值时才抛出未捕获异常。reconcile 命令的新建供应商原来在事务外，现改到同一个 `transaction.atomic()` 里。
 
 ### 仕入先管理（SuppliersView.vue）
-- 新增按月筛选：页头加了月份选择器（默认当月），"今月の未払金" 列会跟着筛选月份变成"该月进货合计"。手动设置的"未払金覆盖值"（`payable_override`）只在筛选到当前自然月时才生效展示，筛选到其它月份一律显示自动合计（覆盖值代表的是"当前应付款的人工调整"，套到历史/未来月份没有意义）。
+- 按月筛选与手动金额：手动覆盖值已从 `Supplier.payable_override` 的单一全局字段改为 `SupplierMonthlyPayableOverride`，按“供应商＋分店＋月份”独立保存，因此上月等历史月份也可手动修改，不会串到其它月份或其它分店。手动状态显示恢复按钮，点击后删除该月覆盖值，立即恢复按进货记录自动合计。migration 0008 会把旧字段中已有的 2026-09 覆盖值复制给机构内各分店以保留旧数据。
+- 梅田店仕入品目种子：migration 0008 新增 `PurchaseItemSeed`（只用于联想，不参与金额合计）；`seed_purchase_catalog --source shinsaibashi --target umeda` 从心斋桥现有交易提取每个供应商/品目的最近名称与单价，幂等写入梅田店。命令不会复制或创建 `PurchaseRecord`，避免把心斋桥实际成本误记到梅田店。
 - 确认 `Supplier` 是仕入先管理和仕入管理（purchasing）共用的同一张表（`purchasing.Supplier`，按 organization 隔离），后端不存在重复模型或数据不同步的问题；若前端看不到新增的供应商，是某个已打开页面没有重新拉取列表，切换页面/刷新即可。
 - PDF 导出（`handleDownload`）调整：标题改成"{年}年{月}月材料費"（跟着页头选择的月份走）；去掉カテゴリー列（仅 PDF，页面表格和编辑表单里的カテゴリー字段没动）；当月未払金为 ¥0 的供应商不出现在 PDF 里；各单元格 `white-space: nowrap` + 超长省略号截断，尽量不在格子内换行。振込先口座这一格排版：第一行（小字灰色，类似注音）是**银行名自己的假名**（`bankNameFurigana`），第二行是"银行名 + 户主假名"（`accountHolderFurigana` 跟在银行名后面，不是叠在上面——2026-09-16 改的，之前搞反了把户主假名放去银行名上面），第三行是支店名/口座种类/口座番号。
 - 新增供应商表单：口座種類（账户种类）从自由文本改成固定选项的下拉选择（`ACCOUNT_TYPE_OPTIONS = ['普通', '当座', '貯蓄']`），仍是选填（可留空），后端字段本身还是普通 `CharField` 没加数据库级约束。

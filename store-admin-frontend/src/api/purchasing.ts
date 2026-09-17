@@ -263,8 +263,10 @@ export interface PurchaseItemSuggestion {
 export async function fetchPurchaseItemSuggestions(
   supplierId: string,
   keyword = '',
+  branchId = '',
 ): Promise<PurchaseItemSuggestion[]> {
   const params = new URLSearchParams({ supplier: supplierId, q: keyword })
+  if (branchId) params.set('branch', branchId)
   return http.get<PurchaseItemSuggestion[]>(`/purchases/suggestions/?${params.toString()}`)
 }
 

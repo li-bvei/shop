@@ -35,6 +35,7 @@
 - `purge_stale_promotion_customers`
 - `purchasing/backfill_item_name_normalized`：一次性修复 `bulk_create()` 导入历史数据漏算 `item_name_normalized` 的问题，幂等，可安全重跑。
 - `purchasing/reconcile_purchases_2026`：一次性对比 `2026注文書.xlsm`（不在仓库里，读 `import_data/order_form_2026.json`）与现有进货记录，只插入缺失行；硬编码 `BRANCH_ID='shinsaibashi'` 和 `PROTECTED_DATE='2026-09-13'`，改分店/保护日期要改代码常量，不是命令行参数。
+- `purchasing/seed_purchase_catalog`：从一个分店现有 `PurchaseRecord` 提取每个供应商/品目的最近名称和单价，幂等写到目标分店的 `PurchaseItemSeed`；只供输入联想，不生成交易、不进入月度材料费。生产梅田店命令：`python manage.py seed_purchase_catalog --source shinsaibashi --target umeda`（可先加 `--dry-run`）。
 
 新增/关键后端文件（本轮）：
 

@@ -1,4 +1,5 @@
 import django_filters
+from datetime import date
 from django.db.models import Count, Sum
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -10,7 +11,8 @@ from rest_framework.response import Response
 
 from common.permissions import BranchScopedQuerysetMixin
 
-from .models import PurchaseRecord, Supplier
+from branches.models import Branch
+from .models import PurchaseItemSeed, PurchaseRecord, Supplier, SupplierMonthlyPayableOverride
 from .serializers import PurchaseRecordSerializer, SupplierSerializer
 from .services import compute_price_comparisons, compute_prior_purchase_deltas
 from .utils import normalize_item_name
@@ -33,6 +35,50 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(organization=self.request.user.organization)
+
+    def _payable_scope(self):
+        raw_month = self.request.query_params.get('month') or timezone.localdate().strftime('%Y-%m')
+        try:
+            month = date.fromisoformat(f'{raw_month}-01')
+        except ValueError:
+            raise ValidationError({'month': ['Use YYYY-MM.']})
+
+        user = self.request.user
+        branch_id = self.request.query_params.get('branch') if user.role == user.Role.ADMIN else user.branch_id
+        if branch_id and not Branch.objects.filter(id=branch_id, organization_id=user.organization_id).exists():
+            raise ValidationError({'branch': ['branch-outside-organization']})
+        return month, branch_id
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        month, branch_id = self._payable_scope()
+        overrides = {}
+        if branch_id:
+            overrides = dict(SupplierMonthlyPayableOverride.objects.filter(
+                supplier__organization_id=self.request.user.organization_id,
+                branch_id=branch_id,
+                month=month,
+            ).values_list('supplier_id', 'amount'))
+        return {**context, 'payable_month': month, 'payable_branch_id': branch_id, 'payable_overrides': overrides}
+
+    @action(detail=True, methods=['patch'], url_path='monthly-payable')
+    def monthly_payable(self, request, pk=None):
+        supplier = self.get_object()
+        month, branch_id = self._payable_scope()
+        if not branch_id:
+            raise ValidationError({'branch': ['A branch is required.']})
+        amount = request.data.get('amount')
+        if amount is None:
+            SupplierMonthlyPayableOverride.objects.filter(
+                supplier=supplier, branch_id=branch_id, month=month,
+            ).delete()
+            return Response({'payable_override': None})
+        field = serializers.DecimalField(max_digits=12, decimal_places=0, min_value=0)
+        parsed = field.to_internal_value(amount)
+        row, _ = SupplierMonthlyPayableOverride.objects.update_or_create(
+            supplier=supplier, branch_id=branch_id, month=month, defaults={'amount': parsed},
+        )
+        return Response({'payable_override': row.amount})
 
 
 class PurchasePagination(PageNumberPagination):
@@ -231,6 +277,9 @@ class PurchaseRecordViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
             return Response([])
 
         qs = self.get_queryset().filter(supplier_id=supplier_id)
+        branch_id = request.user.branch_id if request.user.role != request.user.Role.ADMIN else request.query_params.get('branch')
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
         if keyword:
             qs = qs.filter(item_name__icontains=keyword)
 
@@ -238,7 +287,7 @@ class PurchaseRecordViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
         # bonus at 60 days back), so capping the scan at the most recent
         # 500 records per supplier changes nothing about which items rank
         # highest — it only bounds worst-case cost as the table grows.
-        rows = qs.order_by('-date', '-id').values_list('item_name', 'date', 'unit_price')[:500]
+        rows = list(qs.order_by('-date', '-id').values_list('item_name', 'date', 'unit_price')[:500])
 
         today = timezone.localdate()
         groups: dict[str, dict] = {}
@@ -255,6 +304,26 @@ class PurchaseRecordViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
                 'lastUnitPrice': group['latest_unit_price'] or 0,
                 'useCount': group['use_count'],
                 '_score': score,
+            })
+
+        # A newly opened branch has no transactions yet, but can still use
+        # the catalogue copied from another branch. Seeds are suggestions
+        # only and therefore never alter reports or monthly purchasing sums.
+        seeded = PurchaseItemSeed.objects.filter(
+            branch_id=branch_id,
+            supplier_id=supplier_id,
+        )
+        if keyword:
+            seeded = seeded.filter(item_name__icontains=keyword)
+        existing_names = set(groups)
+        for seed in seeded.order_by('item_name')[:100]:
+            if seed.item_name in existing_names:
+                continue
+            results.append({
+                'itemName': seed.item_name,
+                'lastUnitPrice': seed.last_unit_price,
+                'useCount': 0,
+                '_score': -1,
             })
 
         results.sort(key=lambda r: r['_score'], reverse=True)

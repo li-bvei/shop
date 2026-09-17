@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Edit, Delete, EditPen, Download } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, EditPen, Download, Refresh } from '@element-plus/icons-vue'
 import {
   fetchSuppliers,
   createSupplier,
@@ -13,12 +13,15 @@ import {
 } from '@/api/suppliers'
 import { fetchAllPurchases, type PurchaseRecord } from '@/api/purchasing'
 import { useBranchStore } from '@/stores/branches'
+import { useAuthStore } from '@/stores/auth'
 import { formatCurrency, currentMonthJst, todayJst } from '@/utils/format'
 import { useDelayedLoading } from '@/composables/useDelayedLoading'
 import { renderOffscreenToPdf } from '@/utils/pdfExport'
 
 const { t } = useI18n()
 const branchStore = useBranchStore()
+const auth = useAuthStore()
+const isAdmin = computed(() => auth.role === 'admin')
 
 const suppliers = ref<Supplier[]>([])
 const purchases = ref<PurchaseRecord[]>([])
@@ -56,6 +59,7 @@ const currentMonth = currentMonthJst()
 // Defaults to the current month; picking a different one re-fetches that
 // month's purchases and switches the payable column to show its total.
 const selectedMonth = ref(currentMonth)
+const selectedBranchId = ref(auth.branchId ?? '')
 
 const autoPayableBySupplier = computed(() => {
   const totals = new Map<string, number>()
@@ -66,17 +70,12 @@ const autoPayableBySupplier = computed(() => {
   return totals
 })
 
-// The manual override represents an adjustment to what's currently owed —
-// it doesn't mean anything for a past/future month, so browsing to any
-// month other than the current one always shows the plain auto-computed
-// total for that month, ignoring the override.
 function payableFor(supplier: Supplier) {
-  if (selectedMonth.value !== currentMonth) return autoPayableBySupplier.value.get(supplier.id) ?? 0
   return supplier.payableOverride ?? autoPayableBySupplier.value.get(supplier.id) ?? 0
 }
 
 function isManual(supplier: Supplier) {
-  return selectedMonth.value === currentMonth && supplier.payableOverride !== null
+  return supplier.payableOverride !== null
 }
 
 function bankSummary(supplier: Supplier) {
@@ -86,8 +85,8 @@ function bankSummary(supplier: Supplier) {
 
 async function fetchData() {
   const [supplierList, purchaseList] = await Promise.all([
-    fetchSuppliers(),
-    fetchAllPurchases({ month: selectedMonth.value }),
+    fetchSuppliers({ month: selectedMonth.value, branchId: selectedBranchId.value || undefined }),
+    fetchAllPurchases({ month: selectedMonth.value, branchId: selectedBranchId.value || undefined }),
     branchStore.ensureLoaded(),
   ])
   suppliers.value = supplierList
@@ -99,6 +98,7 @@ async function load() {
 }
 
 watch(selectedMonth, load)
+watch(selectedBranchId, load)
 
 // After a single row's create/update/delete/payable edit the user just
 // closed a dialog or clicked one icon — a full-table loading mask on top of
@@ -293,16 +293,27 @@ async function handleDelete(row: Supplier) {
 async function handleEditPayable(row: Supplier) {
   try {
     const { value } = await ElMessageBox.prompt(t('suppliers.payableOverridePlaceholder'), t('suppliers.editPayable'), {
-      inputValue: row.payableOverride !== null ? String(row.payableOverride) : '',
+      inputValue: row.payableOverride !== null ? String(row.payableOverride) : String(autoPayableBySupplier.value.get(row.id) ?? 0),
       confirmButtonText: t('common.confirm'),
       cancelButtonText: t('common.cancel'),
-      inputValidator: (value: string) => !value.trim() || !Number.isNaN(Number(value)),
+      inputValidator: (value: string) => !value.trim() || (!Number.isNaN(Number(value)) && Number(value) >= 0),
     })
     const trimmed = value.trim()
-    await setSupplierPayableOverride(row.id, trimmed ? Number(trimmed) : null)
+    await setSupplierPayableOverride(
+      row.id, trimmed ? Number(trimmed) : null, selectedMonth.value, selectedBranchId.value || undefined,
+    )
+    await refreshSilently()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(t('common.saveFailed'))
+  }
+}
+
+async function handleRestoreAutomatic(row: Supplier) {
+  try {
+    await setSupplierPayableOverride(row.id, null, selectedMonth.value, selectedBranchId.value || undefined)
     await refreshSilently()
   } catch {
-    // cancelled
+    ElMessage.error(t('common.saveFailed'))
   }
 }
 </script>
@@ -317,6 +328,15 @@ async function handleEditPayable(row: Supplier) {
             v-model="selectedMonth" type="month" value-format="YYYY-MM" :clearable="false"
             :placeholder="t('purchasing.filterMonth')"
           />
+          <el-select
+            v-if="isAdmin" v-model="selectedBranchId" clearable
+            :placeholder="t('purchasing.allBranches')" style="width: 150px"
+          >
+            <el-option
+              v-for="branch in branchStore.list" :key="branch.id" :value="branch.id"
+              :label="branch.nameJa || branch.nameZh"
+            />
+          </el-select>
           <el-button :icon="Download" :loading="downloading" @click="handleDownload">{{ t('common.downloadPdf') }}</el-button>
           <el-button type="primary" :icon="Plus" @click="openCreate">{{ t('suppliers.add') }}</el-button>
         </div>
@@ -338,6 +358,10 @@ async function handleEditPayable(row: Supplier) {
                 {{ isManual(row) ? t('suppliers.monthlyPayableManual') : t('suppliers.monthlyPayableAuto') }}
               </el-tag>
               <el-button circle text :icon="EditPen" size="small" @click="handleEditPayable(row)" />
+              <el-button
+                v-if="isManual(row)" circle text :icon="Refresh" size="small"
+                :title="t('suppliers.restoreAutomatic')" @click="handleRestoreAutomatic(row)"
+              />
             </div>
           </template>
         </el-table-column>

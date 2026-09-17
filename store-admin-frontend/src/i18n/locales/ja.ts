@@ -292,6 +292,7 @@ export default {
     monthlyPayableManual: '手動',
     editPayable: '未払金額を修正',
     payableOverridePlaceholder: '空欄にすると仕入記録から自動計算されます',
+    restoreAutomatic: '自動計算に戻す',
     validateName: '仕入先名を入力してください',
     deleteConfirm: 'この仕入先を削除しますか？',
     empty: '仕入先がありません。右上のボタンから追加してください',

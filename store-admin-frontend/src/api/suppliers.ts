@@ -77,8 +77,11 @@ function toDto(payload: Omit<Supplier, 'id'>) {
   }
 }
 
-export async function fetchSuppliers(): Promise<Supplier[]> {
-  const rows = await http.get<SupplierDto[]>('/suppliers/')
+export async function fetchSuppliers(params: { month?: string; branchId?: string } = {}): Promise<Supplier[]> {
+  const query = new URLSearchParams()
+  if (params.month) query.set('month', params.month)
+  if (params.branchId) query.set('branch', params.branchId)
+  const rows = await http.get<SupplierDto[]>(`/suppliers/?${query}`)
   return rows.map(fromDto)
 }
 
@@ -95,6 +98,13 @@ export async function deleteSupplier(id: string): Promise<void> {
   await http.delete(`/suppliers/${id}/`)
 }
 
-export async function setSupplierPayableOverride(id: string, value: number | null): Promise<void> {
-  await http.patch(`/suppliers/${id}/`, { payable_override: value })
+export async function setSupplierPayableOverride(
+  id: string,
+  value: number | null,
+  month: string,
+  branchId?: string,
+): Promise<void> {
+  const query = new URLSearchParams({ month })
+  if (branchId) query.set('branch', branchId)
+  await http.patch(`/suppliers/${id}/monthly-payable/?${query}`, { amount: value })
 }

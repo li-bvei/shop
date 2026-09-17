@@ -208,14 +208,14 @@ async function querySuggestions(queryString: string, cb: (results: SuggestionOpt
     cb([])
     return
   }
-  const results = await fetchPurchaseItemSuggestions(row.supplierId, queryString)
+  const results = await fetchPurchaseItemSuggestions(row.supplierId, queryString, row.branchId)
   if (!queryString) knownItemNames.value = new Set(results.map((s) => s.itemName))
   cb(results.map((s) => ({ ...s, value: s.itemName })))
 }
 
 watch(() => row.supplierId, async (supplierId) => {
   knownItemNames.value = supplierId
-    ? new Set((await fetchPurchaseItemSuggestions(supplierId)).map((s) => s.itemName))
+    ? new Set((await fetchPurchaseItemSuggestions(supplierId, '', row.branchId)).map((s) => s.itemName))
     : new Set()
 })
 

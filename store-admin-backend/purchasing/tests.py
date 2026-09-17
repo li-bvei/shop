@@ -1,6 +1,10 @@
+from io import StringIO
+
+from django.core.management import call_command
+
 from common.test_utils import ApiTestCase
 
-from .models import PurchaseRecord, Supplier
+from .models import PurchaseItemSeed, PurchaseRecord, Supplier, SupplierMonthlyPayableOverride
 from .utils import normalize_item_name
 
 
@@ -25,6 +29,87 @@ class AmountCalculationTests(ApiTestCase):
         self.login_as(self.branch_a_user)
         resp = self.client.patch(f'/api/purchases/{record.id}/', {'quantity': 5}, format='json')
         self.assertEqual(float(resp.data['amount']), 500.0)
+
+
+class SupplierMonthlyPayableOverrideTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        self.supplier = Supplier.objects.create(organization=self.org, name='月別仕入先')
+        PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-08-10', supplier=self.supplier,
+            item_name='商品', quantity=2, unit_price=100,
+        )
+        self.login_as(self.branch_a_user)
+
+    def test_past_month_can_be_overridden_and_restored_to_automatic(self):
+        url = f'/api/suppliers/{self.supplier.id}/monthly-payable/?month=2026-08'
+        response = self.client.patch(url, {'amount': 999}, format='json')
+        self.assertEqual(response.status_code, 200)
+        listed = self.client.get('/api/suppliers/?month=2026-08').data[0]
+        self.assertEqual(float(listed['payable_override']), 999)
+        self.assertEqual(float(listed['monthly_payable']), 999)
+
+        response = self.client.patch(url, {'amount': None}, format='json')
+        self.assertEqual(response.status_code, 200)
+        listed = self.client.get('/api/suppliers/?month=2026-08').data[0]
+        self.assertIsNone(listed['payable_override'])
+        self.assertEqual(float(listed['monthly_payable']), 200)
+
+    def test_override_is_isolated_by_month_and_branch(self):
+        self.client.patch(
+            f'/api/suppliers/{self.supplier.id}/monthly-payable/?month=2026-08',
+            {'amount': 999}, format='json',
+        )
+        self.assertFalse(SupplierMonthlyPayableOverride.objects.filter(
+            supplier=self.supplier, branch=self.branch_b,
+        ).exists())
+        september = self.client.get('/api/suppliers/?month=2026-09').data[0]
+        self.assertIsNone(september['payable_override'])
+
+    def test_admin_must_choose_branch_before_manual_override(self):
+        self.login_as(self.admin)
+        response = self.client.patch(
+            f'/api/suppliers/{self.supplier.id}/monthly-payable/?month=2026-08',
+            {'amount': 999}, format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+
+class PurchaseCatalogSeedTests(ApiTestCase):
+    def test_command_seeds_suggestions_without_creating_transactions(self):
+        supplier = Supplier.objects.create(organization=self.org, name='种子供应商')
+        PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-08-01', supplier=supplier,
+            item_name='レタス', quantity=2, unit_price=300,
+        )
+        before_count = PurchaseRecord.objects.filter(branch=self.branch_b).count()
+        call_command(
+            'seed_purchase_catalog', '--source', self.branch_a.id, '--target', self.branch_b.id,
+            stdout=StringIO(),
+        )
+        self.assertEqual(PurchaseRecord.objects.filter(branch=self.branch_b).count(), before_count)
+        self.assertTrue(PurchaseItemSeed.objects.filter(
+            branch=self.branch_b, supplier=supplier, item_name='レタス', last_unit_price=300,
+        ).exists())
+
+        self.login_as(self.branch_b_user)
+        response = self.client.get(f'/api/purchases/suggestions/?supplier={supplier.id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data[0]['itemName'], 'レタス')
+        self.assertEqual(float(response.data[0]['lastUnitPrice']), 300)
+
+    def test_command_is_idempotent_and_refreshes_latest_price(self):
+        supplier = Supplier.objects.create(organization=self.org, name='种子供应商')
+        PurchaseRecord.objects.create(
+            branch=self.branch_a, date='2026-08-01', supplier=supplier,
+            item_name='レタス', quantity=1, unit_price=300,
+        )
+        for _ in range(2):
+            call_command(
+                'seed_purchase_catalog', '--source', self.branch_a.id, '--target', self.branch_b.id,
+                stdout=StringIO(),
+            )
+        self.assertEqual(PurchaseItemSeed.objects.filter(branch=self.branch_b).count(), 1)
 
 
 class BranchScopingTests(ApiTestCase):

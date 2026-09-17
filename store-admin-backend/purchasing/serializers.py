@@ -6,6 +6,7 @@ from .models import PurchaseRecord, Supplier
 
 
 class SupplierSerializer(serializers.ModelSerializer):
+    payable_override = serializers.SerializerMethodField()
     monthly_payable = serializers.SerializerMethodField()
 
     class Meta:
@@ -18,13 +19,19 @@ class SupplierSerializer(serializers.ModelSerializer):
         ]
 
     def get_monthly_payable(self, obj):
-        if obj.payable_override is not None:
-            return obj.payable_override
-        today = timezone.localdate()
-        total = obj.purchase_records.filter(
-            date__year=today.year, date__month=today.month,
-        ).aggregate(total=Sum('amount'))['total']
+        override = self.get_payable_override(obj)
+        if override is not None:
+            return override
+        month = self.context.get('payable_month') or timezone.localdate().replace(day=1)
+        branch_id = self.context.get('payable_branch_id')
+        records = obj.purchase_records.filter(date__year=month.year, date__month=month.month)
+        if branch_id:
+            records = records.filter(branch_id=branch_id)
+        total = records.aggregate(total=Sum('amount'))['total']
         return total or 0
+
+    def get_payable_override(self, obj):
+        return self.context.get('payable_overrides', {}).get(obj.id)
 
 
 class PurchaseRecordSerializer(serializers.ModelSerializer):

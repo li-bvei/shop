@@ -39,6 +39,40 @@ class Supplier(models.Model):
         return self.name
 
 
+class SupplierMonthlyPayableOverride(models.Model):
+    """A branch/month-specific manual replacement for the calculated total."""
+
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, related_name='monthly_payable_overrides')
+    branch = models.ForeignKey('branches.Branch', on_delete=models.CASCADE, related_name='+')
+    # Always stored as the first day of the selected calendar month.
+    month = models.DateField()
+    amount = models.DecimalField(max_digits=12, decimal_places=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['supplier', 'branch', 'month'], name='unique_supplier_branch_month_payable_override',
+            ),
+        ]
+
+
+class PurchaseItemSeed(models.Model):
+    """Autocomplete-only item seed; it never contributes to purchasing totals."""
+
+    branch = models.ForeignKey('branches.Branch', on_delete=models.CASCADE, related_name='purchase_item_seeds')
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, related_name='+')
+    item_name = models.CharField(max_length=150)
+    item_name_normalized = models.CharField(max_length=150)
+    last_unit_price = models.DecimalField(max_digits=12, decimal_places=0, default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['branch', 'supplier', 'item_name_normalized'], name='unique_purchase_item_seed',
+            ),
+        ]
+
+
 class PurchaseRecord(models.Model):
     date = models.DateField()
     branch = models.ForeignKey('branches.Branch', on_delete=models.CASCADE, related_name='purchase_records')

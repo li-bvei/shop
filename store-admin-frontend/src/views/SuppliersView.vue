@@ -11,7 +11,6 @@ import {
   setSupplierPayableOverride,
   type Supplier,
 } from '@/api/suppliers'
-import { fetchAllPurchases, type PurchaseRecord } from '@/api/purchasing'
 import { useBranchStore } from '@/stores/branches'
 import { useAuthStore } from '@/stores/auth'
 import { formatCurrency, currentMonthJst, todayJst } from '@/utils/format'
@@ -24,7 +23,6 @@ const auth = useAuthStore()
 const isAdmin = computed(() => auth.role === 'admin')
 
 const suppliers = ref<Supplier[]>([])
-const purchases = ref<PurchaseRecord[]>([])
 const { loading, run } = useDelayedLoading()
 const dialogVisible = ref(false)
 const editingId = ref<string | null>(null)
@@ -61,17 +59,8 @@ const currentMonth = currentMonthJst()
 const selectedMonth = ref(currentMonth)
 const selectedBranchId = ref(auth.branchId ?? '')
 
-const autoPayableBySupplier = computed(() => {
-  const totals = new Map<string, number>()
-  for (const purchase of purchases.value) {
-    if (!purchase.date.startsWith(selectedMonth.value)) continue
-    totals.set(purchase.supplierId, (totals.get(purchase.supplierId) ?? 0) + purchase.amount)
-  }
-  return totals
-})
-
 function payableFor(supplier: Supplier) {
-  return supplier.payableOverride ?? autoPayableBySupplier.value.get(supplier.id) ?? 0
+  return supplier.payableOverride ?? supplier.monthlyPayable
 }
 
 function isManual(supplier: Supplier) {
@@ -84,13 +73,11 @@ function bankSummary(supplier: Supplier) {
 }
 
 async function fetchData() {
-  const [supplierList, purchaseList] = await Promise.all([
+  const [supplierList] = await Promise.all([
     fetchSuppliers({ month: selectedMonth.value, branchId: selectedBranchId.value || undefined }),
-    fetchAllPurchases({ month: selectedMonth.value, branchId: selectedBranchId.value || undefined }),
     branchStore.ensureLoaded(),
   ])
   suppliers.value = supplierList
-  purchases.value = purchaseList
 }
 
 async function load() {
@@ -293,7 +280,7 @@ async function handleDelete(row: Supplier) {
 async function handleEditPayable(row: Supplier) {
   try {
     const { value } = await ElMessageBox.prompt(t('suppliers.payableOverridePlaceholder'), t('suppliers.editPayable'), {
-      inputValue: row.payableOverride !== null ? String(row.payableOverride) : String(autoPayableBySupplier.value.get(row.id) ?? 0),
+      inputValue: row.payableOverride !== null ? String(row.payableOverride) : String(row.monthlyPayable),
       confirmButtonText: t('common.confirm'),
       cancelButtonText: t('common.cancel'),
       inputValidator: (value: string) => !value.trim() || (!Number.isNaN(Number(value)) && Number(value) >= 0),
@@ -342,7 +329,7 @@ async function handleRestoreAutomatic(row: Supplier) {
         </div>
       </div>
 
-      <el-table :data="suppliers" v-loading="loading" :empty-text="t('suppliers.empty')">
+      <el-table v-loading="loading" class="desktop-table" :data="suppliers" :empty-text="t('suppliers.empty')">
         <el-table-column prop="name" :label="t('suppliers.name')" min-width="150" />
         <el-table-column prop="category" :label="t('suppliers.category')" width="90" />
         <el-table-column prop="contact" :label="t('suppliers.contact')" width="110" />
@@ -372,6 +359,47 @@ async function handleRestoreAutomatic(row: Supplier) {
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- Narrow-viewport alternative to the table above (toggled purely by
+           CSS media query, see .desktop-table/.mobile-cards below) — the
+           table's 7 columns get clipped off-screen on a phone with no
+           visible scroll affordance, so the numbers that matter (未払金額)
+           end up invisible. A stacked card keeps every field readable. -->
+      <div v-loading="loading" class="mobile-cards">
+        <p v-if="!loading && !suppliers.length" class="empty-hint">{{ t('suppliers.empty') }}</p>
+        <div v-for="row in suppliers" :key="row.id" class="supplier-card">
+          <div class="supplier-card-head">
+            <span class="supplier-card-name">{{ row.name }}</span>
+            <span class="supplier-card-actions">
+              <el-button circle text :icon="Edit" size="small" @click="openEdit(row)" />
+              <el-button circle text :icon="Delete" size="small" @click="handleDelete(row)" />
+            </span>
+          </div>
+          <div class="supplier-card-payable">
+            <span class="payable-amount">{{ formatCurrency(payableFor(row)) }}</span>
+            <el-tag size="small" :type="isManual(row) ? 'warning' : 'info'" round>
+              {{ isManual(row) ? t('suppliers.monthlyPayableManual') : t('suppliers.monthlyPayableAuto') }}
+            </el-tag>
+            <el-button circle text :icon="EditPen" size="small" @click="handleEditPayable(row)" />
+            <el-button
+              v-if="isManual(row)" circle text :icon="Refresh" size="small"
+              :title="t('suppliers.restoreAutomatic')" @click="handleRestoreAutomatic(row)"
+            />
+          </div>
+          <div class="supplier-card-row">
+            <span>{{ t('suppliers.category') }}</span><span>{{ row.category || '—' }}</span>
+          </div>
+          <div class="supplier-card-row">
+            <span>{{ t('suppliers.contact') }}</span><span>{{ row.contact || '—' }}</span>
+          </div>
+          <div class="supplier-card-row">
+            <span>{{ t('suppliers.phone') }}</span><span>{{ row.phone || '—' }}</span>
+          </div>
+          <div class="supplier-card-row">
+            <span>{{ t('suppliers.bankAccount') }}</span><span>{{ bankSummary(row) }}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <el-dialog
@@ -453,6 +481,7 @@ async function handleRestoreAutomatic(row: Supplier) {
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -460,6 +489,76 @@ async function handleRestoreAutomatic(row: Supplier) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.mobile-cards {
+  display: none;
+}
+
+.supplier-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+
+.supplier-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.supplier-card-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.supplier-card-payable {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.supplier-card-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 3px 0;
+}
+
+.supplier-card-row span:last-child {
+  color: var(--text-primary);
+  text-align: right;
+  word-break: break-word;
+}
+
+.empty-hint {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  text-align: center;
+  padding: 20px 0;
+}
+
+@media (max-width: 640px) {
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .desktop-table {
+    display: none;
+  }
+
+  .mobile-cards {
+    display: block;
+  }
 }
 
 .field-pair {

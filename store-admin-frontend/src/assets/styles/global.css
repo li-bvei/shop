@@ -56,3 +56,12 @@ a {
     display: none !important;
   }
 }
+
+/* Same isolation as the @media print block above, but triggered by adding
+   this class instead of an actual print — used when a "download PDF"
+   button rasterizes a live element with html2canvas, which never enters
+   print media on its own. Kept as a plain (non-media) rule so it can be
+   toggled on/off around that one capture without affecting normal print. */
+.pdf-export-mode .no-print {
+  display: none !important;
+}

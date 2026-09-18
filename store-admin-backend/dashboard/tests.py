@@ -166,3 +166,84 @@ class MonthlyAnalysisExcludesPayrollTests(ApiTestCase):
         # gap = 100000 revenue − 0 purchasing − 0 expenses, payroll untouched
         self.assertEqual(resp.data['tentativeOperatingGap'], '100000')
         self.assertFalse(any(i['rule'] == 'hourly_wage_to_revenue_ratio' for i in resp.data['insights']))
+
+
+class YearlyAnalysisPermissionTests(ApiTestCase):
+    def test_staff_gets_403(self):
+        self.login_as(self.staff_user)
+        resp = self.client.get('/api/dashboard/yearly-analysis/?year=2026')
+        self.assertEqual(resp.status_code, 403)
+
+    def test_missing_year_param_is_400_not_500(self):
+        self.login_as(self.admin)
+        resp = self.client.get('/api/dashboard/yearly-analysis/')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_malformed_year_param_is_400_not_500(self):
+        self.login_as(self.admin)
+        resp = self.client.get('/api/dashboard/yearly-analysis/?year=not-a-year')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_branch_account_cannot_escalate_via_branch_param(self):
+        DailyReport.objects.create(branch=self.branch_b, date=date(2026, 1, 5), total_revenue=99999, total_customers=10)
+        self.login_as(self.branch_a_user)
+        resp = self.client.get(f'/api/dashboard/yearly-analysis/?year=2026&branch={self.branch_b.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['revenue'], '0')
+
+    def test_admin_with_no_branch_param_sees_all_branches_combined(self):
+        DailyReport.objects.create(branch=self.branch_a, date=date(2026, 1, 5), total_revenue=1000, total_customers=10)
+        DailyReport.objects.create(branch=self.branch_b, date=date(2026, 6, 6), total_revenue=2000, total_customers=20)
+        self.login_as(self.admin)
+        resp = self.client.get('/api/dashboard/yearly-analysis/?year=2026')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['revenue'], '3000')
+        self.assertIsNotNone(resp.data['branchComparison'])
+
+    def test_admin_with_branch_param_sees_single_branch(self):
+        DailyReport.objects.create(branch=self.branch_a, date=date(2026, 1, 5), total_revenue=1000, total_customers=10)
+        DailyReport.objects.create(branch=self.branch_b, date=date(2026, 6, 6), total_revenue=2000, total_customers=20)
+        self.login_as(self.admin)
+        resp = self.client.get(f'/api/dashboard/yearly-analysis/?year=2026&branch={self.branch_a.id}')
+        self.assertEqual(resp.data['revenue'], '1000')
+        self.assertIsNone(resp.data['branchComparison'])
+
+
+class YearlyAnalysisEmptyDataTests(ApiTestCase):
+    def test_empty_year_returns_safe_zero_values_not_500(self):
+        self.login_as(self.admin)
+        resp = self.client.get(f'/api/dashboard/yearly-analysis/?year=2026&branch={self.branch_a.id}')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['revenue'], '0')
+        self.assertEqual(resp.data['avgSpend'], '0')
+        self.assertIsNone(resp.data['revenueDeltaPct'])
+        self.assertIsNone(resp.data['highestRevenueDay'])
+        self.assertEqual(resp.data['daysWithReports'], 0)
+        self.assertEqual(len(resp.data['monthlyTrend']), 12)
+        self.assertEqual(len(resp.data['monthlyDetail']), 12)
+
+
+class YearlyAnalysisCalculationTests(ApiTestCase):
+    def test_revenue_expenses_purchasing_and_tentative_gap_across_months(self):
+        DailyReport.objects.create(
+            branch=self.branch_a, date=date(2026, 1, 5), total_revenue=100000, total_customers=50,
+            expenses=[{'itemName': '野菜', 'amount': 3000, 'purpose': 'x'}],
+        )
+        DailyReport.objects.create(
+            branch=self.branch_a, date=date(2026, 6, 5), total_revenue=50000, total_customers=25,
+        )
+        supplier = Supplier.objects.create(organization=self.org, name='测试供应商')
+        PurchaseRecord.objects.create(
+            branch=self.branch_a, date=date(2026, 1, 5), supplier=supplier, item_name='x',
+            quantity=1, unit_price=20000,
+        )
+        self.login_as(self.admin)
+        resp = self.client.get(f'/api/dashboard/yearly-analysis/?year=2026&branch={self.branch_a.id}')
+        self.assertEqual(resp.data['revenue'], '150000')
+        self.assertEqual(resp.data['purchasing'], '20000')
+        self.assertEqual(resp.data['expenses'], '3000')
+        self.assertEqual(resp.data['tentativeOperatingGap'], '127000')
+        jan_row = next(m for m in resp.data['monthlyTrend'] if m['month'] == '2026-01')
+        self.assertEqual(jan_row['revenue'], '100000')
+        jun_row = next(m for m in resp.data['monthlyTrend'] if m['month'] == '2026-06')
+        self.assertEqual(jun_row['revenue'], '50000')

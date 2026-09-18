@@ -29,3 +29,19 @@ export function branchDisplayName(branch: Branch | undefined, locale: string, fa
   if (!branch) return fallback
   return locale === 'ja' ? branch.nameJa : branch.nameZh
 }
+
+/** 'YYYY-MM-DD' -> '2026年9月18日' — no leading zeros on month/day, matching
+ * the existing 'year年Number(month)月' pattern already used for supplier PDF
+ * headers (SuppliersView.vue's monthTitle), extended to the day. Used for
+ * PDF download filenames, which use a distinct kanji-date naming convention
+ * from the existing dash-separated Excel/print filenames. */
+export function formatDateKanji(dateStr: string): string {
+  const [year, month, day] = dateStr.split('-')
+  return `${year}年${Number(month)}月${Number(day)}日`
+}
+
+/** 'YYYY-MM' -> '2026年9月'. */
+export function formatMonthKanji(monthStr: string): string {
+  const [year, month] = monthStr.split('-')
+  return `${year}年${Number(month)}月`
+}

@@ -10,7 +10,7 @@ from branches.models import Branch
 from dailyreports.models import DailyReport
 from purchasing.models import PurchaseRecord
 
-from .analysis import build_monthly_analysis
+from .analysis import build_monthly_analysis, build_yearly_analysis
 
 
 def _pct_delta(curr, prev):
@@ -131,5 +131,45 @@ class MonthlyAnalysisView(APIView):
 
         result = build_monthly_analysis(
             branch_ids=branch_ids, year=year, month=month, is_admin_all_branches=is_admin_all_branches,
+        )
+        return Response(result)
+
+
+class YearlyAnalysisView(APIView):
+    """GET /api/dashboard/yearly-analysis/?year=YYYY&branch=<id>
+
+    Same scoping rules as MonthlyAnalysisView (admin with no branch param
+    sees every branch combined; branch accounts always see only their own,
+    regardless of what's requested)."""
+
+    def get(self, request):
+        user = request.user
+        year_param = request.query_params.get('year')
+        if not year_param:
+            raise ValidationError({'year': ['Required, format YYYY.']})
+        try:
+            year = int(year_param)
+            if not (1 <= year <= 9999):
+                raise ValueError
+        except ValueError:
+            raise ValidationError({'year': ['Must be a 4-digit year.']})
+
+        branch_param = request.query_params.get('branch')
+        if user.role == user.Role.ADMIN:
+            org_branches = Branch.objects.filter(organization_id=user.organization_id)
+            if branch_param:
+                if not org_branches.filter(id=branch_param).exists():
+                    raise ValidationError({'branch': ['Unknown branch.']})
+                branch_ids = [branch_param]
+                is_admin_all_branches = False
+            else:
+                branch_ids = list(org_branches.values_list('id', flat=True))
+                is_admin_all_branches = True
+        else:
+            branch_ids = [user.branch_id]
+            is_admin_all_branches = False
+
+        result = build_yearly_analysis(
+            branch_ids=branch_ids, year=year, is_admin_all_branches=is_admin_all_branches,
         )
         return Response(result)

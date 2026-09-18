@@ -459,7 +459,7 @@ async function handleAddPaymentMethod() {
             </div>
           </div>
         </div>
-        <span class="add-row-btn no-print" @click="handleAddPaymentMethod">
+        <span v-if="!readonly" class="add-row-btn no-print" @click="handleAddPaymentMethod">
           <el-icon><Plus /></el-icon>{{ t('dailyReport.addPaymentMethod') }}
         </span>
       </section>
@@ -554,7 +554,7 @@ async function handleAddPaymentMethod() {
             <el-button circle text :icon="Close" class="remove-row-btn no-print" @click="removeExpenseRow(index)" />
           </div>
 
-          <div class="expense-actions no-print">
+          <div v-if="!readonly" class="expense-actions no-print">
             <span class="add-row-btn" @click="addExpenseRow"><el-icon><Plus /></el-icon>{{ t('dailyReport.addExpenseRow') }}</span>
             <span
               v-for="s in topSuggestions"
@@ -691,6 +691,14 @@ async function handleAddPaymentMethod() {
 @media (max-width: 760px) {
   .two-col-section {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  /* 3 columns force short labels like "营业额（总）" to wrap onto two
+     lines at phone width — 2 columns gives each tile enough room. */
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
@@ -1090,5 +1098,28 @@ async function handleAddPaymentMethod() {
   .pm-zero-print-hide {
     display: none;
   }
+}
+
+/* Same rules as the @media print block above, mirrored under a plain class
+   selector — a "download PDF" button rasterizes the live form with
+   html2canvas (see downloadElementAsPdf), which never triggers print media
+   on its own, so it needs this class toggled on instead to get the same
+   paper-friendly look. */
+.pdf-export-mode .report-section,
+.pdf-export-mode .cash-stat {
+  box-shadow: none;
+  border: 1px solid #ccc;
+}
+
+.pdf-export-mode .stat-tile {
+  background: none;
+}
+
+.pdf-export-mode :deep(.el-input.is-disabled .el-input__wrapper) {
+  background: none;
+}
+
+.pdf-export-mode .pm-zero-print-hide {
+  display: none;
 }
 </style>

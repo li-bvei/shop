@@ -236,6 +236,138 @@ def round_avg(revenue, customers):
     return (revenue / customers).quantize(Decimal('1'))
 
 
+def build_yearly_analysis(*, branch_ids, year, is_admin_all_branches):
+    """Same shape and terminology guardrails as build_monthly_analysis, just
+    aggregated over a calendar year instead of a calendar month. Field names
+    are kept identical to the monthly result wherever the concept carries
+    over unchanged (revenue/customers/purchasing/expenses/tentativeOperatingGap/
+    highestRevenueDay/lowestRevenueDay all still mean "over the period, and
+    the single best/worst day within it") so the frontend can share one
+    rendering path for both. Weekday averages don't carry over — a whole
+    year averages out any single weekday's ups and downs — and the
+    daily-granularity fields (dailyTrend/dailyDetail) become monthly ones."""
+    year_start = date_cls(year, 1, 1)
+    year_end = date_cls(year, 12, 31)
+    prev_start = date_cls(year - 1, 1, 1)
+    prev_end = date_cls(year - 1, 12, 31)
+
+    reports_qs = DailyReport.objects.filter(branch_id__in=branch_ids, date__gte=year_start, date__lte=year_end)
+    reports = list(reports_qs.order_by('date'))
+    prev_reports = list(
+        DailyReport.objects.filter(branch_id__in=branch_ids, date__gte=prev_start, date__lte=prev_end),
+    )
+
+    revenue = sum((_d(r.total_revenue) for r in reports), Decimal('0'))
+    customers = sum((r.total_customers or 0) for r in reports)
+    prev_revenue = sum((_d(r.total_revenue) for r in prev_reports), Decimal('0'))
+    prev_customers = sum((r.total_customers or 0) for r in prev_reports)
+
+    avg_spend = round_avg(revenue, customers)
+    prev_avg_spend = round_avg(prev_revenue, prev_customers)
+
+    purchases_qs = PurchaseRecord.objects.filter(branch_id__in=branch_ids, date__gte=year_start, date__lte=year_end)
+    prev_purchases_qs = PurchaseRecord.objects.filter(
+        branch_id__in=branch_ids, date__gte=prev_start, date__lte=prev_end,
+    )
+    purchasing_total = sum((_d(p.amount) for p in purchases_qs), Decimal('0'))
+    prev_purchasing_total = sum((_d(p.amount) for p in prev_purchases_qs), Decimal('0'))
+
+    expense_total = _expense_total(reports)
+    tentative_operating_gap = revenue - purchasing_total - expense_total
+
+    reports_by_date = {r.date: _d(r.total_revenue) for r in reports}
+    days_with_reports = len(reports)
+    daily_average_revenue = (revenue / days_with_reports) if days_with_reports else Decimal('0')
+
+    highest_day = max(reports_by_date.items(), key=lambda kv: kv[1]) if reports_by_date else None
+    lowest_day = min(reports_by_date.items(), key=lambda kv: kv[1]) if reports_by_date else None
+
+    revenue_by_month = defaultdict(Decimal)
+    customers_by_month = defaultdict(int)
+    purchasing_by_month = defaultdict(Decimal)
+    for r in reports:
+        revenue_by_month[r.date.month] += _d(r.total_revenue)
+        customers_by_month[r.date.month] += r.total_customers or 0
+    for p in purchases_qs:
+        purchasing_by_month[p.date.month] += _d(p.amount)
+
+    history_counts_by_month = defaultdict(int)
+    for h in DailyReportHistory.objects.filter(branch_id__in=branch_ids, date__gte=year_start, date__lte=year_end):
+        history_counts_by_month[h.date.month] += 1
+
+    monthly_trend = [
+        {
+            'month': f'{year}-{m:02d}',
+            'revenue': str(revenue_by_month[m]),
+            'customers': customers_by_month[m],
+            'avgSpend': str(round_avg(revenue_by_month[m], customers_by_month[m])),
+            'purchasing': str(purchasing_by_month[m]),
+        }
+        for m in range(1, 13)
+    ]
+
+    payment_breakdown = _payment_method_breakdown(reports)
+
+    supplier_totals = defaultdict(Decimal)
+    supplier_names = {}
+    for p in purchases_qs.select_related('supplier'):
+        supplier_totals[p.supplier_id] += _d(p.amount)
+        supplier_names[p.supplier_id] = p.supplier.name
+    supplier_ranking = sorted(
+        (
+            {'supplierId': sid, 'supplierName': supplier_names[sid], 'amount': str(amount)}
+            for sid, amount in supplier_totals.items()
+        ),
+        key=lambda row: Decimal(row['amount']), reverse=True,
+    )
+
+    monthly_detail = [
+        {
+            'month': f'{year}-{m:02d}',
+            'revenue': str(revenue_by_month[m]),
+            'customers': customers_by_month[m],
+            'avgSpend': str(round_avg(revenue_by_month[m], customers_by_month[m])),
+            'editCount': history_counts_by_month[m],
+        }
+        for m in range(1, 13)
+    ]
+
+    branch_comparison = None
+    if is_admin_all_branches:
+        branch_comparison = _branch_comparison(branch_ids, year_start, year_end, prev_start, prev_end)
+
+    result = {
+        'year': str(year),
+        'revenue': str(revenue), 'previousRevenue': str(prev_revenue), 'revenueDeltaPct': _pct_delta(revenue, prev_revenue),
+        'customers': customers, 'previousCustomers': prev_customers, 'customersDeltaPct': _pct_delta(customers, prev_customers),
+        'avgSpend': str(avg_spend), 'previousAvgSpend': str(prev_avg_spend), 'avgSpendDeltaPct': _pct_delta(avg_spend, prev_avg_spend),
+        'purchasing': str(purchasing_total), 'previousPurchasing': str(prev_purchasing_total),
+        'purchasingDeltaPct': _pct_delta(purchasing_total, prev_purchasing_total),
+        'expenses': str(expense_total),
+        'tentativeOperatingGap': str(tentative_operating_gap),
+        'daysWithReports': days_with_reports,
+        'dailyAverageRevenue': str(daily_average_revenue),
+        'highestRevenueDay': {'date': highest_day[0].isoformat(), 'revenue': str(highest_day[1])} if highest_day else None,
+        'lowestRevenueDay': {'date': lowest_day[0].isoformat(), 'revenue': str(lowest_day[1])} if lowest_day else None,
+        'monthlyTrend': monthly_trend,
+        'paymentMethodBreakdown': [
+            {'paymentMethodId': mid, 'amount': str(amount)} for mid, amount in payment_breakdown.items()
+        ],
+        'supplierRanking': supplier_ranking,
+        'branchComparison': branch_comparison,
+        'monthlyDetail': monthly_detail,
+    }
+    payment_method_names = {
+        str(m.id): (m.custom_name or m.code)
+        for m in PaymentMethodDef.objects.filter(id__in=payment_breakdown.keys())
+    }
+    result['insights'] = build_yearly_insights(
+        result, branch_comparison, payment_breakdown, supplier_ranking, revenue, purchasing_total,
+        payment_method_names,
+    )
+    return result
+
+
 def _branch_comparison(branch_ids, month_start, month_end, prev_start, prev_end):
     from branches.models import Branch
 
@@ -371,6 +503,75 @@ def build_insights(summary, reports_by_date, customers_by_date, branch_compariso
             'rule': 'daily_report_heavily_edited', 'severity': 'notice',
             'message': f"{d.isoformat()} 的日报当日修改了 {c} 次，建议确认",
             'threshold': HISTORY_HEAVY_EDIT_THRESHOLD, 'value': c,
+        })
+
+    return insights
+
+
+def build_yearly_insights(summary, branch_comparison, payment_breakdown, supplier_ranking,
+                           revenue, purchasing_total, payment_method_names=None):
+    """A smaller rule set than build_insights — day-level anomaly detection
+    and "heavily edited day" don't carry meaning at yearly granularity, so
+    those are dropped rather than forced onto a mismatched period."""
+    insights = []
+
+    if summary['revenueDeltaPct'] is not None:
+        insights.append({
+            'rule': 'revenue_yoy_change', 'severity': 'info',
+            'message': f"本年营业额较去年同期{'增长' if summary['revenueDeltaPct'] >= 0 else '下降'}{abs(summary['revenueDeltaPct'])}%",
+            'threshold': None, 'value': summary['revenueDeltaPct'],
+        })
+
+    months_with_revenue = [m for m in summary['monthlyTrend'] if Decimal(m['revenue']) > 0]
+    if months_with_revenue:
+        best = max(months_with_revenue, key=lambda m: Decimal(m['revenue']))
+        worst = min(months_with_revenue, key=lambda m: Decimal(m['revenue']))
+        insights.append({
+            'rule': 'best_worst_month', 'severity': 'info',
+            'message': f"本年营业额最高月为 {best['month']}（¥{best['revenue']}），最低月为 {worst['month']}（¥{worst['revenue']}）",
+            'threshold': None, 'value': None,
+        })
+
+    if revenue > 0:
+        purchasing_ratio = round(float(purchasing_total / revenue * 100), 1)
+        insights.append({
+            'rule': 'purchasing_to_revenue_ratio', 'severity': 'info',
+            'message': f'本年进货额占营业额约{purchasing_ratio}%',
+            'threshold': None, 'value': purchasing_ratio,
+        })
+
+    if branch_comparison:
+        with_revenue = [r for r in branch_comparison if Decimal(r['revenue']) > 0]
+        if with_revenue:
+            top = max(with_revenue, key=lambda r: Decimal(r['revenue']))
+            insights.append({
+                'rule': 'top_branch_by_revenue', 'severity': 'info',
+                'message': f"本年营业额最高的分店为 {top['branchId']}",
+                'threshold': None, 'value': None,
+            })
+        with_delta = [r for r in branch_comparison if r['deltaPct'] is not None]
+        if with_delta:
+            biggest_change = max(with_delta, key=lambda r: abs(r['deltaPct']))
+            insights.append({
+                'rule': 'branch_with_largest_change', 'severity': 'info',
+                'message': f"同比变化最大的分店为 {biggest_change['branchId']}（{biggest_change['deltaPct']}%）",
+                'threshold': None, 'value': biggest_change['deltaPct'],
+            })
+
+    if payment_breakdown:
+        top_method = max(payment_breakdown.items(), key=lambda kv: kv[1])
+        method_name = (payment_method_names or {}).get(top_method[0], str(top_method[0]))
+        insights.append({
+            'rule': 'top_payment_method', 'severity': 'info',
+            'message': f"占比最高的支付方式为 {method_name}",
+            'threshold': None, 'value': None,
+        })
+
+    if supplier_ranking:
+        insights.append({
+            'rule': 'top_supplier_by_purchasing', 'severity': 'info',
+            'message': f"本年进货额最高的供应商为 {supplier_ranking[0]['supplierName']}",
+            'threshold': None, 'value': None,
         })
 
     return insights

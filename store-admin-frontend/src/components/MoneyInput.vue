@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useFormDisabled } from 'element-plus'
 
 /**
  * A yen amount field: binds a `number | null`, but shows the value
@@ -10,7 +11,12 @@ import { computed, ref } from 'vue'
 // `undefined` is accepted (a Record<string, number | null> index can be
 // undefined under noUncheckedIndexedAccess) and treated the same as null.
 const model = defineModel<number | null | undefined>({ required: true })
-withDefaults(defineProps<{ disabled?: boolean; placeholder?: string }>(), { disabled: false })
+// `disabled` must default to `undefined`, not Vue's automatic false-casting
+// for absent Boolean props (see el-input's own `disabled: { default: void 0
+// }`) — otherwise `useFormDisabled` below always sees a concrete `false`
+// and never falls back to an ancestor <el-form :disabled="...">.
+withDefaults(defineProps<{ disabled?: boolean; placeholder?: string }>(), { disabled: undefined })
+const effectiveDisabled = useFormDisabled()
 
 const focused = ref(false)
 
@@ -30,7 +36,7 @@ const display = computed<string>({
   <el-input
     v-model="display"
     inputmode="numeric"
-    :disabled="disabled"
+    :disabled="effectiveDisabled"
     :placeholder="placeholder"
     @focus="focused = true"
     @blur="focused = false"

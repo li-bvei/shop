@@ -17,6 +17,8 @@ export interface Supplier {
   note: string
   /** Manual override for this month's payable amount; null means auto-sum from purchase records. */
   payableOverride: number | null
+  /** Server-computed sum of this month's purchase records for this supplier (DB-side aggregate) — used whenever payableOverride is null. */
+  monthlyPayable: number
 }
 
 interface SupplierDto {
@@ -55,6 +57,7 @@ function fromDto(dto: SupplierDto): Supplier {
     accountHolderFurigana: dto.account_holder_furigana,
     note: dto.note,
     payableOverride: dto.payable_override,
+    monthlyPayable: dto.monthly_payable,
   }
 }
 

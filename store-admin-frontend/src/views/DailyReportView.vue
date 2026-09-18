@@ -29,8 +29,9 @@ import DailyReportForm, {
   normalizeDailyReportFormData,
   type DailyReportFormData,
 } from '@/components/DailyReportForm.vue'
-import { formatCurrency, branchDisplayName, todayJst } from '@/utils/format'
+import { formatCurrency, branchDisplayName, todayJst, formatDateKanji } from '@/utils/format'
 import { downloadCustomExcel } from '@/utils/excelExport'
+import { downloadLiveElementAsPdf } from '@/utils/pdfExport'
 import {
   saveDraft, getDraft, clearDraft, listDrafts, isNetworkFailure, type DailyReportDraft,
 } from '@/utils/dailyReportDraft'
@@ -128,6 +129,34 @@ async function handlePrint() {
   document.title = exportFileName.value
   await fitAndPrint()
   document.title = originalTitle
+}
+
+const pdfDownloading = ref(false)
+
+// e.g. "2026年9月18日_心斎橋店_日報" — a distinct naming convention from
+// exportFileName above (underscore-separated, full branch name incl. 店,
+// kanji date), asked for specifically for the PDF download.
+const pdfFileName = computed(() => {
+  const branch = branchStore.list.find((b) => b.id === branchId.value)
+  const branchName = branchDisplayName(branch, locale.value, branchId.value)
+  return `${formatDateKanji(reportDate.value)}_${branchName}_${t('dailyReport.pdfSuffix')}`
+})
+
+async function handleDownloadPdf() {
+  const el = printRoot.value
+  if (!el) return
+  pdfDownloading.value = true
+  el.classList.add('pdf-export-mode')
+  try {
+    // Let the .no-print/print-styling class change above finish a layout
+    // flush before html2canvas reads the DOM — it never enters real print
+    // media on its own, so this class is the only thing driving that look.
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+    await downloadLiveElementAsPdf(el, pdfFileName.value)
+  } finally {
+    el.classList.remove('pdf-export-mode')
+    pdfDownloading.value = false
+  }
 }
 
 const historyDialogVisible = ref(false)
@@ -505,6 +534,7 @@ async function handleDownload() {
         <div class="no-print form-header-actions">
           <el-button :icon="Printer" @click="handlePrint">{{ t('common.print') }}</el-button>
           <el-button :icon="Download" @click="handleDownload">{{ t('common.downloadExcel') }}</el-button>
+          <el-button :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf">{{ t('common.downloadPdf') }}</el-button>
         </div>
       </div>
 

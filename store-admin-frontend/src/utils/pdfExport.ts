@@ -63,47 +63,20 @@ export async function renderOffscreenToPdf(filename: string, widthPx: number, bu
   }
 }
 
-// This app's Element Plus theme wires several --el-color-primary-* variables
-// through color-mix() (see element-overrides.css) — real browser rendering
-// resolves those fine, but html2canvas 1.4.x's own CSS parser doesn't
-// understand color-mix() syntax at all, which makes it error/hang on every
-// node under an element that references one. Only matters for a *live* DOM
-// capture (offscreen nodes built by hand, like the table above, only ever
-// use literal colors and never hit this).
-const COLOR_MIX_CSS_VARS = [
-  '--el-color-primary-light-3',
-  '--el-color-primary-light-5',
-  '--el-color-primary-light-7',
-  '--el-color-primary-light-8',
-  '--el-color-primary-dark-2',
-]
-
 /**
- * Captures a real, already-rendered element (as opposed to an offscreen
- * node built purely from literal inline styles) as a single-page PDF.
- * Temporarily pins each color-mix()-based theme variable to its actual
- * resolved color (read from the browser's own rendering via a throwaway
- * probe element, so it stays correct across themes) as an inline override
- * on `element`, so html2canvas never sees the unsupported syntax.
+ * Tiny DOM-builder shared by every "hand-built offscreen PDF" (as opposed
+ * to screenshotting a live, on-screen element) — creates `tag`, applies
+ * `styles` as literal inline CSS (never a theme variable or an Element
+ * Plus component, so these documents render identically regardless of the
+ * viewer's light/dark theme), and optionally sets its text content.
  */
-export async function downloadLiveElementAsPdf(element: HTMLElement, filename: string) {
-  const probe = document.createElement('div')
-  probe.style.position = 'fixed'
-  probe.style.visibility = 'hidden'
-  document.body.appendChild(probe)
-  const previousValues: [string, string][] = []
-  try {
-    for (const name of COLOR_MIX_CSS_VARS) {
-      previousValues.push([name, element.style.getPropertyValue(name)])
-      probe.style.color = `var(${name})`
-      element.style.setProperty(name, getComputedStyle(probe).color)
-    }
-    await downloadElementAsPdf(element, filename)
-  } finally {
-    for (const [name, previous] of previousValues) {
-      if (previous) element.style.setProperty(name, previous)
-      else element.style.removeProperty(name)
-    }
-    document.body.removeChild(probe)
-  }
+export function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  styles: Partial<CSSStyleDeclaration>,
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag)
+  Object.assign(node.style, styles)
+  if (text !== undefined) node.textContent = text
+  return node
 }

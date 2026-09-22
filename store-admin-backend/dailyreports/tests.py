@@ -53,6 +53,26 @@ class CashCalculationTests(ApiTestCase):
             }, format='json')
             self.assertEqual(response.status_code, 400)
 
+    def test_amount_under_a_deleted_payment_method_survives_resave(self):
+        """Deleting a payment method through the API (PaymentMethodDefViewSet
+        soft-deletes it — see paymentmethods/views.py) must not make a
+        report re-save silently drop whatever money was already recorded
+        under its id; before the soft-delete fix, save() couldn't find the
+        (hard-deleted) method and dropped the key on every subsequent save."""
+        method = PaymentMethodDef.objects.create(branch=self.branch_a, code='temp-method', custom_name='临时方式')
+        report = DailyReport.objects.create(
+            branch=self.branch_a, date='2026-02-05', total_revenue=5000,
+            payment_amounts={str(method.id): 2000},
+        )
+        self.login_as(self.branch_a_user)
+        resp = self.client.delete(f'/api/payment-methods/{method.id}/')
+        self.assertEqual(resp.status_code, 204)
+
+        report.total_revenue = 6000
+        report.save()
+        report.refresh_from_db()
+        self.assertEqual(report.payment_amounts.get(str(method.id)), 2000)
+
     def test_person_in_charge_must_belong_to_report_branch(self):
         from staff.models import StaffMember
         other = StaffMember.objects.create(name='other', branch=self.branch_b)

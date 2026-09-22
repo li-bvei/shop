@@ -29,7 +29,10 @@ class PaymentMethodDefViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         if instance.protected:
             raise ValidationError('this payment method cannot be deleted.')
-        instance.delete()
+        # Soft delete — see the `active` field's docstring in models.py for
+        # why this can't be a real .delete() anymore.
+        instance.active = False
+        instance.save(update_fields=['active'])
 
     @action(detail=False, methods=['post'])
     def reorder(self, request):

@@ -8,6 +8,15 @@
 - 再往前的历史基线：`ec54c2d docs: 2026-09-06 batch — ops fixes, org feature gates, platform console, check-in tiers`。
 - 工作区已知未跟踪：`store-admin-frontend/.claude/`。本次不处理。
 - `docs/ai-handoff/05_TESTS_AND_RISKS.md` 是 2026-09-14 一次独立审计留下的记录，审计范围覆盖到 `960bbac`；其中 P1-01（批量替换空字符串/日期校验）和 P1-08（reconcile 命令事务边界）已在 `1fc5fa1` 修复，其余条目仍待处理，见该文件本身。
+- **本文档撰写之后（2026-09-19 ～ 09-22）还有几轮未在本文件其余章节回填的改动**（手机端响应式布局、供应商聚合加载改用后端已有字段、支付方式改成软删除、月度经营新增年度切换与 PDF、日报 PDF 重做）——其中前一部分已提交并推送到 `origin/main`（提交 `fe6ba06`），日报 PDF 重做这一轮仍是本地未提交状态。下面单独列一节说明日报 PDF 这部分，其余批次尚未回填到本文件，接手前建议先看 `git log`/`git diff` 而不是只信这份文档。
+
+## 2026-09-22 日报 PDF 下载改为离屏打印稿（本地未提交）
+
+- **问题**：`DailyReportView.vue` 原来的"下载PDF"（`downloadLiveElementAsPdf`）是对屏幕上正在编辑的 `DailyReportForm` 实时截图（html2canvas）再塞进单页 jsPDF。这个做法两个反复出现的问题：① 依赖当前页面的亮/暗主题 CSS 变量，深色模式下禁用输入框的暗色文字画在暗色背景上，看起来像"黑色的不可选中框"；② 表单本身是给屏幕编辑用的高度，硬缩成一页会让字变得很小。
+- **修复**：改成跟 `SuppliersView.vue`/`MonthlyAnalysisView.vue` 一样的模式——不再截图，`DailyReportView.vue` 内部新增 `buildDailyReportPdf()`，用 `pdfExport.ts` 新导出的 `el()` DOM 构建小工具 + 原生内联样式（白底黑字灰边框，不引用任何 `--*` 主题变量、不含 Element Plus 组件）拼一份专用的紧凑排版，再走已有的 `renderOffscreenToPdf`（内部仍是 html2canvas + jsPDF，单页等比缩小兜底逻辑未改）。因为版式本身就比屏幕编辑表单紧凑得多，正常一天的数据实测在不缩放的情况下就能装进一页（约 760px 高，A4 可用高度约 1030px），字号保持设计时的大小（核心数字 24px、表格正文约 12–14px），全部加粗。
+- **数据一致性**：新增导出 `cashRegisterDenominationBreakdown()`（`DailyReportForm.vue`）把"某面额的数量/默认数量/小计"收敛成一处公式，屏幕上的行小计、`computeCashRegisterTotal`、PDF 三处共用，不会出现 PDF 数量和小计对不上的情况；PDF 的"数量"列在有默认数量叠加时会用"(当天+默认)"的小字标注，不会只显示当天数量却让小计悄悄含了默认值。点击下载会重新 `fetchPaymentMethods`/`fetchCashRegisterDefaults` 取最新值，不用页面加载时缓存的旧数据（刚改完支付方式名字/新增删除/收银机默认数量或固定金额，立即下载都是对的）；表单当前未保存内容（含离线草稿）仍按屏幕当前内容导出。
+- **清理**：确认 `downloadLiveElementAsPdf` 和 `.pdf-export-mode`（`global.css`/`variables.css`/`DailyReportForm.vue` 三处）都已无其他调用方后整体删除，浏览器"打印/导出"按钮的 `usePrintFit` 行为未受影响。
+- **验证**：`npm run type-check`（`vue-tsc --build`）、`npm run build`、`eslint` 全绿；后端 `dashboard`/`purchasing`/`dailyreports`/`paymentmethods` 四个 app 测试套件 107 项全过（本轮未改后端代码）。真实浏览器验证了：深色模式下 PDF 仍是白底黑字；0 条报销和多条超长文本报销都正常；2026-09-15 前后两种日报的默认数量叠加逻辑分别正确；改完收银机固定金额/默认数量、改完支付方式名字后不刷新页面立即下载都拿到最新值；已停用但当天有金额的支付方式保留显示、金额为 0 的非现金方式隐藏。顺带发现并修了两处 `npm run build` 才会暴露的类型错误（`api/suppliers.ts` 的 create/update 参数类型误把服务端计算字段 `monthlyPayable` 也当成必填入参；`MonthlyAnalysisView.vue` 支付方式图 label formatter 参数类型跟 ECharts 实际类型不匹配），不影响运行时行为。
 
 ## 2026-09-13 ～ 09-15 这一批做了什么
 

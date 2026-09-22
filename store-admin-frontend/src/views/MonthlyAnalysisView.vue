@@ -83,11 +83,19 @@ function branchName(id: string) {
   return branchDisplayName(branchStore.list.find((b) => b.id === id), locale.value, id)
 }
 
+// 营业额 is the number everyone actually opens this page to check — a
+// dedicated, larger hero card makes that the visual entry point instead of
+// competing equally with customers/avgSpend/purchasing for attention.
+const revenueKpi = computed(() => {
+  const a = analysis.value
+  if (!a) return null
+  return { label: t('monthlyAnalysis.revenue'), value: formatCurrency(a.revenue), delta: deltaText(a.revenueDeltaPct), up: (a.revenueDeltaPct ?? 0) >= 0 }
+})
+
 const kpis = computed(() => {
   const a = analysis.value
   if (!a) return []
   return [
-    { label: t('monthlyAnalysis.revenue'), value: formatCurrency(a.revenue), delta: deltaText(a.revenueDeltaPct), up: (a.revenueDeltaPct ?? 0) >= 0 },
     { label: t('monthlyAnalysis.customers'), value: formatNumber(a.customers), delta: deltaText(a.customersDeltaPct), up: (a.customersDeltaPct ?? 0) >= 0 },
     { label: t('monthlyAnalysis.avgSpend'), value: formatCurrency(a.avgSpend), delta: deltaText(a.avgSpendDeltaPct), up: (a.avgSpendDeltaPct ?? 0) >= 0 },
     { label: t('monthlyAnalysis.purchasing'), value: formatCurrency(a.purchasing), delta: deltaText(a.purchasingDeltaPct), up: (a.purchasingDeltaPct ?? 0) >= 0 },
@@ -161,8 +169,8 @@ const paymentMethodOption = computed<EChartsOption>(() => {
       type: 'pie', radius: ['45%', '70%'], avoidLabelOverlap: true,
       label: {
         color: theme.textSecondary, fontSize: 11,
-        formatter: (params: { name: string; percent: number }) => (
-          params.percent >= PIE_LABEL_MIN_SHARE_PCT ? params.name : ''
+        formatter: (params: { name?: string; percent?: number }) => (
+          (params.percent ?? 0) >= PIE_LABEL_MIN_SHARE_PCT ? (params.name ?? '') : ''
         ),
       },
       data: paymentMethodRows.value.map((r) => ({ name: r.name, value: r.amount })),
@@ -227,13 +235,12 @@ async function handleDownload() {
           t('monthlyAnalysis.revenue'),
           t('monthlyAnalysis.customers'),
           t('monthlyAnalysis.avgSpend'),
-          t('monthlyAnalysis.editCount'),
         ].filter((v) => v !== null))
         headerRow.font = { bold: true }
         headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } }
 
         for (const row of a.dailyDetail) {
-          const cells = [row.date, isAdmin.value ? branchName(row.branchId) : null, row.revenue, row.customers, row.avgSpend, row.editCount]
+          const cells = [row.date, isAdmin.value ? branchName(row.branchId) : null, row.revenue, row.customers, row.avgSpend]
             .filter((v) => v !== null)
           ws.addRow(cells)
         }
@@ -266,14 +273,13 @@ async function handleDownload() {
         ws.addRow([])
 
         const headerRow = ws.addRow([
-          '月份', t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'),
-          t('monthlyAnalysis.avgSpend'), t('monthlyAnalysis.editCount'),
+          '月份', t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend'),
         ])
         headerRow.font = { bold: true }
         headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } }
 
         for (const row of a.monthlyDetail) {
-          ws.addRow([row.month, row.revenue, row.customers, row.avgSpend, row.editCount])
+          ws.addRow([row.month, row.revenue, row.customers, row.avgSpend])
         }
         ws.columns.forEach((col) => { col.width = 16 })
       },
@@ -321,12 +327,18 @@ async function handleDownloadPdf() {
       header.appendChild(el('div', { fontSize: '11px', color: '#666' }, todayJst()))
       root.appendChild(header)
 
+      const revenueHero = el('div', {
+        border: '1px solid #ddd', borderRadius: '4px', padding: '10px 14px', marginBottom: '10px',
+      })
+      revenueHero.appendChild(el('div', { color: '#888', fontSize: '10px', marginBottom: '3px' }, t('monthlyAnalysis.revenue')))
+      revenueHero.appendChild(el('div', { fontSize: '26px', fontWeight: '700' }, formatCurrency(a.revenue)))
+      root.appendChild(revenueHero)
+
       const summaryGrid = el('div', {
         display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginBottom: '16px',
         fontSize: '11px', border: '1px solid #ddd', padding: '10px 12px',
       })
       const summaryItems: [string, string][] = [
-        [t('monthlyAnalysis.revenue'), formatCurrency(a.revenue)],
         [t('monthlyAnalysis.customers'), formatNumber(a.customers)],
         [t('monthlyAnalysis.avgSpend'), formatCurrency(a.avgSpend)],
         [t('monthlyAnalysis.purchasing'), formatCurrency(a.purchasing)],
@@ -373,7 +385,7 @@ async function handleDownloadPdf() {
       const headRow = document.createElement('tr')
       const columns = [
         viewMode.value === 'month' ? '日期' : '月份',
-        t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend'), t('monthlyAnalysis.editCount'),
+        t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend'),
       ]
       for (const label of columns) {
         headRow.appendChild(el('th', { padding: '4px 6px', borderBottom: '1.5px solid #333', textAlign: 'left', fontWeight: '700' }, label))
@@ -382,8 +394,8 @@ async function handleDownloadPdf() {
       detailTable.appendChild(thead)
       const tbody = document.createElement('tbody')
       const detailRows = viewMode.value === 'month'
-        ? (monthlyAnalysis.value?.dailyDetail ?? []).map((r) => [r.date, formatCurrency(r.revenue), String(r.customers), formatCurrency(r.avgSpend), String(r.editCount)])
-        : (yearlyAnalysis.value?.monthlyDetail ?? []).map((r) => [r.month, formatCurrency(r.revenue), String(r.customers), formatCurrency(r.avgSpend), String(r.editCount)])
+        ? (monthlyAnalysis.value?.dailyDetail ?? []).map((r) => [r.date, formatCurrency(r.revenue), String(r.customers), formatCurrency(r.avgSpend)])
+        : (yearlyAnalysis.value?.monthlyDetail ?? []).map((r) => [r.month, formatCurrency(r.revenue), String(r.customers), formatCurrency(r.avgSpend)])
       detailRows.forEach((cells, index) => {
         const tr = document.createElement('tr')
         if (index % 2 === 1) tr.style.backgroundColor = '#f7f7f7'
@@ -429,6 +441,12 @@ async function handleDownloadPdf() {
     </div>
 
     <template v-if="analysis">
+      <div v-if="revenueKpi" class="revenue-hero">
+        <div class="label">{{ revenueKpi.label }}</div>
+        <div class="value">{{ revenueKpi.value }}</div>
+        <div class="delta" :class="revenueKpi.up ? 'up' : 'down'">{{ revenueKpi.delta }}</div>
+      </div>
+
       <div class="kpi-grid">
         <div v-for="kpi in kpis" :key="kpi.label" class="kpi-card">
           <div class="label">{{ kpi.label }}</div>
@@ -506,7 +524,6 @@ async function handleDownloadPdf() {
             <el-table-column :label="t('monthlyAnalysis.avgSpend')" width="100">
               <template #default="{ row }">{{ formatCurrency(row.avgSpend) }}</template>
             </el-table-column>
-            <el-table-column :label="t('monthlyAnalysis.editCount')" prop="editCount" width="100" />
           </el-table>
         </div>
         <div class="mobile-cards">
@@ -521,7 +538,6 @@ async function handleDownloadPdf() {
             <div class="detail-card-revenue">{{ formatCurrency(row.revenue) }}</div>
             <div class="detail-card-row"><span>{{ t('monthlyAnalysis.customers') }}</span><span>{{ row.customers }}</span></div>
             <div class="detail-card-row"><span>{{ t('monthlyAnalysis.avgSpend') }}</span><span>{{ formatCurrency(row.avgSpend) }}</span></div>
-            <div class="detail-card-row"><span>{{ t('monthlyAnalysis.editCount') }}</span><span>{{ row.editCount }}</span></div>
           </div>
           <p v-if="!monthlyAnalysis.dailyDetail.length" class="empty-hint">{{ t('monthlyAnalysis.noData') }}</p>
         </div>
@@ -539,7 +555,6 @@ async function handleDownloadPdf() {
             <el-table-column :label="t('monthlyAnalysis.avgSpend')" width="100">
               <template #default="{ row }">{{ formatCurrency(row.avgSpend) }}</template>
             </el-table-column>
-            <el-table-column :label="t('monthlyAnalysis.editCount')" prop="editCount" width="100" />
           </el-table>
         </div>
         <div class="mobile-cards">
@@ -548,7 +563,6 @@ async function handleDownloadPdf() {
             <div class="detail-card-revenue">{{ formatCurrency(row.revenue) }}</div>
             <div class="detail-card-row"><span>{{ t('monthlyAnalysis.customers') }}</span><span>{{ row.customers }}</span></div>
             <div class="detail-card-row"><span>{{ t('monthlyAnalysis.avgSpend') }}</span><span>{{ formatCurrency(row.avgSpend) }}</span></div>
-            <div class="detail-card-row"><span>{{ t('monthlyAnalysis.editCount') }}</span><span>{{ row.editCount }}</span></div>
           </div>
           <p v-if="!yearlyAnalysis.monthlyDetail.length" class="empty-hint">{{ t('monthlyAnalysis.noData') }}</p>
         </div>
@@ -594,9 +608,38 @@ async function handleDownloadPdf() {
   align-items: center;
 }
 
+.revenue-hero {
+  background: linear-gradient(135deg, var(--accent-light) 0%, var(--surface) 75%);
+  border-radius: var(--radius-md);
+  padding: 24px 28px 22px;
+  box-shadow: var(--shadow-soft);
+  margin-bottom: 14px;
+}
+
+.revenue-hero .label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.revenue-hero .value {
+  font-size: 42px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+.revenue-hero .delta {
+  font-size: 13px;
+  margin-top: 10px;
+  font-weight: 600;
+}
+
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 14px;
   margin-bottom: 14px;
 }
@@ -849,6 +892,10 @@ async function handleDownloadPdf() {
   .secondary-grid,
   .grid-2col {
     grid-template-columns: 1fr;
+  }
+
+  .revenue-hero .value {
+    font-size: 32px;
   }
 }
 

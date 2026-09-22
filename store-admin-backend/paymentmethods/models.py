@@ -13,6 +13,15 @@ class PaymentMethodDef(models.Model):
     i18n_key = models.CharField(max_length=100, blank=True)
     sort_order = models.PositiveIntegerField(default=0)
     protected = models.BooleanField(default=False)
+    # "Deleting" a payment method used to hard-delete this row — but old
+    # DailyReport.payment_amounts blobs keep referencing its id forever, and
+    # a hard delete meant that id could never be resolved back to a name
+    # again (monthly/yearly reports would show the bare numeric id, which
+    # is exactly what looked like a mystery/broken payment method). Deleting
+    # now just flips this to False instead: gone from the entry form and
+    # the branch's active list, but still resolvable by id everywhere that
+    # looks up historical amounts (dashboard/analysis.py in particular).
+    active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ['branch_id', 'sort_order', 'code']

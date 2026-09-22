@@ -54,6 +54,13 @@ export interface PaymentMethodDef {
   customName?: string
   sortOrder: number
   protected: boolean
+  /** False once "deleted" — the row itself is kept (not hard-deleted) so
+   * historical daily-report amounts filed under its id can still resolve
+   * to a name in monthly/yearly reports instead of showing a bare number.
+   * Callers that build an entry-form list (not a historical name lookup)
+   * should filter this out themselves; fetchPaymentMethods intentionally
+   * returns both active and inactive rows. */
+  active: boolean
 }
 
 interface PaymentMethodDto {
@@ -64,6 +71,7 @@ interface PaymentMethodDto {
   custom_name: string
   sort_order: number
   protected: boolean
+  active: boolean
 }
 
 function fromPaymentMethodDto(dto: PaymentMethodDto): PaymentMethodDef {
@@ -75,6 +83,7 @@ function fromPaymentMethodDto(dto: PaymentMethodDto): PaymentMethodDef {
     customName: dto.custom_name,
     sortOrder: dto.sort_order,
     protected: dto.protected,
+    active: dto.active,
   }
 }
 

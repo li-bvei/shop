@@ -61,7 +61,7 @@ function fromDto(dto: SupplierDto): Supplier {
   }
 }
 
-function toDto(payload: Omit<Supplier, 'id'>) {
+function toDto(payload: Omit<Supplier, 'id' | 'monthlyPayable'>) {
   return {
     name: payload.name,
     category: payload.category,
@@ -88,12 +88,15 @@ export async function fetchSuppliers(params: { month?: string; branchId?: string
   return rows.map(fromDto)
 }
 
-export async function createSupplier(payload: Omit<Supplier, 'id'>): Promise<Supplier> {
+// monthlyPayable is server-computed (a DB-side sum of purchase records —
+// see SupplierSerializer.get_monthly_payable), never something a create/
+// update request supplies.
+export async function createSupplier(payload: Omit<Supplier, 'id' | 'monthlyPayable'>): Promise<Supplier> {
   const dto = await http.post<SupplierDto>('/suppliers/', toDto(payload))
   return fromDto(dto)
 }
 
-export async function updateSupplier(id: string, payload: Omit<Supplier, 'id'>): Promise<void> {
+export async function updateSupplier(id: string, payload: Omit<Supplier, 'id' | 'monthlyPayable'>): Promise<void> {
   await http.patch(`/suppliers/${id}/`, toDto(payload))
 }
 

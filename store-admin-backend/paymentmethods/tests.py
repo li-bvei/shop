@@ -87,6 +87,27 @@ class ProtectedCashTests(ApiTestCase):
         resp = self.client.delete(f'/api/payment-methods/{row.id}/')
         self.assertEqual(resp.status_code, 204)
 
+    def test_delete_is_soft_row_still_resolvable_by_id(self):
+        """"Deleting" a payment method must not hard-delete the row — old
+        DailyReport.payment_amounts still reference its id, and a monthly/
+        yearly report needs to resolve that id back to a name (P2 fix: a
+        hard-deleted method used to surface as a bare, unexplained number
+        like "14" in aggregated reports)."""
+        row = PaymentMethodDef.objects.filter(branch=self.branch_a, protected=False).first()
+        row_id = row.id
+        self.login_as(self.branch_a_user)
+        resp = self.client.delete(f'/api/payment-methods/{row_id}/')
+        self.assertEqual(resp.status_code, 204)
+
+        stored = PaymentMethodDef.objects.get(id=row_id)
+        self.assertFalse(stored.active)
+
+        # Still returned by the list endpoint (unfiltered) so a historical
+        # name lookup — not just dashboard/analysis.py's raw ORM query —
+        # can find it too.
+        list_resp = self.client.get(f'/api/payment-methods/?branch={self.branch_a.id}')
+        self.assertIn(row_id, [r['id'] for r in list_resp.data])
+
     def test_protected_row_sort_order_can_be_changed(self):
         cash = PaymentMethodDef.objects.get(branch=self.branch_a, protected=True)
         self.login_as(self.branch_a_user)

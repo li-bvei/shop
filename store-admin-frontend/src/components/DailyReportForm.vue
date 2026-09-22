@@ -103,18 +103,35 @@ export function computeDerived(
 // the "don't need to type anything to get the float counted" behaviour for
 // eligible dates without being needed once the date gate exists (a report
 // before the cutoff never got the default even when a row had a real value).
-export function computeCashRegisterTotal(
+/**
+ * Single source of truth for one denomination row's quantity/subtotal math
+ * — used by the on-screen row, computeCashRegisterTotal below, and the PDF
+ * export, so none of them can drift into showing a "数量" that doesn't
+ * match what the "小计" was actually computed from.
+ */
+export function cashRegisterDenominationBreakdown(
+  denomination: number,
   counts: Record<string, number | null | undefined>,
   denominationDefaults: Record<string, number | null | undefined> = {},
   reportDate?: string,
 ) {
   const defaultsEligible = !!reportDate && reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
-  return CASH_REGISTER_DENOMINATIONS.reduce((sum, denomination) => {
-    const key = String(denomination)
-    const count = counts[key] ?? 0
-    const defaultQuantity = defaultsEligible ? (denominationDefaults[key] ?? 0) : 0
-    return sum + denomination * (count + defaultQuantity)
-  }, 0)
+  const key = String(denomination)
+  const rawQuantity = counts[key] ?? 0
+  const defaultQuantity = defaultsEligible ? (denominationDefaults[key] ?? 0) : 0
+  const totalQuantity = rawQuantity + defaultQuantity
+  return { rawQuantity, defaultQuantity, totalQuantity, subtotal: denomination * totalQuantity }
+}
+
+export function computeCashRegisterTotal(
+  counts: Record<string, number | null | undefined>,
+  denominationDefaults: Record<string, number | null | undefined> = {},
+  reportDate?: string,
+) {
+  return CASH_REGISTER_DENOMINATIONS.reduce(
+    (sum, denomination) => sum + cashRegisterDenominationBreakdown(denomination, counts, denominationDefaults, reportDate).subtotal,
+    0,
+  )
 }
 </script>
 
@@ -176,16 +193,14 @@ const cashRegisterDefaults = ref<CashRegisterDefaults>({
 const savingDenominationDefault = ref<number | null>(null)
 const savingExpectedTotal = ref(false)
 
-// Mirrors computeCashRegisterTotal's per-row logic for the row subtotal
-// display — see that function's comment for why the default applies
-// unconditionally (not just to rows that were touched) once the date gate
-// is eligible.
+// Delegates to cashRegisterDenominationBreakdown (see that function's
+// comment for why the default applies unconditionally — not just to rows
+// that were touched — once the date gate is eligible) so this on-screen
+// subtotal can never drift from the PDF export's or computeCashRegisterTotal's.
 function cashRegisterRowSubtotal(denomination: number) {
-  const key = String(denomination)
-  const count = data.value.cashRegisterCounts[key] ?? 0
-  const defaultsEligible = props.reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
-  const defaultQuantity = defaultsEligible ? (cashRegisterDefaults.value.denominationDefaults[key] ?? 0) : 0
-  return denomination * (count + defaultQuantity)
+  return cashRegisterDenominationBreakdown(
+    denomination, data.value.cashRegisterCounts, cashRegisterDefaults.value.denominationDefaults, props.reportDate,
+  ).subtotal
 }
 
 // The デフォルト枚数 column only makes sense — and only gets shown — for a
@@ -220,6 +235,15 @@ const hallStaff = computed(() => staffList.value.filter((s) => s.workArea === 'h
 function paymentMethodLabel(method: PaymentMethodDef) {
   return method.customName || (method.i18nKey ? t(method.i18nKey) : '')
 }
+
+// `paymentMethods` itself keeps every row this branch has ever had (active
+// or not) — syncPaymentAmountKeys below relies on that full list to avoid
+// wiping a historical amount recorded under a since-"deleted" method. The
+// entry list only needs to hide a deleted one once there's nothing left to
+// show for it on this particular report.
+const visiblePaymentMethods = computed(() => (
+  paymentMethods.value.filter((m) => m.active || !!data.value.paymentAmounts[String(m.id)])
+))
 
 // Drop any paymentAmounts keys that aren't one of the branch's current
 // method ids (e.g. left over from before a rename/re-seed) and backfill
@@ -434,7 +458,7 @@ async function handleAddPaymentMethod() {
         <div class="section-title"><el-icon class="field-icon"><CreditCard /></el-icon>{{ t('dailyReport.paymentMethodsTitle') }}</div>
         <div class="list-rows">
           <div
-            v-for="method in paymentMethods"
+            v-for="method in visiblePaymentMethods"
             :key="method.id"
             class="pm-row"
             :class="{ 'pm-zero-print-hide': !method.protected && !data.paymentAmounts[String(method.id)] }"
@@ -1098,28 +1122,5 @@ async function handleAddPaymentMethod() {
   .pm-zero-print-hide {
     display: none;
   }
-}
-
-/* Same rules as the @media print block above, mirrored under a plain class
-   selector — a "download PDF" button rasterizes the live form with
-   html2canvas (see downloadElementAsPdf), which never triggers print media
-   on its own, so it needs this class toggled on instead to get the same
-   paper-friendly look. */
-.pdf-export-mode .report-section,
-.pdf-export-mode .cash-stat {
-  box-shadow: none;
-  border: 1px solid #ccc;
-}
-
-.pdf-export-mode .stat-tile {
-  background: none;
-}
-
-.pdf-export-mode :deep(.el-input.is-disabled .el-input__wrapper) {
-  background: none;
-}
-
-.pdf-export-mode .pm-zero-print-hide {
-  display: none;
 }
 </style>

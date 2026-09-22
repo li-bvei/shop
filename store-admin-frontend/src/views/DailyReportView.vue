@@ -16,7 +16,7 @@ import {
 } from '@/api/dailyReport'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
-import { fetchCashRegisterDefaults } from '@/api/cashRegisterDefaults'
+import { fetchCashRegisterDefaults, type CashRegisterDefaults } from '@/api/cashRegisterDefaults'
 import { fetchOrganization } from '@/api/accounts'
 import { verifyReportUnlockPassword } from '@/api/reportLock'
 import { ApiError } from '@/api/http'
@@ -24,14 +24,15 @@ import DailyReportForm, {
   CASH_REGISTER_DENOMINATIONS,
   CASH_REGISTER_EXPECTED_TOTAL,
   CASH_REGISTER_DEFAULTS_CUTOFF_DATE,
+  cashRegisterDenominationBreakdown,
   computeCashRegisterTotal,
   computeDerived,
   normalizeDailyReportFormData,
   type DailyReportFormData,
 } from '@/components/DailyReportForm.vue'
-import { formatCurrency, branchDisplayName, todayJst, formatDateKanji } from '@/utils/format'
+import { formatCurrency, formatNumber, branchDisplayName, todayJst, formatDateKanji } from '@/utils/format'
 import { downloadCustomExcel } from '@/utils/excelExport'
-import { downloadLiveElementAsPdf } from '@/utils/pdfExport'
+import { renderOffscreenToPdf, el } from '@/utils/pdfExport'
 import {
   saveDraft, getDraft, clearDraft, listDrafts, isNetworkFailure, type DailyReportDraft,
 } from '@/utils/dailyReportDraft'
@@ -142,19 +143,251 @@ const pdfFileName = computed(() => {
   return `${formatDateKanji(reportDate.value)}_${branchName}_${t('dailyReport.pdfSuffix')}`
 })
 
+// A4 at 96dpi is ~794px wide — same convention as the supplier/monthly-
+// analysis PDFs (renderOffscreenToPdf scales this down to fit one page,
+// never up, so 1px here stays close to 1 printed px to reason about).
+const PDF_PAGE_WIDTH_PX = 794
+
+/** One 面额 row's <tr> for the PDF's cash-register table — quantity always
+ * shows the actual total the subtotal was computed from (raw entered count
+ * plus, where the cutoff date makes it eligible, the branch's float
+ * default), with the breakdown in small text underneath whenever a default
+ * contributed, so "数量" can never look inconsistent with "小计". */
+function buildCashRegisterRow(
+  denomination: number,
+  counts: DailyReportFormData['cashRegisterCounts'],
+  denominationDefaults: Record<string, number>,
+) {
+  const breakdown = cashRegisterDenominationBreakdown(denomination, counts, denominationDefaults, reportDate.value)
+  const tr = document.createElement('tr')
+  const cellStyle = { padding: '3px 5px', borderBottom: '1px solid #ccc' }
+  tr.appendChild(el('td', { ...cellStyle, fontWeight: '700' }, formatCurrency(denomination)))
+  const qtyCell = el('td', { ...cellStyle, textAlign: 'center' })
+  qtyCell.appendChild(el('div', { fontWeight: '700' }, formatNumber(breakdown.totalQuantity)))
+  if (breakdown.defaultQuantity) {
+    qtyCell.appendChild(el('div', { fontSize: '9px', color: '#444', fontWeight: '400' }, `(${breakdown.rawQuantity}+${breakdown.defaultQuantity})`))
+  }
+  tr.appendChild(qtyCell)
+  tr.appendChild(el('td', { ...cellStyle, textAlign: 'right', fontWeight: '700' }, formatCurrency(breakdown.subtotal)))
+  return tr
+}
+
+function buildCashRegisterTable(
+  denominations: readonly number[],
+  counts: DailyReportFormData['cashRegisterCounts'],
+  denominationDefaults: Record<string, number>,
+) {
+  const table = el('table', { width: '100%', borderCollapse: 'collapse', fontSize: '12px' })
+  const headRow = document.createElement('tr')
+  const headStyle = { padding: '3px 5px', borderBottom: '1.5px solid #333', fontWeight: '800' }
+  headRow.appendChild(el('th', { ...headStyle, textAlign: 'left' }, t('dailyReport.cashRegisterDenomination')))
+  headRow.appendChild(el('th', { ...headStyle, textAlign: 'center' }, t('dailyReport.cashRegisterQuantity')))
+  headRow.appendChild(el('th', { ...headStyle, textAlign: 'right' }, t('dailyReport.cashRegisterSubtotal')))
+  table.appendChild(headRow)
+  for (const denomination of denominations) {
+    table.appendChild(buildCashRegisterRow(denomination, counts, denominationDefaults))
+  }
+  return table
+}
+
+/**
+ * Builds a compact, purpose-made one-page print document — not a
+ * screenshot of the live editable form (that approach kept causing
+ * problems: theme-dependent colors, disabled-input styling that read as
+ * unreadable "black boxes" in dark mode, and forcing a tall interactive
+ * layout to shrink-to-fit made every font tiny). Every color here is a
+ * literal black/white/gray, independent of the app's light/dark theme or
+ * any Element Plus component, so none of that can recur. Always reads
+ * fresh payment-method and cash-register-default master data (passed in
+ * by the caller) rather than this view's own page-load-time copies, since
+ * DailyReportForm lets staff edit both without leaving this page.
+ */
+function buildDailyReportPdf(
+  root: HTMLElement,
+  branchName: string,
+  freshMethods: PaymentMethodDef[],
+  freshCashDefaults: CashRegisterDefaults,
+) {
+  const derived = computeDerived(reportForm, freshMethods)
+
+  root.style.padding = '26px 30px'
+  root.style.fontFamily = '"Hiragino Sans", "Microsoft YaHei", sans-serif'
+  root.style.color = '#000000'
+  root.style.background = '#ffffff'
+
+  // 1. Header: date / branch / "日报" / person in charge -----------------
+  const header = el('div', {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
+    borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '14px',
+  })
+  const headerLeft = el('div', {})
+  headerLeft.appendChild(el('div', { fontSize: '22px', fontWeight: '800' }, `${branchName}　${formatDateKanji(reportDate.value)}`))
+  headerLeft.appendChild(el(
+    'div', { fontSize: '13px', fontWeight: '700', marginTop: '4px' },
+    `${t('dailyReport.personInCharge')}：${staffName(reportForm.personInCharge)}`,
+  ))
+  header.appendChild(headerLeft)
+  header.appendChild(el('div', { fontSize: '18px', fontWeight: '800' }, t('dailyReport.pdfSuffix')))
+  root.appendChild(header)
+
+  // 2. Core numbers: 营业额（总）／客数（总）／组数, the reason anyone opens
+  // this report — largest, boldest numbers on the page. -------------------
+  const heroRow = el('div', { display: 'flex', gap: '10px', marginBottom: '14px' })
+  const heroItems: [string, string][] = [
+    [t('dailyReport.totalRevenue'), formatCurrency(reportForm.totalRevenue ?? 0)],
+    [t('dailyReport.totalCustomers'), formatNumber(reportForm.totalCustomers ?? 0)],
+    [t('dailyReport.groupCount'), formatNumber(reportForm.groupCount ?? 0)],
+  ]
+  for (const [label, value] of heroItems) {
+    const box = el('div', { flex: '1', border: '1.5px solid #999', borderRadius: '4px', padding: '10px 12px' })
+    box.appendChild(el('div', { fontSize: '11px', fontWeight: '700', marginBottom: '4px' }, label))
+    box.appendChild(el('div', { fontSize: '24px', fontWeight: '800' }, value))
+    heroRow.appendChild(box)
+  }
+  root.appendChild(heroRow)
+
+  // 3. AM/PM split — afternoon values come from computeDerived, the same
+  // function the on-screen form and Excel export both already use. ------
+  const splitGrid = el('div', { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '16px' })
+  const splitItems: [string, string][] = [
+    [t('dailyReport.morningRevenue'), formatCurrency(reportForm.morningRevenue ?? 0)],
+    [t('dailyReport.morningCustomers'), formatNumber(reportForm.morningCustomers ?? 0)],
+    [t('dailyReport.morningGroupCount'), formatNumber(reportForm.morningGroupCount ?? 0)],
+    [t('dailyReport.afternoonRevenueAuto'), formatCurrency(derived.afternoonRevenue)],
+    [t('dailyReport.afternoonCustomersAuto'), formatNumber(derived.afternoonCustomers)],
+    [t('dailyReport.afternoonGroupCountAuto'), formatNumber(derived.afternoonGroupCount)],
+  ]
+  for (const [label, value] of splitItems) {
+    const box = el('div', { border: '1px solid #bbb', borderRadius: '4px', padding: '6px 8px' })
+    box.appendChild(el('div', { fontSize: '10px', fontWeight: '700', marginBottom: '2px' }, label))
+    box.appendChild(el('div', { fontSize: '15px', fontWeight: '800' }, value))
+    splitGrid.appendChild(box)
+  }
+  root.appendChild(splitGrid)
+
+  // 4. Payment methods — cash always shown (derived.cashAmount, the same
+  // auto-calculated value shown on screen); a non-cash method with ¥0 is
+  // hidden, but one with a nonzero historical amount stays even if it was
+  // since deactivated/deleted (freshMethods already includes those rows —
+  // see paymentmethods app's soft-delete). Order follows sortOrder as
+  // already returned by fetchPaymentMethods. -----------------------------
+  const pmSection = el('div', { marginBottom: '16px' })
+  pmSection.appendChild(el(
+    'div', { fontSize: '14px', fontWeight: '800', marginBottom: '6px', borderBottom: '1px solid #999', paddingBottom: '3px' },
+    t('dailyReport.paymentMethodsTitle'),
+  ))
+  const pmTable = el('table', { width: '100%', borderCollapse: 'collapse', fontSize: '13px' })
+  for (const method of freshMethods) {
+    const amount = paymentMethodAmount(method, derived)
+    if (!method.protected && !amount) continue
+    const row = document.createElement('tr')
+    row.appendChild(el('td', { padding: '5px 4px', borderBottom: '1px solid #ccc', fontWeight: '700' }, paymentMethodLabel(method)))
+    row.appendChild(el('td', { padding: '5px 4px', borderBottom: '1px solid #ccc', textAlign: 'right', fontWeight: '800' }, formatCurrency(amount)))
+    pmTable.appendChild(row)
+  }
+  pmSection.appendChild(pmTable)
+  root.appendChild(pmSection)
+
+  // 5. Cash register — 9 denominations split into two side-by-side tables
+  // to keep this section's height down; totals use the same
+  // computeCashRegisterTotal the screen and Excel export use, and the
+  // fixed/expected amount is the branch's current setting, never a
+  // hardcoded default. ---------------------------------------------------
+  const crSection = el('div', { marginBottom: '16px' })
+  crSection.appendChild(el(
+    'div', { fontSize: '14px', fontWeight: '800', marginBottom: '6px', borderBottom: '1px solid #999', paddingBottom: '3px' },
+    t('dailyReport.cashRegisterTitle'),
+  ))
+  const crGrid = el('div', { display: 'flex', gap: '18px', marginBottom: '8px' })
+  crGrid.appendChild(buildCashRegisterTable(
+    CASH_REGISTER_DENOMINATIONS.slice(0, 5), reportForm.cashRegisterCounts, freshCashDefaults.denominationDefaults,
+  ))
+  crGrid.appendChild(buildCashRegisterTable(
+    CASH_REGISTER_DENOMINATIONS.slice(5), reportForm.cashRegisterCounts, freshCashDefaults.denominationDefaults,
+  ))
+  crSection.appendChild(crGrid)
+
+  const actualTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, freshCashDefaults.denominationDefaults, reportDate.value)
+  const expectedTotal = freshCashDefaults.expectedTotal
+  const diff = actualTotal - expectedTotal
+  // Same wording/thresholds as the on-screen cashRegister.status, not a
+  // separately invented phrasing — over/short/match all read unambiguously
+  // without needing a raw +/- number.
+  const diffText = diff === 0
+    ? t('dailyReport.cashRegisterMatch')
+    : diff > 0
+      ? t('dailyReport.cashRegisterOver', { amount: formatCurrency(diff) })
+      : t('dailyReport.cashRegisterShort', { amount: formatCurrency(Math.abs(diff)) })
+
+  const crSummary = el('div', { display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: '700' })
+  crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterExpected')}：${formatCurrency(expectedTotal)}`))
+  crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterActual')}：${formatCurrency(actualTotal)}`))
+  crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterDifference')}：${diffText}`))
+  crSection.appendChild(crSummary)
+  root.appendChild(crSection)
+
+  // 6. Expenses — a row with nothing in it at all is a still-blank
+  // placeholder, not a real entry, and doesn't print. Long item names or
+  // purposes wrap within their own cell instead of forcing the table wider
+  // than the page. ---------------------------------------------------------
+  const expenseSection = el('div', { marginBottom: '16px' })
+  const expenseHeader = el('div', {
+    display: 'flex', justifyContent: 'space-between', fontSize: '14px', fontWeight: '800',
+    marginBottom: '6px', borderBottom: '1px solid #999', paddingBottom: '3px',
+  })
+  expenseHeader.appendChild(el('span', {}, t('dailyReport.expenseTitle')))
+  expenseHeader.appendChild(el('span', {}, `${t('dailyReport.expenseTotal')}：${formatCurrency(derived.expenseTotal)}`))
+  expenseSection.appendChild(expenseHeader)
+
+  const nonEmptyExpenses = reportForm.expenses.filter((row) => row.itemName.trim() || row.amount || row.purpose.trim())
+  if (nonEmptyExpenses.length) {
+    const expTable = el('table', { width: '100%', borderCollapse: 'collapse', fontSize: '13px', tableLayout: 'fixed' })
+    const colgroup = document.createElement('colgroup')
+    colgroup.appendChild(el('col', { width: '32%' }))
+    colgroup.appendChild(el('col', { width: '18%' }))
+    colgroup.appendChild(el('col', { width: '50%' }))
+    expTable.appendChild(colgroup)
+    for (const expense of nonEmptyExpenses) {
+      const row = document.createElement('tr')
+      const wrapStyle = { padding: '5px 4px', borderBottom: '1px solid #ccc', wordBreak: 'break-word', overflowWrap: 'break-word' } as const
+      row.appendChild(el('td', { ...wrapStyle, fontWeight: '700' }, expense.itemName))
+      row.appendChild(el('td', { ...wrapStyle, textAlign: 'right', fontWeight: '700', whiteSpace: 'nowrap' }, formatCurrency(expense.amount ?? 0)))
+      row.appendChild(el('td', { ...wrapStyle, fontWeight: '400' }, expense.purpose))
+      expTable.appendChild(row)
+    }
+    expenseSection.appendChild(expTable)
+  }
+  root.appendChild(expenseSection)
+
+  // 7. Cash remaining — bottom line, boxed and bold. ----------------------
+  const remainingBox = el('div', {
+    border: '2px solid #333', borderRadius: '4px', padding: '10px 14px',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+  })
+  remainingBox.appendChild(el('div', { fontSize: '15px', fontWeight: '800' }, t('dailyReport.cashRemaining')))
+  remainingBox.appendChild(el('div', { fontSize: '24px', fontWeight: '800' }, formatCurrency(derived.cashRemaining)))
+  root.appendChild(remainingBox)
+}
+
 async function handleDownloadPdf() {
-  const el = printRoot.value
-  if (!el) return
   pdfDownloading.value = true
-  el.classList.add('pdf-export-mode')
   try {
-    // Let the .no-print/print-styling class change above finish a layout
-    // flush before html2canvas reads the DOM — it never enters real print
-    // media on its own, so this class is the only thing driving that look.
-    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
-    await downloadLiveElementAsPdf(el, pdfFileName.value)
+    // Fresh, not this view's page-load-time paymentMethods/cashRegister*
+    // refs — DailyReportForm lets staff rename/add/delete payment methods
+    // and edit the register defaults/expected total without leaving this
+    // page, and a PDF requested right after such a change must reflect it.
+    const [freshMethods, freshCashDefaults] = await Promise.all([
+      fetchPaymentMethods(branchId.value),
+      fetchCashRegisterDefaults(branchId.value),
+    ])
+    const branch = branchStore.list.find((b) => b.id === branchId.value)
+    const branchName = branchDisplayName(branch, locale.value, branchId.value)
+    await renderOffscreenToPdf(
+      pdfFileName.value,
+      PDF_PAGE_WIDTH_PX,
+      (root) => buildDailyReportPdf(root, branchName, freshMethods, freshCashDefaults),
+    )
   } finally {
-    el.classList.remove('pdf-export-mode')
     pdfDownloading.value = false
   }
 }

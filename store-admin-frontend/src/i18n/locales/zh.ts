@@ -241,7 +241,6 @@ export default {
     cashRegisterDifference: '与固定金额差额',
     cashRegisterPreviousCarryover: '前日遗留差额',
     cashRegisterTodayDifference: '本日新增差额',
-    cashRegisterCarryoverHint: '按当前固定金额计算：本日新增差额 = 当前差额 - 前日遗留差额；前日遗留不会重复算作本日产生。',
     cashRegisterPreviousDayUnavailable: '无前一日日报，无法可靠判定本日新增差额。',
     cashRegisterMatch: '金额一致',
     cashRegisterOver: '多出 {amount}',

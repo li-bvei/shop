@@ -379,10 +379,6 @@ function buildDailyReportPdf(
       `${t('dailyReport.cashRegisterTodayDifference')}：${formatSignedCurrency(todayDifference)}`,
     ))
     carryoverBox.appendChild(reconciliation)
-    carryoverBox.appendChild(el(
-      'div', { marginTop: '4px', color: '#444', fontSize: '10px', fontWeight: '400' },
-      t('dailyReport.cashRegisterCarryoverHint'),
-    ))
   } else {
     carryoverBox.appendChild(el('div', { color: '#444', fontWeight: '600' }, t('dailyReport.cashRegisterPreviousDayUnavailable')))
   }

@@ -247,3 +247,39 @@ class YearlyAnalysisCalculationTests(ApiTestCase):
         self.assertEqual(jan_row['revenue'], '100000')
         jun_row = next(m for m in resp.data['monthlyTrend'] if m['month'] == '2026-06')
         self.assertEqual(jun_row['revenue'], '50000')
+
+
+class BranchNameInInsightsTests(ApiTestCase):
+    """Insight messages are plain baked strings, not structured data the
+    frontend re-renders — a branch mentioned inside one used to be the raw
+    internal id (e.g. "shinsaibashi"), which is meaningless to a user. Must
+    be the branch's own display name, in the viewer's own saved language."""
+
+    def _give_admin_locale(self, locale):
+        from accounts.models import UserPreference
+        UserPreference.objects.update_or_create(user=self.admin, defaults={'locale': locale})
+
+    def test_monthly_insights_use_branch_display_name_not_id(self):
+        DailyReport.objects.create(branch=self.branch_a, date=date(2026, 1, 5), total_revenue=1000, total_customers=10)
+        self.login_as(self.admin)
+        resp = self.client.get('/api/dashboard/monthly-analysis/?month=2026-01')
+        blob = str(resp.data['insights'])
+        self.assertIn('测试分店A', blob)
+        self.assertNotIn(self.branch_a.id, blob)
+
+    def test_monthly_insights_respect_saved_japanese_locale(self):
+        self._give_admin_locale('ja')
+        DailyReport.objects.create(branch=self.branch_a, date=date(2026, 1, 5), total_revenue=1000, total_customers=10)
+        self.login_as(self.admin)
+        resp = self.client.get('/api/dashboard/monthly-analysis/?month=2026-01')
+        blob = str(resp.data['insights'])
+        self.assertIn('テスト支店A', blob)
+        self.assertNotIn('测试分店A', blob)
+
+    def test_yearly_insights_use_branch_display_name_not_id(self):
+        DailyReport.objects.create(branch=self.branch_a, date=date(2026, 1, 5), total_revenue=1000, total_customers=10)
+        self.login_as(self.admin)
+        resp = self.client.get('/api/dashboard/yearly-analysis/?year=2026')
+        blob = str(resp.data['insights'])
+        self.assertIn('测试分店A', blob)
+        self.assertNotIn(self.branch_a.id, blob)

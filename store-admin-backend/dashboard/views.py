@@ -6,6 +6,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.models import UserPreference
 from branches.models import Branch
 from dailyreports.models import DailyReport
 from purchasing.models import PurchaseRecord
@@ -17,6 +18,17 @@ def _pct_delta(curr, prev):
     if not prev:
         return 0.0
     return round((curr - prev) / prev * 100, 1)
+
+
+def _user_locale(user):
+    """The insight text below is baked into a single plain-language string
+    server-side (unlike, say, weekday names, which come back as both
+    nameZh/nameJa for the frontend to pick from) — a branch name inside one
+    of those messages has to already be in the right language. `UserPreference`
+    is this account's own already-synced-across-devices language setting
+    (`/api/auth/preference/`); read-only here, never created as a side
+    effect of an unrelated GET."""
+    return UserPreference.objects.filter(user=user).values_list('locale', flat=True).first() or 'zh'
 
 
 class DashboardSummaryView(APIView):
@@ -131,6 +143,7 @@ class MonthlyAnalysisView(APIView):
 
         result = build_monthly_analysis(
             branch_ids=branch_ids, year=year, month=month, is_admin_all_branches=is_admin_all_branches,
+            locale=_user_locale(user),
         )
         return Response(result)
 
@@ -171,5 +184,6 @@ class YearlyAnalysisView(APIView):
 
         result = build_yearly_analysis(
             branch_ids=branch_ids, year=year, is_admin_all_branches=is_admin_all_branches,
+            locale=_user_locale(user),
         )
         return Response(result)

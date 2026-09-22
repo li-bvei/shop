@@ -96,7 +96,7 @@ def _weekday_averages(reports_by_date):
     }
 
 
-def build_monthly_analysis(*, branch_ids, year, month, is_admin_all_branches):
+def build_monthly_analysis(*, branch_ids, year, month, is_admin_all_branches, locale='zh'):
     """branch_ids: list of Branch ids to include (a single id for a scoped
     view, or every branch's id for admin's all-branches view)."""
     month_start, month_end = month_bounds(year, month)
@@ -195,7 +195,7 @@ def build_monthly_analysis(*, branch_ids, year, month, is_admin_all_branches):
 
     branch_comparison = None
     if is_admin_all_branches:
-        branch_comparison = _branch_comparison(branch_ids, month_start, month_end, prev_start, prev_end)
+        branch_comparison = _branch_comparison(branch_ids, month_start, month_end, prev_start, prev_end, locale)
 
     result = {
         'month': month_start.isoformat()[:7],
@@ -236,7 +236,7 @@ def round_avg(revenue, customers):
     return (revenue / customers).quantize(Decimal('1'))
 
 
-def build_yearly_analysis(*, branch_ids, year, is_admin_all_branches):
+def build_yearly_analysis(*, branch_ids, year, is_admin_all_branches, locale='zh'):
     """Same shape and terminology guardrails as build_monthly_analysis, just
     aggregated over a calendar year instead of a calendar month. Field names
     are kept identical to the monthly result wherever the concept carries
@@ -334,7 +334,7 @@ def build_yearly_analysis(*, branch_ids, year, is_admin_all_branches):
 
     branch_comparison = None
     if is_admin_all_branches:
-        branch_comparison = _branch_comparison(branch_ids, year_start, year_end, prev_start, prev_end)
+        branch_comparison = _branch_comparison(branch_ids, year_start, year_end, prev_start, prev_end, locale)
 
     result = {
         'year': str(year),
@@ -368,7 +368,7 @@ def build_yearly_analysis(*, branch_ids, year, is_admin_all_branches):
     return result
 
 
-def _branch_comparison(branch_ids, month_start, month_end, prev_start, prev_end):
+def _branch_comparison(branch_ids, month_start, month_end, prev_start, prev_end, locale='zh'):
     from branches.models import Branch
 
     rows = []
@@ -384,7 +384,13 @@ def _branch_comparison(branch_ids, month_start, month_end, prev_start, prev_end)
             )), Decimal('0'),
         )
         rows.append({
-            'branchId': branch.id, 'revenue': str(cur), 'previousRevenue': str(prev),
+            'branchId': branch.id,
+            # Human-readable name in the caller's language — insight
+            # messages below are plain baked strings (not structured data
+            # the frontend re-renders), so the branch name has to already
+            # be in the right language by the time it lands in one.
+            'branchName': branch.name_ja if locale == 'ja' else branch.name_zh,
+            'revenue': str(cur), 'previousRevenue': str(prev),
             'deltaPct': _pct_delta(cur, prev),
         })
     return rows
@@ -469,7 +475,7 @@ def build_insights(summary, reports_by_date, customers_by_date, branch_compariso
             top = max(with_revenue, key=lambda r: Decimal(r['revenue']))
             insights.append({
                 'rule': 'top_branch_by_revenue', 'severity': 'info',
-                'message': f"本月营业额最高的分店为 {top['branchId']}",
+                'message': f"本月营业额最高的分店为 {top['branchName']}",
                 'threshold': None, 'value': None,
             })
         with_delta = [r for r in branch_comparison if r['deltaPct'] is not None]
@@ -477,7 +483,7 @@ def build_insights(summary, reports_by_date, customers_by_date, branch_compariso
             biggest_change = max(with_delta, key=lambda r: abs(r['deltaPct']))
             insights.append({
                 'rule': 'branch_with_largest_change', 'severity': 'info',
-                'message': f"环比变化最大的分店为 {biggest_change['branchId']}（{biggest_change['deltaPct']}%）",
+                'message': f"环比变化最大的分店为 {biggest_change['branchName']}（{biggest_change['deltaPct']}%）",
                 'threshold': None, 'value': biggest_change['deltaPct'],
             })
 
@@ -546,7 +552,7 @@ def build_yearly_insights(summary, branch_comparison, payment_breakdown, supplie
             top = max(with_revenue, key=lambda r: Decimal(r['revenue']))
             insights.append({
                 'rule': 'top_branch_by_revenue', 'severity': 'info',
-                'message': f"本年营业额最高的分店为 {top['branchId']}",
+                'message': f"本年营业额最高的分店为 {top['branchName']}",
                 'threshold': None, 'value': None,
             })
         with_delta = [r for r in branch_comparison if r['deltaPct'] is not None]
@@ -554,7 +560,7 @@ def build_yearly_insights(summary, branch_comparison, payment_breakdown, supplie
             biggest_change = max(with_delta, key=lambda r: abs(r['deltaPct']))
             insights.append({
                 'rule': 'branch_with_largest_change', 'severity': 'info',
-                'message': f"同比变化最大的分店为 {biggest_change['branchId']}（{biggest_change['deltaPct']}%）",
+                'message': f"同比变化最大的分店为 {biggest_change['branchName']}（{biggest_change['deltaPct']}%）",
                 'threshold': None, 'value': biggest_change['deltaPct'],
             })
 

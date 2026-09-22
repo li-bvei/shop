@@ -143,6 +143,32 @@ const pdfFileName = computed(() => {
   return `${formatDateKanji(reportDate.value)}_${branchName}_${t('dailyReport.pdfSuffix')}`
 })
 
+/** Formats the report's business date without letting the browser timezone
+ * move it to the previous/next day. The weekday follows the active UI
+ * language: e.g. 2026年9月22日（星期二） / 2026年9月22日（火曜日）. */
+function reportDateWithWeekday(dateStr: string) {
+  const [year = 1970, month = 1, day = 1] = dateStr.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  const weekday = new Intl.DateTimeFormat(locale.value === 'ja' ? 'ja-JP' : 'zh-CN', {
+    weekday: 'long', timeZone: 'UTC',
+  }).format(date)
+  return `${formatDateKanji(dateStr)}（${weekday}）`
+}
+
+/** Calendar-day arithmetic for report dates. UTC is deliberate: these are
+ * date-only business keys, not instants, so DST/browser timezone must not
+ * change which date is considered "the previous day". */
+function shiftReportDate(dateStr: string, days: number) {
+  const [year = 1970, month = 1, day = 1] = dateStr.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day + days))
+  return date.toISOString().slice(0, 10)
+}
+
+function formatSignedCurrency(value: number) {
+  if (value === 0) return '±¥0'
+  return `${value > 0 ? '+' : '-'}${formatCurrency(Math.abs(value))}`
+}
+
 // A4 at 96dpi is ~794px wide — same convention as the supplier/monthly-
 // analysis PDFs (renderOffscreenToPdf scales this down to fit one page,
 // never up, so 1px here stays close to 1 printed px to reason about).
@@ -207,6 +233,7 @@ function buildDailyReportPdf(
   branchName: string,
   freshMethods: PaymentMethodDef[],
   freshCashDefaults: CashRegisterDefaults,
+  previousDay: { date: string; cashRegisterCounts: DailyReportFormData['cashRegisterCounts'] } | null,
 ) {
   const derived = computeDerived(reportForm, freshMethods)
 
@@ -221,7 +248,7 @@ function buildDailyReportPdf(
     borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '14px',
   })
   const headerLeft = el('div', {})
-  headerLeft.appendChild(el('div', { fontSize: '22px', fontWeight: '800' }, `${branchName}　${formatDateKanji(reportDate.value)}`))
+  headerLeft.appendChild(el('div', { fontSize: '22px', fontWeight: '800' }, `${branchName}　${reportDateWithWeekday(reportDate.value)}`))
   headerLeft.appendChild(el(
     'div', { fontSize: '13px', fontWeight: '700', marginTop: '4px' },
     `${t('dailyReport.personInCharge')}：${staffName(reportForm.personInCharge)}`,
@@ -324,6 +351,42 @@ function buildDailyReportPdf(
   crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterActual')}：${formatCurrency(actualTotal)}`))
   crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterDifference')}：${diffText}`))
   crSection.appendChild(crSummary)
+
+  // A shortage/surplus is cumulative: yesterday's mismatch remains in the
+  // drawer and therefore appears again in today's actual total even when
+  // nothing new went wrong today. Split the current difference into the
+  // previous day's carried amount and today's change so the report doesn't
+  // incorrectly attribute the whole cumulative shortage to today's shift.
+  const carryoverBox = el('div', {
+    marginTop: '8px', padding: '7px 10px', border: '1px solid #999', borderRadius: '4px',
+    background: '#f7f7f7', fontSize: '12px', fontWeight: '700',
+  })
+  if (previousDay) {
+    const previousActual = computeCashRegisterTotal(
+      previousDay.cashRegisterCounts,
+      freshCashDefaults.denominationDefaults,
+      previousDay.date,
+    )
+    const previousDifference = previousActual - expectedTotal
+    const todayDifference = diff - previousDifference
+    const reconciliation = el('div', { display: 'flex', justifyContent: 'space-between', gap: '16px' })
+    reconciliation.appendChild(el(
+      'div', {},
+      `${t('dailyReport.cashRegisterPreviousCarryover')}（${formatDateKanji(previousDay.date)}）：${formatSignedCurrency(previousDifference)}`,
+    ))
+    reconciliation.appendChild(el(
+      'div', { fontWeight: '800' },
+      `${t('dailyReport.cashRegisterTodayDifference')}：${formatSignedCurrency(todayDifference)}`,
+    ))
+    carryoverBox.appendChild(reconciliation)
+    carryoverBox.appendChild(el(
+      'div', { marginTop: '4px', color: '#444', fontSize: '10px', fontWeight: '400' },
+      t('dailyReport.cashRegisterCarryoverHint'),
+    ))
+  } else {
+    carryoverBox.appendChild(el('div', { color: '#444', fontWeight: '600' }, t('dailyReport.cashRegisterPreviousDayUnavailable')))
+  }
+  crSection.appendChild(carryoverBox)
   root.appendChild(crSection)
 
   // 6. Expenses — a row with nothing in it at all is a still-blank
@@ -376,16 +439,29 @@ async function handleDownloadPdf() {
     // refs — DailyReportForm lets staff rename/add/delete payment methods
     // and edit the register defaults/expected total without leaving this
     // page, and a PDF requested right after such a change must reflect it.
-    const [freshMethods, freshCashDefaults] = await Promise.all([
+    const previousDate = shiftReportDate(reportDate.value, -1)
+    const [freshMethods, freshCashDefaults, previousReport] = await Promise.all([
       fetchPaymentMethods(branchId.value),
       fetchCashRegisterDefaults(branchId.value),
+      fetchDailyReport(branchId.value, previousDate),
     ])
+    // A locally saved previous-day draft is newer than the server copy and
+    // should be the carryover source for this device, matching loadReport's
+    // existing draft-wins rule. Without either a draft or a saved report we
+    // explicitly say the daily split is unavailable instead of pretending
+    // yesterday's difference was zero and blaming the whole amount on today.
+    const previousDraft = getDraft(branchId.value, previousDate)
+    const previousDay = previousDraft
+      ? { date: previousDate, cashRegisterCounts: previousDraft.data.cashRegisterCounts }
+      : previousReport.id
+        ? { date: previousDate, cashRegisterCounts: previousReport.cashRegisterCounts }
+        : null
     const branch = branchStore.list.find((b) => b.id === branchId.value)
     const branchName = branchDisplayName(branch, locale.value, branchId.value)
     await renderOffscreenToPdf(
       pdfFileName.value,
       PDF_PAGE_WIDTH_PX,
-      (root) => buildDailyReportPdf(root, branchName, freshMethods, freshCashDefaults),
+      (root) => buildDailyReportPdf(root, branchName, freshMethods, freshCashDefaults, previousDay),
     )
   } finally {
     pdfDownloading.value = false

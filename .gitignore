@@ -44,3 +44,6 @@ dist-ssr/
 .env.*.local
 !.env.example
 !.env.production.example
+
+# Local test-account cheat sheet — holds passwords, never commit.
+测试账号.md

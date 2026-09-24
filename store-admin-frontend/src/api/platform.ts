@@ -97,20 +97,19 @@ export async function setOrganizationFeature(
 
 /** Onboards a brand-new tenant — organization, and optionally its first
  * branch and first admin account, all in one call (the UI form for what
- * `manage.py provision_organization` has always done from the shell). */
+ * `manage.py provision_organization` has always done from the shell). The
+ * organization and branch codes are generated server-side. */
 export async function createPlatformOrganization(payload: {
-  code: string
   nameZh: string
   nameJa: string
-  branchCode?: string
   branchNameZh?: string
   branchNameJa?: string
   adminAccount?: string
   adminPassword?: string
 }): Promise<PlatformOrg> {
   return fromDto(await http.post<PlatformOrgDto>('/platform/organizations/', {
-    code: payload.code, name_zh: payload.nameZh, name_ja: payload.nameJa,
-    branch_code: payload.branchCode, branch_name_zh: payload.branchNameZh, branch_name_ja: payload.branchNameJa,
+    name_zh: payload.nameZh, name_ja: payload.nameJa,
+    branch_name_zh: payload.branchNameZh, branch_name_ja: payload.branchNameJa,
     admin_account: payload.adminAccount, admin_password: payload.adminPassword,
   }))
 }
@@ -153,12 +152,13 @@ export async function fetchPlatformBranches(orgId: number): Promise<PlatformBran
   return rows.map(fromBranchDto)
 }
 
+/** The branch code is generated server-side. */
 export async function createPlatformBranch(
   orgId: number,
-  payload: { code: string; nameZh: string; nameJa: string },
+  payload: { nameZh: string; nameJa: string },
 ): Promise<PlatformBranch> {
   return fromBranchDto(await http.post<PlatformBranchDto>(`/platform/organizations/${orgId}/branches/`, {
-    code: payload.code, name_zh: payload.nameZh, name_ja: payload.nameJa,
+    name_zh: payload.nameZh, name_ja: payload.nameJa,
   }))
 }
 

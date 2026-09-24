@@ -8,6 +8,8 @@ interface MeResponse {
   account: string
   displayName: string
   role: UserRole
+  organizationNameZh: string
+  organizationNameJa: string
   branchId: string | null
   branchNameZh: string | null
   branchNameJa: string | null
@@ -22,6 +24,8 @@ export const useAuthStore = defineStore('auth', {
     account: '',
     displayName: '',
     role: 'branch' as UserRole,
+    organizationNameZh: '',
+    organizationNameJa: '',
     branchId: null as string | null,
     branchNameZh: null as string | null,
     branchNameJa: null as string | null,
@@ -62,6 +66,8 @@ export const useAuthStore = defineStore('auth', {
       this.account = me.account
       this.displayName = me.displayName
       this.role = me.role
+      this.organizationNameZh = me.organizationNameZh
+      this.organizationNameJa = me.organizationNameJa
       this.branchId = me.branchId
       this.branchNameZh = me.branchNameZh
       this.branchNameJa = me.branchNameJa
@@ -85,6 +91,8 @@ export const useAuthStore = defineStore('auth', {
       this.account = ''
       this.displayName = ''
       this.role = 'branch'
+      this.organizationNameZh = ''
+      this.organizationNameJa = ''
       this.branchId = null
       this.branchNameZh = null
       this.branchNameJa = null

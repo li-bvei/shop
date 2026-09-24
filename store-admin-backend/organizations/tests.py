@@ -9,7 +9,7 @@ from common.test_utils import TwoOrganizationApiTestCase
 from dailyreports.models import DailyReport
 from paymentmethods.models import PaymentMethodDef
 from purchasing.models import PurchaseRecord
-from scheduling.models import SchedulePeriod
+from scheduling.models import BranchScheduleSetting, SchedulePeriod
 from staff.models import StaffMember
 from wages.models import WageRule
 
@@ -440,3 +440,96 @@ class PlatformOverviewTests(TwoOrganizationApiTestCase):
     def test_overview_is_superuser_only(self):
         self.login_as(self.admin_a)
         self.assertEqual(self.client.get('/api/platform/overview/').status_code, 403)
+
+
+class PlatformOrganizationCreateTests(TwoOrganizationApiTestCase):
+    """The super admin's "new tenant" form no longer asks for codes — the
+    server generates them, and the first branch's code with it."""
+
+    def setUp(self):
+        super().setUp()
+        self.superuser = User.objects.create_user(
+            username='platform-op', password=TEST_PASSWORD, role=User.Role.ADMIN,
+            organization=self.org_a, is_superuser=True, is_staff=True,
+        )
+        self.login_as(self.superuser)
+
+    def _create(self, **extra):
+        return self.client.post(
+            '/api/platform/organizations/', {'name_zh': '饮茶楼', 'name_ja': '飲茶楼', **extra}, format='json',
+        )
+
+    def test_org_code_is_generated_and_unique(self):
+        first, second = self._create(), self._create()
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertEqual(second.status_code, 201, second.content)
+        self.assertTrue(first.data['code'].startswith('org-'))
+        self.assertNotEqual(first.data['code'], second.data['code'])
+
+    def test_first_branch_code_is_generated_and_seeded(self):
+        resp = self._create(branch_name_zh='饮茶楼 心斋桥店', branch_name_ja='飲茶楼 心斎橋店')
+        self.assertEqual(resp.status_code, 201, resp.content)
+        org = Organization.objects.get(id=resp.data['id'])
+        branch = org.branches.get()
+        self.assertEqual(branch.code, 'b1')
+        self.assertEqual(branch.id, f'{org.code}-b1')
+        self.assertEqual((branch.name_zh, branch.name_ja), ('饮茶楼 心斋桥店', '飲茶楼 心斎橋店'))
+        self.assertTrue(PaymentMethodDef.objects.filter(branch=branch).exists())
+        self.assertTrue(BranchScheduleSetting.objects.filter(branch=branch).exists())
+
+    def test_branch_needs_both_names(self):
+        before = Organization.objects.count()
+        resp = self._create(branch_name_zh='只有中文')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('branch-fields-incomplete', str(resp.data))
+        self.assertEqual(Organization.objects.count(), before)
+
+    def test_an_explicit_code_is_still_honoured_and_must_be_unique(self):
+        self.assertEqual(self._create(code='chosen-code').data['code'], 'chosen-code')
+        dup = self._create(code='chosen-code')
+        self.assertEqual(dup.status_code, 400)
+        self.assertIn('organization-code-already-exists', str(dup.data))
+
+    def test_added_branches_get_the_next_free_code(self):
+        org_id = self._create(branch_name_zh='饮茶楼 本店', branch_name_ja='飲茶楼 本店').data['id']
+        org = Organization.objects.get(id=org_id)
+        second = self.client.post(
+            f'/api/platform/organizations/{org_id}/branches/',
+            {'name_zh': '饮茶楼 心斋桥店', 'name_ja': '飲茶楼 心斎橋店'}, format='json',
+        )
+        third = self.client.post(
+            f'/api/platform/organizations/{org_id}/branches/',
+            {'name_zh': '饮茶楼 梅田店', 'name_ja': '飲茶楼 梅田店'}, format='json',
+        )
+        self.assertEqual(second.status_code, 201, second.content)
+        self.assertEqual((second.data['code'], third.data['code']), ('b2', 'b3'))
+        self.assertEqual(second.data['id'], f'{org.code}-b2')
+        self.assertEqual(second.data['name_zh'], '饮茶楼 心斋桥店')
+        branch = org.branches.get(code='b2')
+        self.assertTrue(PaymentMethodDef.objects.filter(branch=branch).exists())
+        self.assertTrue(BranchScheduleSetting.objects.filter(branch=branch).exists())
+
+    def test_added_branch_still_accepts_an_explicit_code_but_not_a_duplicate(self):
+        org_id = self._create().data['id']
+        url = f'/api/platform/organizations/{org_id}/branches/'
+        body = {'name_zh': 'A店', 'name_ja': 'A店', 'code': 'honten'}
+        self.assertEqual(self.client.post(url, body, format='json').data['code'], 'honten')
+        dup = self.client.post(url, body, format='json')
+        self.assertEqual(dup.status_code, 400)
+        self.assertIn('branch-code-already-exists-in-organization', str(dup.data))
+
+    def test_adding_a_branch_needs_both_names(self):
+        org_id = self._create().data['id']
+        resp = self.client.post(
+            f'/api/platform/organizations/{org_id}/branches/', {'name_zh': '只有中文'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('name_ja', resp.data)
+
+    def test_only_the_super_admin_can_add_a_branch(self):
+        org_id = self._create().data['id']
+        self.login_as(self.admin_a)
+        resp = self.client.post(
+            f'/api/platform/organizations/{org_id}/branches/', {'name_zh': 'X', 'name_ja': 'X'}, format='json',
+        )
+        self.assertEqual(resp.status_code, 403)

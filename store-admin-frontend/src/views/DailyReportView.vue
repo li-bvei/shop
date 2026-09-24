@@ -47,7 +47,25 @@ const staffList = ref<StaffMember[]>([])
 const paymentMethods = ref<PaymentMethodDef[]>([])
 const cashRegisterExpectedTotal = ref(CASH_REGISTER_EXPECTED_TOTAL)
 const cashRegisterDenominationDefaults = ref<Record<string, number>>({})
-const branchId = ref(auth.branchId ?? 'shinsaibashi')
+const branchId = ref(auth.branchId ?? '')
+
+// The branch an admin last picked in the dropdown, kept per account so the
+// next visit opens where they left off (a branch account has just the one).
+const lastBranchKey = () => `daily_report_last_branch:${auth.account}`
+function rememberBranch(id: string) {
+  try {
+    localStorage.setItem(lastBranchKey(), id)
+  } catch {
+    // Storage unavailable (private mode, quota) — it just isn't remembered.
+  }
+}
+function rememberedBranch(): string | null {
+  try {
+    return localStorage.getItem(lastBranchKey())
+  } catch {
+    return null
+  }
+}
 const reportDate = ref(todayJst())
 const reportId = ref<number | null>(null)
 const submitting = ref(false)
@@ -497,6 +515,8 @@ function formatDateTime(iso: string) {
 }
 
 async function loadReport() {
+  // A chain with no branch yet has no report to load.
+  if (!branchId.value) return
   const [staff, methods, seed, cashRegisterDefaults] = await Promise.all([
     fetchStaffByBranch(branchId.value),
     fetchPaymentMethods(branchId.value),
@@ -540,6 +560,9 @@ onMounted(async () => {
     branchId.value = auth.branchId ?? branchId.value
   } else if (typeof route.query.branch === 'string' && route.query.branch) {
     branchId.value = route.query.branch
+  } else {
+    const remembered = rememberedBranch()
+    branchId.value = branchStore.list.find((b) => b.id === remembered)?.id ?? branchStore.list[0]?.id ?? ''
   }
   if (typeof route.query.date === 'string' && route.query.date) {
     reportDate.value = route.query.date
@@ -831,7 +854,7 @@ async function handleDownload() {
       <div class="form-header">
         <div class="form-header-controls">
           <el-date-picker v-model="reportDate" type="date" size="default" :clearable="false" value-format="YYYY-MM-DD" />
-          <el-select v-if="isAdmin" v-model="branchId" size="default" style="width: 140px">
+          <el-select v-if="isAdmin" v-model="branchId" size="default" style="width: 140px" @change="rememberBranch">
             <el-option v-for="b in branchStore.list" :key="b.id" :value="b.id" :label="branchDisplayName(b, locale)" />
           </el-select>
           <span v-else class="branch-badge">{{ branchLabel(branchId) }}</span>
@@ -864,6 +887,7 @@ async function handleDownload() {
 
       <div ref="printRoot">
         <DailyReportForm
+          v-if="branchId"
           v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate"
           :readonly="mainFormLocked" allow-cash-register-default-edits
         />

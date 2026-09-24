@@ -80,12 +80,12 @@ class PlatformOrganizationListView(APIView):
 
     def post(self, request):
         data = request.data
-        for field in ('code', 'name_zh', 'name_ja'):
+        for field in ('name_zh', 'name_ja'):
             if not data.get(field):
                 raise ValidationError({field: ['This field is required.']})
         try:
             organization, branch, admin = provision_organization(
-                code=data['code'], name_zh=data['name_zh'], name_ja=data['name_ja'],
+                code=data.get('code') or None, name_zh=data['name_zh'], name_ja=data['name_ja'],
                 admin_account=data.get('admin_account') or None,
                 admin_password=data.get('admin_password') or None,
                 branch_code=data.get('branch_code') or None,
@@ -155,13 +155,14 @@ class PlatformOrganizationBranchesView(APIView):
     def post(self, request, org_id):
         org = _get_org_or_404(org_id)
         data = request.data
-        for field in ('code', 'name_zh', 'name_ja'):
+        for field in ('name_zh', 'name_ja'):
             if not data.get(field):
                 raise ValidationError({field: ['This field is required.']})
-        if Branch.objects.filter(organization=org, code=data['code']).exists():
+        code = data.get('code') or None
+        if code and Branch.objects.filter(organization=org, code=code).exists():
             raise ValidationError({'code': ['branch-code-already-exists-in-organization']})
         branch = create_branch_for_organization(
-            org, code=data['code'], name_zh=data['name_zh'], name_ja=data['name_ja'],
+            org, code=code, name_zh=data['name_zh'], name_ja=data['name_ja'],
         )
         return Response(_branch_body(branch), status=201)
 

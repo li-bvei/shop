@@ -295,6 +295,12 @@ async function handleResetPassword(user: PlatformUser) {
   }
 }
 
+// A branch is always shown as "<chain> <branch>" — e.g. 饮茶楼 + 心斋桥店 →
+// "饮茶楼 心斋桥店" — so the create forms only ask for the branch part.
+function joinNames(chain: string, branch: string) {
+  return `${chain.trim()} ${branch.trim()}`.trim()
+}
+
 // ---- Branch create/edit/delete --------------------------------------------
 
 const branchDialogVisible = ref(false)
@@ -302,9 +308,10 @@ const branchDialogOrg = ref<PlatformOrg | null>(null)
 const branchEditingId = ref<string | null>(null)
 const branchSubmitting = ref(false)
 const branchFormRef = ref<FormInstance>()
-const branchForm = reactive({ code: '', nameZh: '', nameJa: '' })
+const branchForm = reactive({ nameZh: '', nameJa: '' })
+const branchPreviewZh = computed(() => joinNames(branchDialogOrg.value?.nameZh ?? '', branchForm.nameZh))
+const branchPreviewJa = computed(() => joinNames(branchDialogOrg.value?.nameJa ?? '', branchForm.nameJa))
 const branchRules: FormRules = {
-  code: [{ required: true, message: t('platformFeatures.validateBranchCode'), trigger: 'blur' }],
   nameZh: [{ required: true, message: t('settings.validateBranchNameZh'), trigger: 'blur' }],
   nameJa: [{ required: true, message: t('settings.validateBranchNameJa'), trigger: 'blur' }],
 }
@@ -312,7 +319,6 @@ const branchRules: FormRules = {
 function openCreateBranch(org: PlatformOrg) {
   branchDialogOrg.value = org
   branchEditingId.value = null
-  branchForm.code = ''
   branchForm.nameZh = ''
   branchForm.nameJa = ''
   branchDialogVisible.value = true
@@ -321,7 +327,6 @@ function openCreateBranch(org: PlatformOrg) {
 function openEditBranch(org: PlatformOrg, branch: PlatformBranch) {
   branchDialogOrg.value = org
   branchEditingId.value = branch.id
-  branchForm.code = branch.code
   branchForm.nameZh = branch.nameZh
   branchForm.nameJa = branch.nameJa
   branchDialogVisible.value = true
@@ -342,16 +347,16 @@ async function handleSubmitBranch() {
         const i = list?.findIndex((b) => b.id === branchEditingId.value) ?? -1
         if (list && i !== -1) list[i] = updated
       } else {
-        const created = await createPlatformBranch(org.id, branchForm)
+        const created = await createPlatformBranch(org.id, {
+          nameZh: branchPreviewZh.value, nameJa: branchPreviewJa.value,
+        })
         branchesByOrg[org.id] = [...(branchesByOrg[org.id] ?? []), created]
         org.branchCount += 1
       }
       ElMessage.success(t('common.savedSuccess'))
       branchDialogVisible.value = false
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : ''
-      if (msg.includes('branch-code-already-exists')) ElMessage.warning(t('platformFeatures.branchCodeExists'))
-      else ElMessage.error(t('common.saveFailed'))
+    } catch {
+      ElMessage.error(t('common.saveFailed'))
     } finally {
       branchSubmitting.value = false
     }
@@ -382,15 +387,15 @@ const newOrgFormRef = ref<FormInstance>()
 const newOrgIncludeBranch = ref(false)
 const newOrgIncludeAdmin = ref(false)
 const newOrgForm = reactive({
-  code: '', nameZh: '', nameJa: '',
-  branchCode: '', branchNameZh: '', branchNameJa: '',
+  nameZh: '', nameJa: '',
+  branchNameZh: '', branchNameJa: '',
   adminAccount: '', adminPassword: '',
 })
+const composedBranchNameZh = computed(() => joinNames(newOrgForm.nameZh, newOrgForm.branchNameZh))
+const composedBranchNameJa = computed(() => joinNames(newOrgForm.nameJa, newOrgForm.branchNameJa))
 const newOrgRules = computed<FormRules>(() => ({
-  code: [{ required: true, message: t('platformFeatures.validateOrgCode'), trigger: 'blur' }],
   nameZh: [{ required: true, message: t('settings.validateBranchNameZh'), trigger: 'blur' }],
   nameJa: [{ required: true, message: t('settings.validateBranchNameJa'), trigger: 'blur' }],
-  branchCode: newOrgIncludeBranch.value ? [{ required: true, message: t('platformFeatures.validateBranchCode'), trigger: 'blur' }] : [],
   branchNameZh: newOrgIncludeBranch.value ? [{ required: true, message: t('settings.validateBranchNameZh'), trigger: 'blur' }] : [],
   branchNameJa: newOrgIncludeBranch.value ? [{ required: true, message: t('settings.validateBranchNameJa'), trigger: 'blur' }] : [],
   adminAccount: newOrgIncludeAdmin.value ? [{ required: true, message: t('settings.validateAccountName'), trigger: 'blur' }] : [],
@@ -398,10 +403,8 @@ const newOrgRules = computed<FormRules>(() => ({
 }))
 
 function openNewOrg() {
-  newOrgForm.code = ''
   newOrgForm.nameZh = ''
   newOrgForm.nameJa = ''
-  newOrgForm.branchCode = ''
   newOrgForm.branchNameZh = ''
   newOrgForm.branchNameJa = ''
   newOrgForm.adminAccount = ''
@@ -418,9 +421,9 @@ async function handleSubmitNewOrg() {
     newOrgSubmitting.value = true
     try {
       const created = await createPlatformOrganization({
-        code: newOrgForm.code, nameZh: newOrgForm.nameZh, nameJa: newOrgForm.nameJa,
+        nameZh: newOrgForm.nameZh.trim(), nameJa: newOrgForm.nameJa.trim(),
         ...(newOrgIncludeBranch.value ? {
-          branchCode: newOrgForm.branchCode, branchNameZh: newOrgForm.branchNameZh, branchNameJa: newOrgForm.branchNameJa,
+          branchNameZh: composedBranchNameZh.value, branchNameJa: composedBranchNameJa.value,
         } : {}),
         ...(newOrgIncludeAdmin.value ? {
           adminAccount: newOrgForm.adminAccount, adminPassword: newOrgForm.adminPassword,
@@ -431,8 +434,7 @@ async function handleSubmitNewOrg() {
       newOrgDialogVisible.value = false
     } catch (err) {
       const msg = err instanceof Error ? err.message : ''
-      if (msg.includes('organization-code-already-exists')) ElMessage.warning(t('platformFeatures.orgCodeExists'))
-      else if (msg.includes('admin-account-already-exists')) ElMessage.warning(t('settings.accountExists'))
+      if (msg.includes('admin-account-already-exists')) ElMessage.warning(t('settings.accountExists'))
       else if (err instanceof ApiError) ElMessage.error(err.messages().join(' ') || t('common.saveFailed'))
       else ElMessage.error(t('common.saveFailed'))
     } finally {
@@ -543,9 +545,6 @@ onMounted(load)
 
     <el-dialog v-model="newOrgDialogVisible" :title="t('platformFeatures.newOrg')" width="480px">
       <el-form ref="newOrgFormRef" :model="newOrgForm" :rules="newOrgRules" label-position="top">
-        <el-form-item :label="t('platformFeatures.orgCode')" prop="code">
-          <el-input v-model="newOrgForm.code" placeholder="e.g. kansai-group" />
-        </el-form-item>
         <el-form-item :label="t('settings.brandNameZh')" prop="nameZh">
           <el-input v-model="newOrgForm.nameZh" />
         </el-form-item>
@@ -555,15 +554,15 @@ onMounted(load)
 
         <el-checkbox v-model="newOrgIncludeBranch">{{ t('platformFeatures.includeFirstBranch') }}</el-checkbox>
         <template v-if="newOrgIncludeBranch">
-          <el-form-item :label="t('platformFeatures.orgCode')" prop="branchCode">
-            <el-input v-model="newOrgForm.branchCode" placeholder="e.g. honten" />
-          </el-form-item>
-          <el-form-item :label="t('settings.branchNameZh')" prop="branchNameZh">
+          <el-form-item :label="t('platformFeatures.newBranchNameZh')" prop="branchNameZh">
             <el-input v-model="newOrgForm.branchNameZh" />
           </el-form-item>
-          <el-form-item :label="t('settings.branchNameJa')" prop="branchNameJa">
+          <el-form-item :label="t('platformFeatures.newBranchNameJa')" prop="branchNameJa">
             <el-input v-model="newOrgForm.branchNameJa" />
           </el-form-item>
+          <p v-if="newOrgForm.branchNameZh.trim() || newOrgForm.branchNameJa.trim()" class="branch-preview">
+            {{ t('platformFeatures.branchDisplayName', { name: `${composedBranchNameZh}　／　${composedBranchNameJa}` }) }}
+          </p>
         </template>
 
         <el-checkbox v-model="newOrgIncludeAdmin">{{ t('platformFeatures.includeFirstAdmin') }}</el-checkbox>
@@ -584,15 +583,15 @@ onMounted(load)
 
     <el-dialog v-model="branchDialogVisible" :title="branchEditingId ? t('settings.editBranch') : t('settings.addBranch')" width="420px">
       <el-form ref="branchFormRef" :model="branchForm" :rules="branchRules" label-position="top">
-        <el-form-item :label="t('platformFeatures.orgCode')" prop="code">
-          <el-input v-model="branchForm.code" :disabled="!!branchEditingId" />
-        </el-form-item>
-        <el-form-item :label="t('settings.branchNameZh')" prop="nameZh">
+        <el-form-item :label="t(branchEditingId ? 'settings.branchNameZh' : 'platformFeatures.newBranchNameZh')" prop="nameZh">
           <el-input v-model="branchForm.nameZh" />
         </el-form-item>
-        <el-form-item :label="t('settings.branchNameJa')" prop="nameJa">
+        <el-form-item :label="t(branchEditingId ? 'settings.branchNameJa' : 'platformFeatures.newBranchNameJa')" prop="nameJa">
           <el-input v-model="branchForm.nameJa" />
         </el-form-item>
+        <p v-if="!branchEditingId && (branchForm.nameZh.trim() || branchForm.nameJa.trim())" class="branch-preview">
+          {{ t('platformFeatures.branchDisplayName', { name: `${branchPreviewZh}　／　${branchPreviewJa}` }) }}
+        </p>
       </el-form>
       <template #footer>
         <el-button @click="branchDialogVisible = false">{{ t('common.cancel') }}</el-button>
@@ -688,6 +687,12 @@ onMounted(load)
 }
 
 .org-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.branch-preview {
+  margin: -4px 0 14px;
   font-size: 12px;
   color: var(--text-tertiary);
 }

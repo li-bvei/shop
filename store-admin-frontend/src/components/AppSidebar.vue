@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import {
   Odometer,
   Document,
@@ -25,11 +26,22 @@ import { useBranchStore } from '@/stores/branches'
 defineProps<{ open?: boolean }>()
 defineEmits<{ close: [] }>()
 
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const branchStore = useBranchStore()
 onMounted(() => branchStore.ensureLoaded())
+
+// The chain's own name, as entered by the platform super admin (and editable
+// in Settings). The platform console belongs to no single chain, so it shows
+// the product name instead.
+const brandName = computed(() => {
+  if (auth.isSuperuser) return t('login.title')
+  const zh = auth.organizationNameZh
+  const ja = auth.organizationNameJa
+  return locale.value === 'ja' ? ja || zh : zh || ja
+})
 
 interface NavItem {
   path: string
@@ -98,7 +110,7 @@ const systemItems = computed<NavItem[]>(() => {
     <div class="brand">
       <span class="dot" />
       <div class="brand-text">
-        <span class="brand-name">{{ $t('nav.brandName') }}</span>
+        <span class="brand-name">{{ brandName }}</span>
         <small class="brand-sub">{{ $t('nav.brandSub', { count: branchStore.list.length }) }}</small>
       </div>
       <button type="button" class="close-btn" :aria-label="$t('common.cancel')" @click="$emit('close')">

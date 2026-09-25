@@ -582,6 +582,8 @@ class GuestApiTests(ApiTestCase):
         make_prize(self.campaign, weight=1, reward_type=RewardType.DRINK, name='ドリンク')
         make_prize(self.campaign, weight=3, reward_type=RewardType.CASH_VOUCHER,
                    config={'face_yen': 500}, name='¥500券', total_stock=0, remaining_stock=0)
+        # weight 0 means "disabled" — it can never be drawn, so it must not be a wheel segment.
+        make_prize(self.campaign, weight=0, reward_type=RewardType.DESSERT, name='停止中')
         reg = self.client.post('/api/guest/register/', {
             'store_token': self.store_token, 'phone': '09012345678', 'birthday_md': '03-07', 'consent': True,
         }, format='json')
@@ -1196,6 +1198,10 @@ class Phase2ApiTests(ApiTestCase):
         self.assertEqual(draw.status_code, 201, draw.content)
         self.assertEqual(draw.data['points_balance'], 400)
         self.assertIn('result', draw.data)
+        # The wheel lands on this id (never on a name match), so it must be
+        # one of the prizes the wheel itself was built from.
+        wheel_ids = [row['id'] for row in client.get('/api/guest/prizes/').data]
+        self.assertIn(draw.data['result']['prize_id'], wheel_ids)
 
         voucher = client.post('/api/guest/redeem/', {'type': 'voucher', 'request_id': 'g2'}, format='json')
         self.assertEqual(voucher.status_code, 201)

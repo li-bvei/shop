@@ -20,4 +20,11 @@ const preference = usePreferenceStore()
   background: var(--surface-alt);
   color: var(--text-secondary);
 }
+
+@media (max-width: 768px) {
+  .theme-btn {
+    width: 48px;
+    height: 48px;
+  }
+}
 </style>

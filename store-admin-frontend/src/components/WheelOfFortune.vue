@@ -1,190 +1,188 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Wheel } from 'spin-wheel'
 import type { WheelPrize } from '@/api/guest'
 
-const props = defineProps<{ prizes: WheelPrize[]; busy?: boolean }>()
+/**
+ * The lottery wheel, drawn by spin-wheel (pinned version). It never decides
+ * anything: the parent draws on the server first, then calls
+ * `spinToPrize(prizeId)` with the id the backend returned, and the wheel
+ * lands on exactly that segment. Nothing here picks, weights or randomises a
+ * prize.
+ */
+const props = defineProps<{ prizes: WheelPrize[]; busy?: boolean; disabled?: boolean; sound?: boolean }>()
 const emit = defineEmits<{ spin: [] }>()
 const { t } = useI18n()
 
-const count = computed(() => Math.max(props.prizes.length, 1))
-const seg = computed(() => 360 / count.value)
-
-// Alternating segment fills — warm "prize wheel" palette, fixed (not
-// theme-swapped: the wheel reads the same in light and dark).
-const FILLS = ['#FFE2A8', '#FFD066', '#FFB4A2', '#FFC97A']
-const wheelBg = computed(() => {
-  const stops: string[] = []
-  for (let i = 0; i < count.value; i++) {
-    const c = FILLS[i % FILLS.length]
-    stops.push(`${c} ${i * seg.value}deg ${(i + 1) * seg.value}deg`)
-  }
-  return `conic-gradient(from ${-seg.value / 2}deg, ${stops.join(', ')})`
-})
-
-const rotation = ref(0)
+const host = ref<HTMLElement>()
+const bump = ref(false)
 const spinning = ref(false)
-const wheelEl = ref<HTMLElement>()
+const ready = ref(false)
+let wheel: Wheel | null = null
+let restResolver: ((index: number) => void) | null = null
+let audio: AudioContext | null = null
+let lastTick = 0
 
-function labelStyle(i: number) {
-  return { transform: `rotate(${i * seg.value}deg)` }
+// Segment fills: white / mint / soft gray, so the wheel stays in the app's
+// white-and-brand-green palette; the refund segment is a stronger green so it
+// reads as its own landing spot, and sold-out prizes go flat gray.
+const FILLS = ['#ffffff', '#edf9f2', '#f1f3f4']
+const REFUND_FILL = '#c9ecd6'
+const SOLD_OUT_FILL = '#e3e6e8'
+const INK = '#202326'
+
+function reducedMotion() {
+  return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 }
 
-/** Spin so segment `targetIndex` lands under the top pointer. Resolves
- * when the wheel stops. */
-function spin(targetIndex: number): Promise<void> {
-  if (spinning.value || props.prizes.length === 0) return Promise.resolve()
-  spinning.value = true
-  const s = seg.value
-  const idx = ((targetIndex % count.value) + count.value) % count.value
-  // Segment i's centre sits at screen-angle i*s from the top (the
-  // conic-gradient starts `from -s/2`), so the wheel must rotate to
-  // `-i*s (mod 360)` to bring it under the top pointer.
-  const currentMod = ((rotation.value % 360) + 360) % 360
-  const want = (((360 - idx * s) % 360) + 360) % 360
-  let delta = want - currentMod
-  if (delta <= 0) delta += 360
-  // land a touch off dead-centre so it doesn't look mechanical
-  const jitter = (Math.random() - 0.5) * s * 0.5
-  rotation.value += delta + jitter + 360 * 5
+// The library shrinks a label until the whole string fits its segment, which
+// made long prize names unreadable; cap the on-wheel text and let the result
+// card show the full name.
+const LABEL_MAX_CHARS = 8
+function shortLabel(name: string) {
+  const chars = Array.from(name.replace(/\s+/g, ' ').trim())
+  return chars.length > LABEL_MAX_CHARS ? `${chars.slice(0, LABEL_MAX_CHARS - 1).join('')}…` : chars.join('')
+}
 
+function buildItems() {
+  return props.prizes.map((p, i) => ({
+    label: shortLabel(p.name),
+    backgroundColor: p.soldOut ? SOLD_OUT_FILL : p.rewardType === 'points_refund' ? REFUND_FILL : FILLS[i % FILLS.length],
+    labelColor: p.soldOut ? '#8a9096' : INK,
+  }))
+}
+
+// A short tick per segment boundary, synthesised with WebAudio (no audio
+// asset involved). Only ever plays when the parent enabled sound, and the
+// context is created inside the tap that starts the spin so iOS allows it.
+function tick() {
+  if (!props.sound || !audio || audio.state !== 'running') return
+  const now = audio.currentTime
+  if (now - lastTick < 0.03) return
+  lastTick = now
+  const osc = audio.createOscillator()
+  const gain = audio.createGain()
+  osc.type = 'square'
+  osc.frequency.value = 1300
+  gain.gain.setValueAtTime(0.06, now)
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.035)
+  osc.connect(gain).connect(audio.destination)
+  osc.start(now)
+  osc.stop(now + 0.04)
+}
+
+function onIndexChange() {
+  tick()
+  if (reducedMotion()) return
+  bump.value = false
+  requestAnimationFrame(() => { bump.value = true })
+}
+
+function create() {
+  ready.value = false
+  wheel?.remove()
+  wheel = null
+  if (!host.value || props.prizes.length === 0) return
+  try {
+    wheel = new Wheel(host.value, {
+      items: buildItems(),
+      radius: 0.96,
+      pointerAngle: 0,
+      isInteractive: false,
+      borderWidth: 6,
+      borderColor: '#e2483d',
+      lineWidth: 1,
+      lineColor: '#d5d9dc',
+      itemLabelRadius: 0.92,
+      itemLabelRadiusMax: 0.34,
+      itemLabelAlign: 'right',
+      itemLabelFont: 'sans-serif',
+      itemLabelFontSizeMax: 22,
+      onCurrentIndexChange: onIndexChange,
+      onRest: (event) => {
+        spinning.value = false
+        restResolver?.(event.currentIndex)
+        restResolver = null
+      },
+    })
+    ready.value = true
+  } catch {
+    wheel = null
+  }
+}
+
+onMounted(create)
+watch(() => props.prizes, create, { deep: true })
+onBeforeUnmount(() => {
+  restResolver?.(-1)
+  restResolver = null
+  wheel?.remove()
+  wheel = null
+  void audio?.close()
+  audio = null
+})
+
+/** Land on the segment whose prize id the backend returned. Resolves with
+ * the index the wheel came to rest on, or `null` (without spinning) when that
+ * id isn't a segment on this wheel — the caller then shows the result
+ * directly rather than pretending the wheel picked it. */
+function spinToPrize(prizeId: number | null): Promise<number | null> {
+  const index = props.prizes.findIndex((p) => p.id === prizeId)
+  if (!wheel || index < 0) return Promise.resolve(null)
+  spinning.value = true
   return new Promise((resolve) => {
-    let done = false
-    const finish = () => {
-      if (done) return
-      done = true
-      spinning.value = false
-      wheelEl.value?.removeEventListener('transitionend', finish)
-      resolve()
-    }
-    wheelEl.value?.addEventListener('transitionend', finish)
-    window.setTimeout(finish, 5000)
+    restResolver = (landed) => resolve(landed)
+    if (reducedMotion()) wheel!.spinToItem(index, 600, true, 0, 1)
+    else wheel!.spinToItem(index, 4200, true, 5, 1)
   })
 }
 
-defineExpose({ spin })
+async function onHubClick() {
+  if (!ready.value || props.busy || props.disabled || spinning.value) return
+  if (props.sound) {
+    try {
+      audio ??= new AudioContext()
+      await audio.resume()
+    } catch {
+      audio = null
+    }
+  }
+  emit('spin')
+}
+
+const hubLabel = computed(() => (props.busy || spinning.value ? t('guest.wheelSpinning') : t('guest.wheelSpin')))
+defineExpose({ spinToPrize, ready })
 </script>
 
 <template>
   <div class="wheel-wrap">
-    <div class="pointer" aria-hidden="true" />
-    <div ref="wheelEl" class="wheel" :style="{ transform: `rotate(${rotation}deg)`, background: wheelBg }">
-      <div
-        v-for="(p, i) in prizes"
-        :key="p.id"
-        class="seg"
-        :class="{ dim: p.soldOut }"
-        :style="labelStyle(i)"
-      >
-        <span>{{ p.name }}</span>
-      </div>
-    </div>
-    <button type="button" class="hub" :disabled="busy || spinning" @click="emit('spin')">
-      <span v-if="spinning" class="hub-dots">●●●</span>
-      <span v-else>{{ t('guest.wheelSpin') }}</span>
+    <div class="pointer" :class="{ bump }" aria-hidden="true" @animationend="bump = false" />
+    <div ref="host" class="wheel-host" role="img" :aria-label="t('guest.wheelAria')" />
+    <button
+      type="button" class="hub" :disabled="!ready || busy || disabled || spinning" :aria-label="hubLabel" @click="onHubClick"
+    >
+      {{ hubLabel }}
     </button>
   </div>
 </template>
 
 <style scoped>
-.wheel-wrap {
-  position: relative;
-  width: min(300px, 82vw);
-  height: min(300px, 82vw);
-  margin: 0 auto;
-}
-
+.wheel-wrap { position: relative; width: min(320px, 84vw); aspect-ratio: 1; margin: 18px auto 10px; }
+.wheel-host { position: absolute; inset: 0; }
 .pointer {
-  position: absolute;
-  top: -4px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 0;
-  height: 0;
-  border-left: 12px solid transparent;
-  border-right: 12px solid transparent;
-  border-top: 20px solid #e2483d;
-  z-index: 3;
+  position: absolute; top: -14px; left: 50%; z-index: 3; width: 0; height: 0; transform: translateX(-50%); transform-origin: 50% 0;
+  border-left: 14px solid transparent; border-right: 14px solid transparent; border-top: 30px solid #e2483d;
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.25));
 }
-
-.wheel {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 7px solid #fff;
-  box-shadow:
-    0 0 0 3px #e2483d,
-    0 10px 30px rgba(0, 0, 0, 0.25);
-  transition: transform 4.1s cubic-bezier(0.12, 0.82, 0.18, 1);
-}
-
-.seg {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  justify-content: center;
-  padding-top: 24px;
-  transform-origin: center;
-  pointer-events: none;
-}
-
-.seg span {
-  max-width: 82px;
-  font-size: 10px;
-  font-weight: 700;
-  line-height: 1.15;
-  color: #7a3b12;
-  text-align: center;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-}
-
-.seg.dim span {
-  opacity: 0.4;
-  text-decoration: line-through;
-}
-
+.pointer.bump { animation: pointer-bump 0.12s ease-out; }
+@keyframes pointer-bump { 0% { transform: translateX(-50%) rotate(0); } 40% { transform: translateX(-50%) rotate(-14deg); } 100% { transform: translateX(-50%) rotate(0); } }
 .hub {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 78px;
-  height: 78px;
-  border-radius: 50%;
-  border: 4px solid #fff;
-  background: #e2483d;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 800;
-  cursor: pointer;
-  z-index: 2;
-  box-shadow: 0 4px 12px rgba(226, 72, 61, 0.5);
+  position: absolute; top: 50%; left: 50%; z-index: 2; width: 84px; height: 84px; transform: translate(-50%, -50%);
+  border: 5px solid #fff; border-radius: 50%; background: #e2483d; color: #fff; font: inherit; font-size: 15px; font-weight: 800;
+  line-height: 1.15; padding: 0 4px; cursor: pointer; box-shadow: 0 3px 10px rgba(226, 72, 61, 0.45);
 }
-
-.hub:disabled {
-  cursor: default;
-  opacity: 0.85;
-}
-
-.hub-dots {
-  font-size: 11px;
-  letter-spacing: 1px;
-  animation: hub-pulse 1s ease-in-out infinite;
-}
-
-@keyframes hub-pulse {
-  50% {
-    opacity: 0.4;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .wheel {
-    transition-duration: 0.4s;
-  }
-}
+.hub:disabled { opacity: 0.75; cursor: default; }
+.hub:focus-visible { outline: 3px solid #202326; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .pointer.bump { animation: none; } }
 </style>

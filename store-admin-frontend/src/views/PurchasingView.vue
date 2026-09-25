@@ -28,6 +28,9 @@ import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
 import { formatCurrency, branchDisplayName, todayJst, currentMonthJst } from '@/utils/format'
 import { useDelayedLoading } from '@/composables/useDelayedLoading'
+import { useIsMobile } from '@/composables/useIsMobile'
+import PurchasingMobileEntry from '@/components/mobile/PurchasingMobileEntry.vue'
+import { buildPurchasePayload, purchaseAmountPreview, validatePurchaseRow } from '@/utils/purchaseEntry'
 
 const { t, locale } = useI18n()
 const auth = useAuthStore()
@@ -60,7 +63,7 @@ const row = reactive({
   note: '',
 })
 
-const amountPreview = computed(() => row.quantity * row.unitPrice)
+const amountPreview = computed(() => purchaseAmountPreview(row))
 
 // ---- Filters + server-side pagination ------------------------------------
 
@@ -143,11 +146,20 @@ watch(() => filters.month, (month) => {
 
 watch(currentPage, load)
 
-onMounted(async () => {
+// On a phone PurchasingMobileEntry owns its own data, so this view's
+// desktop loading only runs (now, or once the window grows past the phone
+// breakpoint) while the desktop layout is actually showing.
+const isMobile = useIsMobile()
+let desktopLoaded = false
+async function loadDesktop() {
+  if (desktopLoaded) return
+  desktopLoaded = true
   await branchStore.ensureLoaded()
   suppliers.value = await fetchSuppliers()
   await load()
-})
+}
+onMounted(() => { if (!isMobile.value) void loadDesktop() })
+watch(isMobile, (mobile) => { if (!mobile) void loadDesktop() })
 
 function focusItemName() {
   nextTick(() => itemNameInput.value?.focus())
@@ -248,37 +260,14 @@ function handleRowEnter(event: KeyboardEvent) {
 }
 
 async function commitRow() {
-  if (!row.branchId) {
-    ElMessage.warning(t('purchasing.validateBranch'))
-    return
-  }
-  if (!row.supplierId) {
-    ElMessage.warning(t('purchasing.validateSupplier'))
-    return
-  }
-  if (!row.itemName.trim()) {
-    ElMessage.warning(t('purchasing.validateItemName'))
-    focusItemName()
-    return
-  }
-  if (!row.quantity || row.quantity <= 0) {
-    ElMessage.warning(t('purchasing.validateQuantity'))
-    return
-  }
-  if (!row.unitPrice || row.unitPrice <= 0) {
-    ElMessage.warning(t('purchasing.validateUnitPrice'))
+  const problem = validatePurchaseRow(row)
+  if (problem) {
+    ElMessage.warning(t(problem.key))
+    if (problem.field === 'itemName') focusItemName()
     return
   }
 
-  const payload = {
-    date: row.date,
-    branchId: row.branchId,
-    supplierId: row.supplierId,
-    itemName: row.itemName.trim(),
-    quantity: row.quantity,
-    unitPrice: row.unitPrice,
-    note: row.note,
-  }
+  const payload = buildPurchasePayload(row)
 
   if (editingId.value) {
     await updatePurchase(editingId.value, payload)
@@ -468,7 +457,8 @@ async function openPriceHistory(record: PurchaseRecord) {
 </script>
 
 <template>
-  <div class="purchasing-view">
+  <PurchasingMobileEntry v-if="isMobile" />
+  <div v-else class="purchasing-view">
     <div class="card">
       <div class="page-header">
         <div>

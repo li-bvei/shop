@@ -127,8 +127,16 @@ function onUserCommand(cmd: string) {
     padding: 14px 16px;
   }
 
+  /* The bottom bar (and its その他 sheet) is the phone's navigation now, so the
+     old drawer button only costs header width. */
   .menu-btn {
-    display: inline-flex;
+    display: none;
+  }
+
+  .avatar-trigger {
+    min-height: 48px;
+    min-width: 48px;
+    justify-content: center;
   }
 
   .branch-pill {

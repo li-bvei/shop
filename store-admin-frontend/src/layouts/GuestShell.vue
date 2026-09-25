@@ -80,8 +80,8 @@ onBeforeUnmount(() => {
 .lang-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 9px;
+  gap: 0;
+  padding: 0 6px;
   border: 1px solid var(--guest-rule);
   border-radius: 999px;
   background: #fff;
@@ -93,10 +93,12 @@ onBeforeUnmount(() => {
 .lang-toggle button {
   border: none;
   background: transparent;
-  color: #a5aaae;
+  color: #8a9096;
   font-family: inherit;
-  font-size: 11px;
-  padding: 2px 3px;
+  font-size: 14px;
+  min-width: 48px;
+  min-height: 48px;
+  padding: 0 6px;
   line-height: 1.3;
   cursor: pointer;
 }

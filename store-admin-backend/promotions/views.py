@@ -399,7 +399,7 @@ class GuestPrizesView(APIView):
         if not customer:
             raise NotFound('card-not-found')
         campaign = _active_campaign_for(customer)
-        prizes = campaign.prizes.filter(active=True).order_by('display_order', 'id')
+        prizes = campaign.prizes.filter(active=True, weight__gt=0).order_by('display_order', 'id')
         return Response([
             {
                 'id': p.id,
@@ -442,6 +442,10 @@ def _draw_result_body(draw):
     return {
         'draw_id': draw.id,
         'status': draw.status,
+        # The wheel must land on exactly this prize — matching by the
+        # (snapshot) name breaks on duplicate or since-renamed prizes.
+        # Null only if the prize row was deleted after the draw.
+        'prize_id': draw.prize_id,
         'prize_name': draw.prize_name_snapshot,
         'reward_type': draw.reward_type_snapshot,
         'points_refunded': draw.points_refunded,

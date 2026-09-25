@@ -32,6 +32,8 @@
 | 日报打印自适应单页、隐藏0元支付方式 | 已实现 | `usePrintFit`、`DailyReportForm.vue` `pm-zero-print-hide` |
 | 日报"下载PDF"（独立于打印，离屏紧凑排版，不截图编辑表单，深色模式下也是白底黑字） | 已实现（2026-09-22，待部署） | `DailyReportView.vue` `buildDailyReportPdf`/`handleDownloadPdf`，`utils/pdfExport.ts` `el`/`renderOffscreenToPdf`，`DailyReportForm.vue` `cashRegisterDenominationBreakdown` |
 | 日报 PDF 日期星期、收银机前日遗留/本日新增差额拆分 | 已实现（2026-09-22，待部署） | `DailyReportView.vue` `reportDateWithWeekday`/`shiftReportDate`/`buildDailyReportPdf`；前一自然日无数据时不推测本日新增差额 |
+| 手机端底部导航 / 日报手机表单 / 仕入れ手机录入 | 已实现（2026-09-25，待提交部署） | `components/mobile/*`、`composables/useIsMobile.ts`、`useNavItems.ts`、`utils/purchaseEntry.ts`；桌面路径未改 |
+| 顾客卡去 Emoji + 转盘按后端 `prize_id` 落点（spin-wheel、confetti、减少动效、奖品加载失败重试） | 已实现（2026-09-25，待提交部署） | `WheelOfFortune.vue`、`GuestCardView.vue`、`api/guest.ts` `DrawResult.prizeId`、`promotions/views.py` `_draw_result_body` |
 | 日报离线保存与冲突处理 | 已实现 | `utils/dailyReportDraft.ts`、`DailyReportView.vue` 同步/冲突逻辑 |
 | 首页问候语按时间变化 | 已实现 | `AppShell.vue` `greetingKey()` |
 | 全局屏蔽鼠标滚轮改数字输入框 | 已实现 | `main.ts` 全局 `wheel` 监听 |

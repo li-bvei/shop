@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { Component } from 'vue'
+import { Coin, Dish, Key, Present, Tickets } from '@element-plus/icons-vue'
 import type { GuestCard } from '@/api/guest'
 
 const props = defineProps<{ card: GuestCard }>()
@@ -10,7 +12,7 @@ const { t } = useI18n()
 const c = computed(() => props.card.campaign ?? {})
 
 interface Slide {
-  emoji: string
+  icon: Component
   title: string
   body: string
 }
@@ -18,21 +20,21 @@ interface Slide {
 const slides = computed<Slide[]>(() => {
   const list: Slide[] = [
     {
-      emoji: '🧾',
+      icon: Coin,
       title: t('guest.onboard.s1Title'),
       body: t('guest.onboard.s1Body', { yen: 1000, pts: c.value.pointsPer1000yen ?? 0 }),
     },
   ]
   if (props.card.stampTarget) {
     list.push({
-      emoji: '🎫',
+      icon: Tickets,
       title: t('guest.onboard.s2Title'),
       body: t('guest.onboard.s2Body', { n: props.card.stampTarget }),
     })
   }
-  list.push({ emoji: '🎁', title: t('guest.onboard.s3Title'), body: t('guest.onboard.s3Body') })
-  list.push({ emoji: '🍰', title: t('guest.onboard.s4Title'), body: t('guest.onboard.s4Body') })
-  list.push({ emoji: '🔑', title: t('guest.onboard.s5Title'), body: t('guest.onboard.s5Body') })
+  list.push({ icon: Present, title: t('guest.onboard.s3Title'), body: t('guest.onboard.s3Body') })
+  list.push({ icon: Dish, title: t('guest.onboard.s4Title'), body: t('guest.onboard.s4Body') })
+  list.push({ icon: Key, title: t('guest.onboard.s5Title'), body: t('guest.onboard.s5Body') })
   return list
 })
 
@@ -67,7 +69,9 @@ function onTouchEnd(e: TouchEvent) {
 
     <div class="stage">
       <div :key="index" class="slide">
-        <div class="emoji">{{ current.emoji }}</div>
+        <div class="slide-icon" aria-hidden="true">
+          <el-icon :size="44"><component :is="current.icon" /></el-icon>
+        </div>
         <h2>{{ current.title }}</h2>
         <p>{{ current.body }}</p>
       </div>
@@ -103,7 +107,9 @@ function onTouchEnd(e: TouchEvent) {
   border: none;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 13px;
+  min-height: 48px;
+  padding: 0 12px;
+  font-size: 15px;
   cursor: pointer;
 }
 
@@ -121,10 +127,16 @@ function onTouchEnd(e: TouchEvent) {
   text-align: center;
 }
 
-.emoji {
-  font-size: 76px;
-  line-height: 1;
-  margin-bottom: 28px;
+.slide-icon {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #e8f9ef;
+  color: #05aa49;
 }
 
 .slide h2 {
@@ -135,7 +147,7 @@ function onTouchEnd(e: TouchEvent) {
 }
 
 .slide p {
-  font-size: 14px;
+  font-size: 16px;
   color: var(--text-secondary);
   line-height: 1.7;
   margin: 0;
@@ -175,7 +187,7 @@ function onTouchEnd(e: TouchEvent) {
 .cta {
   width: 100%;
   max-width: 340px;
-  height: 48px;
+  height: 52px;
   border: none;
   border-radius: var(--radius-sm);
   background: var(--accent);

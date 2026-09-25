@@ -10,6 +10,19 @@
 - `docs/ai-handoff/05_TESTS_AND_RISKS.md` 是 2026-09-14 一次独立审计留下的记录，审计范围覆盖到 `960bbac`；其中 P1-01（批量替换空字符串/日期校验）和 P1-08（reconcile 命令事务边界）已在 `1fc5fa1` 修复，其余条目仍待处理，见该文件本身。
 - **本文档撰写之后（2026-09-19 ～ 09-22）还有几轮未在本文件其余章节回填的改动**（手机端响应式布局、供应商聚合加载改用后端已有字段、支付方式改成软删除、月度经营新增年度切换与 PDF、日报 PDF 重做）——这些改动现已进入 Git 版本管理；下面单独列一节说明日报 PDF，其余批次尚未完整回填，接手前建议同时查看 `git log`，不要只依赖本文档。
 
+## 2026-09-25 手机端易用性与积分抽奖体验优化（已实现，未提交/未部署）
+
+- **原则**：≤768px 才启用手机专用组件（`composables/useIsMobile.ts`，matchMedia），桌面代码路径不动；业务公式/抽奖结果不改，手机与桌面共用同一批计算函数。
+- **A 底部导航**：`components/mobile/MobileBottomNav.vue`（ホーム/経営/日報/仕入れ/その他，その他 = `MobileSheet.vue` 底部抽屉）。菜单项与权限/功能开关过滤抽到 `composables/useNavItems.ts`，`AppSidebar.vue` 与底部导航共用同一份，未授权项不出现。`AppShell.vue` 提供 `--mobile-nav-h`；手机顶栏隐藏原汉堡按钮（导航已在底部）。`index.html` viewport 加 `viewport-fit=cover` 适配 safe-area。
+- **B 日报手机表单**：`components/mobile/DailyReportMobileForm.vue`（5 步：基本/支払/レジ/経費/確認，固定 前へ/次へ/保存 栏；输入 ≥52px、字号 ≥16px、数字 ≥18px、レジ枚数 −/数字/+）。`DailyReportView.vue` 在手机上切换到它，Excel/PDF/离线草稿/冲突处理/旧日报锁定原样复用。`DailyReportForm.vue` 的普通 `<script>` 新增导出 `computeCashRegisterStatus` / `visiblePaymentMethodsFor` / `syncPaymentAmountKeysOn`，桌面表单也委托给它们，避免手机端复制公式。
+- **C 仕入れ手机录入**：`components/mobile/PurchasingMobileEntry.vue` + `PurchaseEntryFields.vue`（竖向单品录入、保存并继续、记住上次日期/仕入先、历史卡片、底部抽屉编辑、「絞り込み」抽屉）；共用逻辑在 `utils/purchaseEntry.ts`，`PurchasingView.vue` 在桌面仍走原表格。
+- **D 顾客卡（GuestCardView/GuestOnboarding）**：功能性 Emoji 全部换成 `@element-plus/icons-vue`（图标 24px、导航文字 ≥12px、按钮 ≥52px/交換 48px）；配色改白/浅灰/品牌绿，抽奖红仅作强调；语言切换按钮 48px。
+- **E 抽奖转盘**：`WheelOfFortune.vue` 改用固定版本 `spin-wheel@5.0.2`（`spinToItem` 落到后端返回的奖品）+ `canvas-confetti@1.9.4`（`disableForReducedMotion`）；音效用 WebAudio 合成（默认关，`localStorage pc_wheel_sound`），无外部音频/动画素材。**后端 `_draw_result_body` 现在返回 `prize_id`，前端按 `prizeId` 落点，绝不按奖品名匹配、绝不在前端随机**；奖品加载失败/为空时禁用抽奖并给「もう一度読み込む」；积分返还是转盘上的独立浅绿色段；抽到的 id 不在当前转盘上时重新拉取一次奖品，仍不在则只展示结果不转。转盘上的文字最多 8 字（其余省略），完整名称在结果卡片里。`/api/guest/prizes/` 仍不返回权重。
+- **文案**：新增文字全部在 `ja.ts` / `zh.ts`（`nav.tab*`、`dailyReport.m*`、`purchasing.m*`、`guest.wheel*`）。
+- **验证**：`npm run type-check`、eslint、`npm run build` 全绿；后端 `promotions dashboard dailyreports paymentmethods purchasing` 255 项通过（`promotions.tests` 新增断言：抽奖结果 `prize_id` 必在 `/api/guest/prizes/` 里）。浏览器实测 320/375/390/430 无横向滚动、≥48px 点击区（日报/仕入れ/顾客卡）、日报/仕入れ主体文字 ≥16px、256px 布局宽（≈200% 缩放）保存栏仍可点、暗色模式；真实抽奖一次，后端 prize_id=60（积分返还）与转盘停靠段一致；奖品接口 500 时显示重试并可恢复。
+- **独立复查后追加修复**：`/api/guest/prizes/` 不再列出 `weight=0`（已停用、永远抽不中）的奖品；转盘构建失败时禁用抽奖（`ready`），卸载时结算挂起的 Promise 并 `confetti.reset()`；手机日报点主 保存 时会先保存レジ设置里改过的默认枚数/应有金额；仕入れ手机筛选加请求序号防旧响应覆盖、加载更多失败回退页码、清空月份时同步清价格变动、两处筛选标签名修正；「その他」抽屉点当前页面也会关闭；手机端说明文字统一 ≥16px。
+- **部署**：无新 migration，`cd /www/wwwroot/shop && bash deploy.sh` 即可。
+
 ## 2026-09-22 日报 PDF 下载改为离屏打印稿（已实现，待部署）
 
 - **问题**：`DailyReportView.vue` 原来的"下载PDF"（`downloadLiveElementAsPdf`）是对屏幕上正在编辑的 `DailyReportForm` 实时截图（html2canvas）再塞进单页 jsPDF。这个做法两个反复出现的问题：① 依赖当前页面的亮/暗主题 CSS 变量，深色模式下禁用输入框的暗色文字画在暗色背景上，看起来像"黑色的不可选中框"；② 表单本身是给屏幕编辑用的高度，硬缩成一页会让字变得很小。

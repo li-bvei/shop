@@ -46,4 +46,12 @@ function reloadNow() {
   font-size: 13px;
   color: var(--text-primary);
 }
+
+@media (max-width: 768px) {
+  /* Sits above the phone bottom bar instead of on top of it. */
+  .new-version-banner {
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+    max-width: calc(100vw - 24px);
+  }
+}
 </style>

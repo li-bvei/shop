@@ -133,6 +133,59 @@ export function computeCashRegisterTotal(
     0,
   )
 }
+/** The cash-register match/over/short state shown under the count table.
+ * `hasInput` is true once the float defaults contribute or any count has
+ * been typed — an untouched register reads "please count" rather than a
+ * misleading "short ¥130,000". Shared by the desktop form and the phone form. */
+export function computeCashRegisterStatus(
+  counts: Record<string, number | null | undefined>,
+  denominationDefaults: Record<string, number | null | undefined>,
+  expectedTotal: number,
+  reportDate: string,
+) {
+  const actual = computeCashRegisterTotal(counts, denominationDefaults, reportDate)
+  const difference = actual - expectedTotal
+  const defaultsEligible = reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
+  const hasDefaultContribution = defaultsEligible
+    && Object.values(denominationDefaults).some((v) => (v ?? 0) > 0)
+  const hasInput = hasDefaultContribution || CASH_REGISTER_DENOMINATIONS.some(
+    (denomination) => counts[String(denomination)] != null,
+  )
+  return {
+    actual,
+    difference,
+    status: !hasInput ? 'empty' : difference === 0 ? 'match' : difference > 0 ? 'over' : 'short',
+  } as const
+}
+
+/** A deactivated ("deleted") payment method only stays in the entry list
+ * while this report still has an amount recorded under it — see the
+ * paymentmethods app's soft delete. Shared by the desktop form and the
+ * phone form so both list exactly the same rows. */
+export function visiblePaymentMethodsFor<T extends { id: number; active: boolean }>(
+  methods: T[],
+  paymentAmounts: Record<string, number | null>,
+): T[] {
+  return methods.filter((m) => m.active || !!paymentAmounts[String(m.id)])
+}
+
+/** Drops paymentAmounts keys that aren't one of the branch's method ids and
+ * backfills null for new ones — keeps the record exactly matching what's on
+ * screen, which is what computeDerived's non-cash sum relies on. Keyed by id
+ * (not code) since code is only unique within one branch. */
+export function syncPaymentAmountKeysOn(
+  paymentAmounts: Record<string, number | null>,
+  methods: { id: number }[],
+) {
+  const validKeys = new Set(methods.map((m) => String(m.id)))
+  for (const key of Object.keys(paymentAmounts)) {
+    if (!validKeys.has(key)) delete paymentAmounts[key]
+  }
+  for (const method of methods) {
+    const key = String(method.id)
+    if (!(key in paymentAmounts)) paymentAmounts[key] = null
+  }
+}
 </script>
 
 <script setup lang="ts">
@@ -211,21 +264,12 @@ const showDefaultsColumn = computed(
 )
 
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
-const cashRegister = computed(() => {
-  const actual = computeCashRegisterTotal(data.value.cashRegisterCounts, cashRegisterDefaults.value.denominationDefaults, props.reportDate)
-  const difference = actual - cashRegisterDefaults.value.expectedTotal
-  const defaultsEligible = props.reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
-  const hasDefaultContribution = defaultsEligible
-    && Object.values(cashRegisterDefaults.value.denominationDefaults).some((v) => (v ?? 0) > 0)
-  const hasInput = hasDefaultContribution || CASH_REGISTER_DENOMINATIONS.some(
-    (denomination) => data.value.cashRegisterCounts[String(denomination)] != null,
-  )
-  return {
-    actual,
-    difference,
-    status: !hasInput ? 'empty' : difference === 0 ? 'match' : difference > 0 ? 'over' : 'short',
-  } as const
-})
+const cashRegister = computed(() => computeCashRegisterStatus(
+  data.value.cashRegisterCounts,
+  cashRegisterDefaults.value.denominationDefaults,
+  cashRegisterDefaults.value.expectedTotal,
+  props.reportDate,
+))
 
 // Only hall (front-of-house) staff can be recorded as the person in charge
 // of the daily report — kitchen staff aren't customer/cash-facing, so
@@ -241,9 +285,7 @@ function paymentMethodLabel(method: PaymentMethodDef) {
 // wiping a historical amount recorded under a since-"deleted" method. The
 // entry list only needs to hide a deleted one once there's nothing left to
 // show for it on this particular report.
-const visiblePaymentMethods = computed(() => (
-  paymentMethods.value.filter((m) => m.active || !!data.value.paymentAmounts[String(m.id)])
-))
+const visiblePaymentMethods = computed(() => visiblePaymentMethodsFor(paymentMethods.value, data.value.paymentAmounts))
 
 // Drop any paymentAmounts keys that aren't one of the branch's current
 // method ids (e.g. left over from before a rename/re-seed) and backfill
@@ -251,14 +293,7 @@ const visiblePaymentMethods = computed(() => (
 // on screen, which is what computeDerived's non-cash sum relies on. Keyed
 // by id (not code) since code is only unique within one branch.
 function syncPaymentAmountKeys(methods: PaymentMethodDef[]) {
-  const validKeys = new Set(methods.map((m) => String(m.id)))
-  for (const key of Object.keys(data.value.paymentAmounts)) {
-    if (!validKeys.has(key)) delete data.value.paymentAmounts[key]
-  }
-  for (const method of methods) {
-    const key = String(method.id)
-    if (!(key in data.value.paymentAmounts)) data.value.paymentAmounts[key] = null
-  }
+  syncPaymentAmountKeysOn(data.value.paymentAmounts, methods)
 }
 
 async function refreshPaymentMethods() {

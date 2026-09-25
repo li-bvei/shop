@@ -4,6 +4,8 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import AppSidebar from '@/components/AppSidebar.vue'
 import AppTopbar from '@/components/AppTopbar.vue'
+import MobileBottomNav from '@/components/mobile/MobileBottomNav.vue'
+import { useIsMobile } from '@/composables/useIsMobile'
 
 const route = useRoute()
 const { t } = useI18n()
@@ -42,6 +44,7 @@ const pageTitle = computed(() => {
 // tracks whether it's open. Any navigation closes it again, since staying
 // open over the new page would just be the old page's menu covering the
 // content the user just asked to see.
+const isMobile = useIsMobile()
 const sidebarOpen = ref(false)
 watch(() => route.fullPath, () => { sidebarOpen.value = false })
 </script>
@@ -60,11 +63,13 @@ watch(() => route.fullPath, () => { sidebarOpen.value = false })
         </router-view>
       </div>
     </div>
+    <MobileBottomNav v-if="isMobile" />
   </div>
 </template>
 
 <style scoped>
 .app-shell {
+  --mobile-nav-h: calc(60px + env(safe-area-inset-bottom, 0px));
   display: grid;
   grid-template-columns: 224px 1fr;
   min-height: 100vh;
@@ -100,7 +105,9 @@ watch(() => route.fullPath, () => { sidebarOpen.value = false })
   }
 
   .app-main-body {
-    padding: 16px 16px 24px;
+    /* Room for the fixed bottom bar (and the iOS home indicator) so the last
+       row of any page is never hidden underneath it. */
+    padding: 16px 16px calc(var(--mobile-nav-h) + 24px);
   }
 }
 

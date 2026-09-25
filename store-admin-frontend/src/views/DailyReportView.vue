@@ -5,6 +5,8 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Clock, Printer, Refresh, WarningFilled, Lock } from '@element-plus/icons-vue'
 import { usePrintFit } from '@/composables/usePrintFit'
+import { useIsMobile } from '@/composables/useIsMobile'
+import DailyReportMobileForm from '@/components/mobile/DailyReportMobileForm.vue'
 import { fetchPaymentMethods, type PaymentMethodDef } from '@/api/masterData'
 import { fetchStaffByBranch, type StaffMember } from '@/api/staff'
 import {
@@ -140,6 +142,7 @@ async function handleUnlockHistoryEdit() {
   if (token) historyEditUnlockToken.value = token
 }
 
+const isMobile = useIsMobile()
 const printRoot = ref<HTMLElement>()
 const { fitAndPrint } = usePrintFit(printRoot, { marginMm: 10 })
 
@@ -850,7 +853,7 @@ async function handleDownload() {
 
 <template>
   <div class="daily-report-view">
-    <div class="card form-card">
+    <div class="card form-card" :class="{ 'is-mobile': isMobile }">
       <div class="form-header">
         <div class="form-header-controls">
           <el-date-picker v-model="reportDate" type="date" size="default" :clearable="false" value-format="YYYY-MM-DD" />
@@ -860,7 +863,7 @@ async function handleDownload() {
           <span v-else class="branch-badge">{{ branchLabel(branchId) }}</span>
         </div>
         <div class="no-print form-header-actions">
-          <el-button :icon="Printer" @click="handlePrint">{{ t('common.print') }}</el-button>
+          <el-button v-if="!isMobile" :icon="Printer" @click="handlePrint">{{ t('common.print') }}</el-button>
           <el-button :icon="Download" @click="handleDownload">{{ t('common.downloadExcel') }}</el-button>
           <el-button :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf">{{ t('common.downloadPdf') }}</el-button>
         </div>
@@ -885,7 +888,13 @@ async function handleDownload() {
         </el-button>
       </div>
 
-      <div ref="printRoot">
+      <DailyReportMobileForm
+        v-if="isMobile && branchId"
+        v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate"
+        :readonly="mainFormLocked" :saving="submitting" allow-cash-register-default-edits
+        @save="handleSubmit" @history="openHistory"
+      />
+      <div v-else ref="printRoot">
         <DailyReportForm
           v-if="branchId"
           v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate"
@@ -893,7 +902,7 @@ async function handleDownload() {
         />
       </div>
 
-      <div class="submit-row no-print">
+      <div v-if="!isMobile" class="submit-row no-print">
         <el-button :icon="Clock" @click="openHistory">{{ t('dailyReport.viewHistory') }}</el-button>
         <el-button type="primary" :loading="submitting" :disabled="mainFormLocked" @click="handleSubmit">
           {{ t('dailyReport.submit') }}
@@ -1055,6 +1064,23 @@ async function handleDownload() {
   height: 32px;
   display: inline-flex;
   align-items: center;
+}
+
+@media (max-width: 768px) {
+  /* The phone form draws its own cards, so the outer card just gets out of the way. */
+  .form-card.is-mobile { padding: 0; background: transparent; box-shadow: none; border-radius: 0; }
+  .form-header-controls, .form-header-actions { width: 100%; flex-wrap: wrap; }
+  .form-header-actions :deep(.el-button + .el-button) { margin-left: 0; }
+  .form-header-controls > * { flex: 1 1 140px; }
+  .form-header-controls :deep(.el-input__wrapper),
+  .form-header-controls :deep(.el-select__wrapper) { min-height: 52px; font-size: 16px; }
+  .form-header-controls :deep(.el-date-editor.el-input),
+  .form-header-controls :deep(.el-select) { --el-component-size: 52px; height: 52px; }
+  .form-header-controls :deep(.el-input__inner) { font-size: 16px; }
+  .form-header-actions :deep(.el-button) { flex: 1 1 140px; min-height: 52px; font-size: 16px; }
+  .branch-badge { height: 52px; font-size: 16px; }
+  .draft-banner, .report-lock-banner { font-size: 15px; }
+  .draft-banner :deep(.el-button), .report-lock-banner :deep(.el-button) { min-height: 48px; font-size: 15px; }
 }
 
 .submit-row {

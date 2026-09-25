@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import confetti from 'canvas-confetti'
+import {
+  ArrowRight, Bell, Camera, Close, Coin, House, Location, Lock, MuteNotification, Present, Setting, Trophy,
+} from '@element-plus/icons-vue'
 import { ApiError } from '@/api/http'
 import {
   SELF_SERVE_REWARD_TYPES,
@@ -258,32 +262,83 @@ async function load() {
   }
 }
 
+const wheelPrizesError = ref(false)
+const wheelPrizesLoading = ref(false)
+
+async function loadWheelPrizes() {
+  wheelPrizesLoading.value = true
+  wheelPrizesError.value = false
+  try {
+    wheelPrizes.value = await fetchPrizes()
+    if (wheelPrizes.value.length === 0) wheelPrizesError.value = true
+  } catch {
+    wheelPrizesError.value = true
+  } finally {
+    wheelPrizesLoading.value = false
+  }
+}
+
+const SOUND_KEY = 'pc_wheel_sound'
+const wheelSound = ref(false)
+try {
+  wheelSound.value = localStorage.getItem(SOUND_KEY) === '1'
+} catch {
+  /* ignore */
+}
+function toggleWheelSound() {
+  wheelSound.value = !wheelSound.value
+  try {
+    localStorage.setItem(SOUND_KEY, wheelSound.value ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+}
+
 async function openWheel(source: 'points' | 'chance') {
   if (busy.value || readonly.value) return
   wheelSource.value = source
   drawResult.value = null
   wheelModal.value = true
-  if (wheelPrizes.value.length === 0) {
-    try {
-      wheelPrizes.value = await fetchPrizes()
-    } catch {
-      /* the wheel still spins to a random segment; the real result is authoritative */
-    }
-  }
+  // A failed or empty prize load must not leave a wheel that "spins" without
+  // knowing where to land — the spin stays disabled until a retry succeeds.
+  if (wheelPrizes.value.length === 0) await loadWheelPrizes()
+}
+
+const BRAND_CONFETTI = ['#06c755', '#05aa49', '#ffd166', '#e2483d', '#ffffff']
+
+function celebrate() {
+  // disableForReducedMotion: canvas-confetti itself skips the burst for
+  // visitors who asked their OS for reduced motion.
+  void confetti({
+    particleCount: 140, spread: 85, startVelocity: 42, origin: { y: 0.62 }, colors: BRAND_CONFETTI,
+    zIndex: 200, disableForReducedMotion: true,
+  })
 }
 
 async function onWheelSpin() {
-  if (busy.value) return
+  if (busy.value || wheelPrizesError.value || !wheelRef.value?.ready) return
   busy.value = true
   try {
     const res =
       wheelSource.value === 'points'
         ? await redeem('draw', newRequestId())
         : await useDrawChance(newRequestId())
-    const idx = wheelPrizes.value.findIndex((p) => p.name === res.result?.prizeName)
-    await wheelRef.value?.spin(idx >= 0 ? idx : Math.floor(Math.random() * (wheelPrizes.value.length || 1)))
+    const result = res.result ?? null
+    // The backend already drew; the wheel only animates to that prize id. If
+    // the id isn't on the wheel we loaded (prize list changed meanwhile),
+    // reload once and retry, and otherwise show the result without a spin —
+    // never a made-up landing spot.
+    if (result) {
+      let landed = await wheelRef.value?.spinToPrize(result.prizeId) ?? null
+      if (landed === null && result.prizeId !== null) {
+        await loadWheelPrizes()
+        await nextTick()
+        landed = await wheelRef.value?.spinToPrize(result.prizeId) ?? null
+      }
+    }
     await new Promise((r) => setTimeout(r, 650)) // let it land before the reveal
-    drawResult.value = res.result ?? null
+    drawResult.value = result
+    if (result?.status === 'won') celebrate()
     await load()
   } catch (err) {
     wheelModal.value = false
@@ -442,6 +497,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', onVisibility)
 })
 onBeforeUnmount(() => {
+  confetti.reset()
   stopPolling()
   document.removeEventListener('visibilitychange', onVisibility)
 })
@@ -520,7 +576,9 @@ onBeforeUnmount(() => {
           class="card pin-nudge"
           @click="tab = 'settings'"
         >
-          🔒 {{ t('guest.setPinNudge') }}<span aria-hidden="true">›</span>
+          <el-icon :size="24" aria-hidden="true"><Lock /></el-icon>
+          <span class="pin-nudge-text">{{ t('guest.setPinNudge') }}</span>
+          <el-icon :size="20" class="pin-nudge-arrow" aria-hidden="true"><ArrowRight /></el-icon>
         </button>
 
         <!-- Coupons available (summary; tap a row for the redemption detail) -->
@@ -552,7 +610,7 @@ onBeforeUnmount(() => {
         <div v-if="!readonly && c.hasPrizes" class="card lottery-hero">
           <div class="lottery-hero-top">
             <span class="lottery-hero-badge">{{ t('guest.lotteryBadge') }}</span>
-            <span class="lottery-hero-spark" aria-hidden="true">🎊</span>
+            <el-icon :size="26" class="lottery-hero-spark" aria-hidden="true"><Present /></el-icon>
           </div>
           <h2 class="lottery-hero-title">{{ t('guest.lotteryHeroTitle') }}</h2>
           <p class="lottery-hero-sub">{{ t('guest.lotteryHeroSub') }}</p>
@@ -564,7 +622,7 @@ onBeforeUnmount(() => {
               :disabled="busy"
               @click="openWheel('chance')"
             >
-              🎁 {{ t('guest.drawFree') }}
+              <span class="cta-line"><el-icon :size="24" aria-hidden="true"><Present /></el-icon>{{ t('guest.drawFree') }}</span>
               <small>{{ t('guest.drawChancesLeft', { n: card.drawChances }) }}</small>
             </button>
             <button
@@ -643,7 +701,7 @@ onBeforeUnmount(() => {
           <h2>{{ t('guest.checkinTitle') }}</h2>
           <p class="checkin-sub">{{ t('guest.checkinSub') }}</p>
           <button type="button" class="g-btn-primary" :disabled="busy" @click="checkinScanning = true">
-            📷 {{ t('guest.checkinScan') }}
+            <el-icon :size="24" aria-hidden="true"><Camera /></el-icon>{{ t('guest.checkinScan') }}
           </button>
         </section>
 
@@ -733,13 +791,13 @@ onBeforeUnmount(() => {
 
       <nav class="g-bottomnav">
         <button type="button" :class="{ on: tab === 'home' }" @click="tab = 'home'">
-          <span class="bn-icon" aria-hidden="true">🏠</span>{{ t('guest.tabHome') }}
+          <el-icon :size="24" class="bn-icon" aria-hidden="true"><House /></el-icon><span>{{ t('guest.tabHome') }}</span>
         </button>
         <button type="button" :class="{ on: tab === 'visits' }" @click="tab = 'visits'">
-          <span class="bn-icon" aria-hidden="true">📍</span>{{ t('guest.tabVisits') }}
+          <el-icon :size="24" class="bn-icon" aria-hidden="true"><Location /></el-icon><span>{{ t('guest.tabVisits') }}</span>
         </button>
         <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">
-          <span class="bn-icon" aria-hidden="true">⚙️</span>{{ t('guest.tabSettings') }}
+          <el-icon :size="24" class="bn-icon" aria-hidden="true"><Setting /></el-icon><span>{{ t('guest.tabSettings') }}</span>
         </button>
       </nav>
     </template>
@@ -768,22 +826,41 @@ onBeforeUnmount(() => {
     <!-- Lottery wheel -->
     <div v-if="wheelModal" class="modal-overlay wheel-overlay">
       <div class="wheel-sheet">
-        <button v-if="!busy && !drawResult" type="button" class="wheel-x" @click="closeWheel">✕</button>
+        <button
+          v-if="!busy && !drawResult" type="button" class="wheel-x" :aria-label="t('guest.wheelClose')" @click="closeWheel"
+        >
+          <el-icon :size="26"><Close /></el-icon>
+        </button>
 
         <template v-if="!drawResult">
           <p class="wheel-heading">
             {{ wheelSource === 'points' ? t('guest.drawWithPoints') : t('guest.drawFree') }}
           </p>
-          <WheelOfFortune ref="wheelRef" :prizes="wheelPrizes" :busy="busy" @spin="onWheelSpin" />
+          <div v-if="wheelPrizesError" class="wheel-error" role="alert">
+            <p>{{ t('guest.wheelLoadFailed') }}</p>
+            <button type="button" class="btn-primary" :disabled="wheelPrizesLoading" @click="loadWheelPrizes">
+              {{ t('guest.wheelRetry') }}
+            </button>
+          </div>
+          <WheelOfFortune
+            v-else ref="wheelRef" :prizes="wheelPrizes" :busy="busy || wheelPrizesLoading" :sound="wheelSound"
+            @spin="onWheelSpin"
+          />
           <p class="wheel-cost">
             {{ wheelSource === 'points'
               ? t('guest.wheelCostPoints', { n: c.pointsPerDraw })
               : t('guest.drawChancesLeft', { n: card?.drawChances ?? 0 }) }}
           </p>
+          <button v-if="!wheelPrizesError" type="button" class="wheel-sound" :aria-pressed="wheelSound" @click="toggleWheelSound">
+            <el-icon :size="22" aria-hidden="true"><component :is="wheelSound ? Bell : MuteNotification" /></el-icon>
+            {{ wheelSound ? t('guest.wheelSoundOn') : t('guest.wheelSoundOff') }}
+          </button>
         </template>
 
         <template v-else>
-          <div class="modal-emoji">{{ drawResult.status === 'won' ? '🎉' : '🍀' }}</div>
+          <div class="modal-icon" :class="drawResult.status === 'won' ? 'is-won' : 'is-refund'" aria-hidden="true">
+            <el-icon :size="40"><component :is="drawResult.status === 'won' ? Trophy : Coin" /></el-icon>
+          </div>
           <p class="modal-title">
             {{ drawResult.status === 'won' ? t('guest.drawWon') : t('guest.drawRefund', { n: drawResult.pointsRefunded }) }}
           </p>
@@ -1173,7 +1250,7 @@ h2 {
   display: flex;
   flex-direction: column;
   /* clear the fixed bottom nav */
-  padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
 }
 
 .tabpanel > .card:last-child,
@@ -1201,13 +1278,16 @@ h2 {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 9px 4px 8px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 60px;
+  padding: 6px 4px 6px;
   border: none;
   background: transparent;
   color: var(--guest-muted);
   font: inherit;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -1217,13 +1297,7 @@ h2 {
 }
 
 .bn-icon {
-  font-size: 19px;
   line-height: 1;
-  filter: grayscale(0.4);
-}
-
-.g-bottomnav button.on .bn-icon {
-  filter: none;
 }
 
 /* ---- PIN nudge banner (home) -------------------------------------------------- */
@@ -1233,22 +1307,26 @@ h2 {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 14px 4px;
+  min-height: 56px;
+  padding: 12px 4px;
   border: none;
   border-bottom: 1px solid var(--guest-rule);
   background: transparent;
   font: inherit;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--guest-ink);
   text-align: left;
   cursor: pointer;
 }
 
-.pin-nudge span {
+.pin-nudge-text {
+  flex: 1;
+}
+
+.pin-nudge-arrow {
   margin-left: auto;
   color: var(--guest-muted);
-  font-size: 16px;
 }
 
 /* ---- check-in call-to-action (visits) --------------------------------------- */
@@ -1441,8 +1519,10 @@ h2 {
 /* ---- 大抽選会 hero ----------------------------------------------------------- */
 
 .lottery-hero {
-  background: linear-gradient(135deg, #fff4d6 0%, #ffe0c2 45%, #ffd1e6 100%);
-  border: none;
+  /* White card, brand-green hairline; the lottery red only appears on the
+     badge and the free-draw button. */
+  background: #fff;
+  border: 1px solid var(--guest-mint-rule);
   text-align: center;
   overflow: hidden;
 }
@@ -1460,25 +1540,25 @@ h2 {
   border-radius: 999px;
   background: #e2483d;
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.04em;
 }
 
 .lottery-hero-spark {
-  font-size: 20px;
+  color: var(--guest-green-dark);
 }
 
 .lottery-hero-title {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 900;
-  color: #7a3b12;
+  color: var(--guest-ink);
   margin: 10px 0 2px;
 }
 
 .lottery-hero-sub {
-  font-size: 12px;
-  color: #9a5a2e;
+  font-size: 14px;
+  color: var(--guest-muted);
   margin: 0 0 14px;
 }
 
@@ -1493,28 +1573,35 @@ h2 {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  min-height: 50px;
+  min-height: 60px;
   padding: 8px 14px;
-  border: none;
+  border: 2px solid var(--guest-green);
   border-radius: 14px;
   background: #fff;
-  color: var(--guest-ink);
+  color: var(--guest-green-dark);
   font: inherit;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 800;
   cursor: pointer;
-  box-shadow: 0 6px 16px rgba(226, 72, 61, 0.18);
+}
+
+.cta-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .lottery-cta small {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--guest-muted);
 }
 
 .lottery-cta.free {
   background: #e2483d;
+  border-color: #e2483d;
   color: #fff;
+  box-shadow: 0 6px 16px rgba(226, 72, 61, 0.22);
 }
 
 .lottery-cta.free small {
@@ -1527,8 +1614,8 @@ h2 {
 }
 
 .lottery-hero-locked {
-  font-size: 12px;
-  color: #9a5a2e;
+  font-size: 14px;
+  color: var(--guest-muted);
   margin: 2px 0 0;
 }
 
@@ -1579,14 +1666,15 @@ h2 {
 }
 
 .exchange-btn {
-  min-width: 58px;
-  padding: 7px 12px;
+  min-width: 72px;
+  min-height: 48px;
+  padding: 7px 14px;
   border: 1px solid var(--guest-green);
   border-radius: 999px;
   background: var(--guest-mint);
   color: var(--guest-green-dark);
   font: inherit;
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 800;
   cursor: pointer;
 }
@@ -1736,7 +1824,7 @@ h2 {
   background: var(--guest-green);
   color: #fff;
   font: inherit;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   border: none;
   cursor: pointer;
@@ -1834,9 +1922,21 @@ h2 {
   margin: 6px 0 0;
 }
 
-.modal-emoji {
-  font-size: 52px;
-  line-height: 1;
+.modal-icon {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--guest-mint);
+  border: 2px solid var(--guest-mint-rule);
+  color: var(--guest-green-dark);
+}
+
+.modal-icon.is-won {
+  background: #fff;
+  border-color: var(--guest-green);
 }
 
 .modal-voucher {
@@ -1880,24 +1980,52 @@ h2 {
 
 .wheel-x {
   position: absolute;
-  top: 10px;
-  right: 12px;
+  top: 4px;
+  right: 4px;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: var(--guest-muted);
-  font-size: 16px;
   cursor: pointer;
 }
 
+.wheel-sound {
+  min-height: 52px;
+  margin-top: 10px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--guest-field-border);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--guest-ink);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.wheel-error {
+  width: 100%;
+  color: var(--guest-ink);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
 .wheel-heading {
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--guest-ink);
-  margin: 0 0 18px;
+  margin: 0 0 6px;
 }
 
 .wheel-cost {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--guest-muted);
   margin: 18px 0 0;
 }

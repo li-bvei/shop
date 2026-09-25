@@ -232,6 +232,9 @@ function fromCardDto(dto: CardDto): GuestCard {
 export interface DrawResult {
   drawId: number
   status: 'won' | 'refund'
+  /** The prize row the backend actually drew — the wheel lands on this id,
+   * never on a name match. Null only if the prize was deleted afterwards. */
+  prizeId: number | null
   prizeName: string
   rewardType: string
   pointsRefunded: number
@@ -241,6 +244,7 @@ export interface DrawResult {
 interface DrawResultDto {
   draw_id: number
   status: 'won' | 'refund'
+  prize_id: number | null
   prize_name: string
   reward_type: string
   points_refunded: number
@@ -251,6 +255,7 @@ function fromDrawResultDto(d: DrawResultDto): DrawResult {
   return {
     drawId: d.draw_id,
     status: d.status,
+    prizeId: d.prize_id ?? null,
     prizeName: d.prize_name,
     rewardType: d.reward_type,
     pointsRefunded: d.points_refunded,

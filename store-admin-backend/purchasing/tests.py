@@ -74,6 +74,41 @@ class SupplierMonthlyPayableOverrideTests(ApiTestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_branch_payables_breakdown_admin_only(self):
+        PurchaseRecord.objects.create(
+            branch=self.branch_b, date='2026-08-15', supplier=self.supplier,
+            item_name='商品', quantity=3, unit_price=100,
+        )
+        self.login_as(self.admin)
+        listed = self.client.get('/api/suppliers/?month=2026-08').data[0]
+        self.assertEqual(listed['branch_payables'], [
+            {'branch_id': self.branch_a.id, 'amount': 200},
+            {'branch_id': self.branch_b.id, 'amount': 300},
+        ])
+
+        # A manual override for one branch replaces just that branch's entry,
+        # independent of the `branch` query param used elsewhere in the URL.
+        self.client.patch(
+            f'/api/suppliers/{self.supplier.id}/monthly-payable/?month=2026-08&branch={self.branch_b.id}',
+            {'amount': 500}, format='json',
+        )
+        listed = self.client.get('/api/suppliers/?month=2026-08').data[0]
+        self.assertEqual(listed['branch_payables'], [
+            {'branch_id': self.branch_a.id, 'amount': 200},
+            {'branch_id': self.branch_b.id, 'amount': 500},
+        ])
+
+        # A branch account must never see another branch's totals through
+        # this breakdown — monthly_payable already forces it to just its own.
+        self.login_as(self.branch_a_user)
+        listed = self.client.get('/api/suppliers/?month=2026-08').data[0]
+        self.assertEqual(listed['branch_payables'], [])
+
+    def test_branch_payables_omits_zero_branches(self):
+        self.login_as(self.admin)
+        listed = self.client.get('/api/suppliers/?month=2026-09').data[0]
+        self.assertEqual(listed['branch_payables'], [])
+
 
 class PurchaseCatalogSeedTests(ApiTestCase):
     def test_command_seeds_suggestions_without_creating_transactions(self):

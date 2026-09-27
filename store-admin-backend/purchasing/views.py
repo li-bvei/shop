@@ -1,4 +1,5 @@
 import django_filters
+from collections import defaultdict
 from datetime import date
 from django.db.models import Count, Sum
 from django.utils import timezone
@@ -59,7 +60,46 @@ class SupplierViewSet(viewsets.ModelViewSet):
                 branch_id=branch_id,
                 month=month,
             ).values_list('supplier_id', 'amount'))
-        return {**context, 'payable_month': month, 'payable_branch_id': branch_id, 'payable_overrides': overrides}
+        return {
+            **context, 'payable_month': month, 'payable_branch_id': branch_id, 'payable_overrides': overrides,
+            'branch_payables': self._branch_payables(month),
+        }
+
+    def _branch_payables(self, month):
+        """Per supplier, per-branch payable for `month` across every branch
+        in the Organization — independent of whichever single branch (if
+        any) the `branch` query param narrows the rest of the response to.
+        Same override-wins-over-auto-sum rule as get_monthly_payable, just
+        grouped by branch instead of collapsed into one total.
+
+        Admin only: a branch account's `monthly_payable` is already forced to
+        just its own branch (_payable_scope), and it must stay that way —
+        this cross-branch breakdown would otherwise leak other branches'
+        totals to an account that isn't supposed to see them."""
+        user = self.request.user
+        if user.role != user.Role.ADMIN:
+            return {}
+        org_id = user.organization_id
+        totals = defaultdict(dict)
+        for row in (
+            PurchaseRecord.objects
+            .filter(supplier__organization_id=org_id, date__year=month.year, date__month=month.month)
+            .values('supplier_id', 'branch_id')
+            .annotate(total=Sum('amount'))
+        ):
+            totals[row['supplier_id']][row['branch_id']] = row['total'] or 0
+        for row in SupplierMonthlyPayableOverride.objects.filter(
+            supplier__organization_id=org_id, month=month,
+        ).values('supplier_id', 'branch_id', 'amount'):
+            totals[row['supplier_id']][row['branch_id']] = row['amount']
+        return {
+            supplier_id: [
+                {'branch_id': branch_id, 'amount': amount}
+                for branch_id, amount in sorted(by_branch.items())
+                if amount
+            ]
+            for supplier_id, by_branch in totals.items()
+        }
 
     @action(detail=True, methods=['patch'], url_path='monthly-payable')
     def monthly_payable(self, request, pk=None):

@@ -22,13 +22,15 @@ export async function fetchBranches(): Promise<Branch[]> {
 }
 
 export async function addBranch(nameZh: string, nameJa: string): Promise<Branch> {
-  // id is a slug the backend derives; the API only needs the two names.
-  const dto = await http.post<BranchDto>('/branches/', { id: slugify(nameZh), name_zh: nameZh, name_ja: nameJa })
+  // Backend requires `id` to be a valid slug (ASCII letters/digits/-/_ only).
+  // Store names are always Chinese/Japanese, so nothing from the name itself
+  // can go into it — generate an opaque one instead.
+  const dto = await http.post<BranchDto>('/branches/', { id: generateBranchId(), name_zh: nameZh, name_ja: nameJa })
   return fromBranchDto(dto)
 }
 
-function slugify(nameZh: string): string {
-  return `branch-${Date.now()}-${nameZh.slice(0, 1)}`
+function generateBranchId(): string {
+  return `branch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 export async function updateBranch(id: string, nameZh: string, nameJa: string): Promise<void> {

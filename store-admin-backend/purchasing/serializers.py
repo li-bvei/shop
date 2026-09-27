@@ -8,6 +8,7 @@ from .models import PurchaseRecord, Supplier
 class SupplierSerializer(serializers.ModelSerializer):
     payable_override = serializers.SerializerMethodField()
     monthly_payable = serializers.SerializerMethodField()
+    branch_payables = serializers.SerializerMethodField()
 
     class Meta:
         model = Supplier
@@ -15,8 +16,15 @@ class SupplierSerializer(serializers.ModelSerializer):
             'id', 'name', 'category', 'contact', 'phone', 'address',
             'bank_name', 'bank_name_furigana', 'branch_name', 'branch_name_furigana',
             'account_type', 'account_number', 'account_holder_furigana',
-            'note', 'payable_override', 'monthly_payable',
+            'note', 'payable_override', 'monthly_payable', 'branch_payables',
         ]
+
+    # Per-branch breakdown of this same month's payable, always across every
+    # branch regardless of the `branch` query param (that param only narrows
+    # monthly_payable above) — see SupplierViewSet.get_serializer_context for
+    # how it's computed. Branches with nothing owed are left out entirely.
+    def get_branch_payables(self, obj):
+        return self.context.get('branch_payables', {}).get(obj.id, [])
 
     def get_monthly_payable(self, obj):
         override = self.get_payable_override(obj)

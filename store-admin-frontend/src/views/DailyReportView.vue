@@ -143,15 +143,11 @@ async function handleUnlockHistoryEdit() {
 }
 
 const isMobile = useIsMobile()
+// Both the PDF download and the print button need this element built off the
+// live-editing DOM entirely — target of `fitAndPrint` is reassigned to a
+// throwaway node per print (see handlePrint), never the on-screen form.
 const printRoot = ref<HTMLElement>()
 const { fitAndPrint } = usePrintFit(printRoot, { marginMm: 10 })
-
-async function handlePrint() {
-  const originalTitle = document.title
-  document.title = exportFileName.value
-  await fitAndPrint()
-  document.title = originalTitle
-}
 
 const pdfDownloading = ref(false)
 
@@ -449,32 +445,41 @@ function buildDailyReportPdf(
   root.appendChild(remainingBox)
 }
 
+/**
+ * Fresh, not this view's page-load-time paymentMethods/cashRegister* refs —
+ * DailyReportForm lets staff rename/add/delete payment methods and edit the
+ * register defaults/expected total without leaving this page, and a
+ * PDF/print requested right after such a change must reflect it. Shared by
+ * both handleDownloadPdf and handlePrint so they always build the exact same
+ * document from the exact same data.
+ */
+async function loadPrintableSnapshot() {
+  const previousDate = shiftReportDate(reportDate.value, -1)
+  const [freshMethods, freshCashDefaults, previousReport] = await Promise.all([
+    fetchPaymentMethods(branchId.value),
+    fetchCashRegisterDefaults(branchId.value),
+    fetchDailyReport(branchId.value, previousDate),
+  ])
+  // A locally saved previous-day draft is newer than the server copy and
+  // should be the carryover source for this device, matching loadReport's
+  // existing draft-wins rule. Without either a draft or a saved report we
+  // explicitly say the daily split is unavailable instead of pretending
+  // yesterday's difference was zero and blaming the whole amount on today.
+  const previousDraft = getDraft(branchId.value, previousDate)
+  const previousDay = previousDraft
+    ? { date: previousDate, cashRegisterCounts: previousDraft.data.cashRegisterCounts }
+    : previousReport.id
+      ? { date: previousDate, cashRegisterCounts: previousReport.cashRegisterCounts }
+      : null
+  const branch = branchStore.list.find((b) => b.id === branchId.value)
+  const branchName = branchDisplayName(branch, locale.value, branchId.value)
+  return { freshMethods, freshCashDefaults, previousDay, branchName }
+}
+
 async function handleDownloadPdf() {
   pdfDownloading.value = true
   try {
-    // Fresh, not this view's page-load-time paymentMethods/cashRegister*
-    // refs — DailyReportForm lets staff rename/add/delete payment methods
-    // and edit the register defaults/expected total without leaving this
-    // page, and a PDF requested right after such a change must reflect it.
-    const previousDate = shiftReportDate(reportDate.value, -1)
-    const [freshMethods, freshCashDefaults, previousReport] = await Promise.all([
-      fetchPaymentMethods(branchId.value),
-      fetchCashRegisterDefaults(branchId.value),
-      fetchDailyReport(branchId.value, previousDate),
-    ])
-    // A locally saved previous-day draft is newer than the server copy and
-    // should be the carryover source for this device, matching loadReport's
-    // existing draft-wins rule. Without either a draft or a saved report we
-    // explicitly say the daily split is unavailable instead of pretending
-    // yesterday's difference was zero and blaming the whole amount on today.
-    const previousDraft = getDraft(branchId.value, previousDate)
-    const previousDay = previousDraft
-      ? { date: previousDate, cashRegisterCounts: previousDraft.data.cashRegisterCounts }
-      : previousReport.id
-        ? { date: previousDate, cashRegisterCounts: previousReport.cashRegisterCounts }
-        : null
-    const branch = branchStore.list.find((b) => b.id === branchId.value)
-    const branchName = branchDisplayName(branch, locale.value, branchId.value)
+    const { freshMethods, freshCashDefaults, previousDay, branchName } = await loadPrintableSnapshot()
     await renderOffscreenToPdf(
       pdfFileName.value,
       PDF_PAGE_WIDTH_PX,
@@ -482,6 +487,38 @@ async function handleDownloadPdf() {
     )
   } finally {
     pdfDownloading.value = false
+  }
+}
+
+const printing = ref(false)
+
+/**
+ * Prints the same compact one-page document buildDailyReportPdf produces for
+ * the PDF download — not the live editable form (that used to be the print
+ * target via a plain zoom-to-fit, which is what left this at two pages: the
+ * editing layout is simply taller than one A4 page). The document is built
+ * into a throwaway node (see .print-only-document in global.css) rather than
+ * the on-screen form, then handed to the same fitAndPrint shrink-to-fit used
+ * everywhere else in the app.
+ */
+async function handlePrint() {
+  printing.value = true
+  const root = document.createElement('div')
+  root.className = 'print-only-document'
+  root.style.width = `${PDF_PAGE_WIDTH_PX}px`
+  document.body.appendChild(root)
+  try {
+    const { freshMethods, freshCashDefaults, previousDay, branchName } = await loadPrintableSnapshot()
+    buildDailyReportPdf(root, branchName, freshMethods, freshCashDefaults, previousDay)
+    printRoot.value = root
+    const originalTitle = document.title
+    document.title = exportFileName.value
+    await fitAndPrint()
+    document.title = originalTitle
+  } finally {
+    printRoot.value = undefined
+    document.body.removeChild(root)
+    printing.value = false
   }
 }
 
@@ -863,7 +900,7 @@ async function handleDownload() {
           <span v-else class="branch-badge">{{ branchLabel(branchId) }}</span>
         </div>
         <div class="no-print form-header-actions">
-          <el-button v-if="!isMobile" :icon="Printer" @click="handlePrint">{{ t('common.print') }}</el-button>
+          <el-button v-if="!isMobile" :icon="Printer" :loading="printing" @click="handlePrint">{{ t('common.print') }}</el-button>
           <el-button :icon="Download" @click="handleDownload">{{ t('common.downloadExcel') }}</el-button>
           <el-button :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf">{{ t('common.downloadPdf') }}</el-button>
         </div>
@@ -894,7 +931,7 @@ async function handleDownload() {
         :readonly="mainFormLocked" :saving="submitting" allow-cash-register-default-edits
         @save="handleSubmit" @history="openHistory"
       />
-      <div v-else ref="printRoot">
+      <div v-else>
         <DailyReportForm
           v-if="branchId"
           v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate"

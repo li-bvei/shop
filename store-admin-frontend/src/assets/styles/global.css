@@ -56,3 +56,23 @@ a {
     display: none !important;
   }
 }
+
+/* Paired with a page's own "build a compact print document" flow (see
+   DailyReportView.vue's buildDailyReportPdf/handlePrint): the node is built
+   off-screen — `position: fixed` so it still has a real layout box to
+   measure (usePrintFit needs actual scrollWidth/scrollHeight), just moved
+   out of the viewport instead of hidden — then this rule drops it back into
+   normal flow only for the actual print pass, once everything else on the
+   page is hidden via .no-print. */
+.print-only-document {
+  position: fixed;
+  top: 0;
+  left: -99999px;
+}
+
+@media print {
+  .print-only-document {
+    position: static;
+    left: auto;
+  }
+}

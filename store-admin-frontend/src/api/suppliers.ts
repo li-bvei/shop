@@ -19,6 +19,8 @@ export interface Supplier {
   payableOverride: number | null
   /** Server-computed sum of this month's purchase records for this supplier (DB-side aggregate) — used whenever payableOverride is null. */
   monthlyPayable: number
+  /** Same month's payable broken down per store branch — admin only (empty for a branch account), independent of the `branchId` filter passed to fetchSuppliers, and omits branches with nothing owed. */
+  branchPayables: { branchId: string; amount: number }[]
 }
 
 interface SupplierDto {
@@ -38,6 +40,7 @@ interface SupplierDto {
   note: string
   payable_override: number | null
   monthly_payable: number
+  branch_payables: { branch_id: string; amount: number }[]
 }
 
 function fromDto(dto: SupplierDto): Supplier {
@@ -58,10 +61,11 @@ function fromDto(dto: SupplierDto): Supplier {
     note: dto.note,
     payableOverride: dto.payable_override,
     monthlyPayable: dto.monthly_payable,
+    branchPayables: dto.branch_payables.map((row) => ({ branchId: row.branch_id, amount: row.amount })),
   }
 }
 
-function toDto(payload: Omit<Supplier, 'id' | 'monthlyPayable'>) {
+function toDto(payload: Omit<Supplier, 'id' | 'monthlyPayable' | 'branchPayables'>) {
   return {
     name: payload.name,
     category: payload.category,
@@ -91,12 +95,12 @@ export async function fetchSuppliers(params: { month?: string; branchId?: string
 // monthlyPayable is server-computed (a DB-side sum of purchase records —
 // see SupplierSerializer.get_monthly_payable), never something a create/
 // update request supplies.
-export async function createSupplier(payload: Omit<Supplier, 'id' | 'monthlyPayable'>): Promise<Supplier> {
+export async function createSupplier(payload: Omit<Supplier, 'id' | 'monthlyPayable' | 'branchPayables'>): Promise<Supplier> {
   const dto = await http.post<SupplierDto>('/suppliers/', toDto(payload))
   return fromDto(dto)
 }
 
-export async function updateSupplier(id: string, payload: Omit<Supplier, 'id' | 'monthlyPayable'>): Promise<void> {
+export async function updateSupplier(id: string, payload: Omit<Supplier, 'id' | 'monthlyPayable' | 'branchPayables'>): Promise<void> {
   await http.patch(`/suppliers/${id}/`, toDto(payload))
 }
 

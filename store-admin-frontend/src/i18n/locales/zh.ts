@@ -309,6 +309,7 @@ export default {
     namePlaceholder: '如：大阪水产直送',
     category: '类别',
     categoryPlaceholder: '如：海鲜、蔬果',
+    branchBreakdown: '分店明细',
     contact: '联系人',
     phone: '电话',
     address: '地址',

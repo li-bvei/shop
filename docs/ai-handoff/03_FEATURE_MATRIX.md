@@ -30,7 +30,10 @@
 | 日报报销明细缩放/窄屏可读性 | 已实现 | `DailyReportForm.vue` `.expense-row` 最小宽度 + 自动换行 |
 | 日报报销联想词不自动带金额 | 已实现 | `DailyReportForm.vue` `handleSelectSuggestion` |
 | 日报打印自适应单页、隐藏0元支付方式 | 已实现 | `usePrintFit`、`DailyReportForm.vue` `pm-zero-print-hide` |
-| 日报"下载PDF"（独立于打印，离屏紧凑排版，不截图编辑表单，深色模式下也是白底黑字） | 已实现（2026-09-22，待部署） | `DailyReportView.vue` `buildDailyReportPdf`/`handleDownloadPdf`，`utils/pdfExport.ts` `el`/`renderOffscreenToPdf`，`DailyReportForm.vue` `cashRegisterDenominationBreakdown` |
+| 日报"下载PDF"（离屏紧凑排版，不截图编辑表单，深色模式下也是白底黑字） | 已实现（2026-09-22，待部署） | `DailyReportView.vue` `buildDailyReportPdf`/`handleDownloadPdf`，`utils/pdfExport.ts` `el`/`renderOffscreenToPdf`，`DailyReportForm.vue` `cashRegisterDenominationBreakdown` |
+| 日报"打印"改用与下载PDF相同的紧凑单页排版（原来打印的是可编辑表单本身，缩放后仍会溢出到2页） | 已实现（2026-09-27，待部署） | `DailyReportView.vue` `handlePrint`/`loadPrintableSnapshot`（把 `buildDailyReportPdf` 构建的文档插入一个脱离编辑表单的节点后交给 `usePrintFit`），`global.css` `.print-only-document` |
+| 管理员在"设置"页新建分店报 400（"没有 API"）的错误 | 已修复（2026-09-27，待部署） | `api/masterData.ts` `addBranch`——原来的 `slugify()` 把店铺中文名的首字直接拼进要求纯 ASCII 的 `Branch.id`（`SlugField`），改成生成不含用户输入字符的 id |
+| 仕入先管理：カテゴリー列换成"分店明细"（每个分店各自的本月应付货款），仅管理员在"全部分店"视图下显示；选了具体分店或非管理员账号则不显示（本月应付货款汇总列不受影响） | 已实现（2026-09-27，待部署） | 后端 `purchasing/views.py` `SupplierViewSet._branch_payables`（按供应商+分店分组求和，手动覆盖值优先，非管理员返回空，规则与 `get_monthly_payable` 一致）、`serializers.py` `branch_payables`；前端 `api/suppliers.ts` `Supplier.branchPayables`、`SuppliersView.vue` `showBranchBreakdown`/`storeBranchLabel`（桌面表格+手机卡片两处），カテゴリー的编辑表单字段未改动 |
 | 日报 PDF 日期星期、收银机前日遗留/本日新增差额拆分 | 已实现（2026-09-22，待部署） | `DailyReportView.vue` `reportDateWithWeekday`/`shiftReportDate`/`buildDailyReportPdf`；前一自然日无数据时不推测本日新增差额 |
 | 手机端底部导航 / 日报手机表单 / 仕入れ手机录入 | 已实现（2026-09-25，待提交部署） | `components/mobile/*`、`composables/useIsMobile.ts`、`useNavItems.ts`、`utils/purchaseEntry.ts`；桌面路径未改 |
 | 顾客卡去 Emoji + 转盘按后端 `prize_id` 落点（spin-wheel、confetti、减少动效、奖品加载失败重试） | 已实现（2026-09-25，待提交部署） | `WheelOfFortune.vue`、`GuestCardView.vue`、`api/guest.ts` `DrawResult.prizeId`、`promotions/views.py` `_draw_result_body` |

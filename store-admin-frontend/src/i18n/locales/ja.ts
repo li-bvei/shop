@@ -305,6 +305,7 @@ export default {
     namePlaceholder: '例：大阪水産直送',
     category: 'カテゴリー',
     categoryPlaceholder: '例：海鮮、青果',
+    branchBreakdown: '店舗別内訳',
     contact: '担当者',
     phone: '電話番号',
     address: '住所',

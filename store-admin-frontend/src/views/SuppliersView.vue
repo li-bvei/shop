@@ -13,11 +13,11 @@ import {
 } from '@/api/suppliers'
 import { useBranchStore } from '@/stores/branches'
 import { useAuthStore } from '@/stores/auth'
-import { formatCurrency, currentMonthJst, todayJst } from '@/utils/format'
+import { formatCurrency, currentMonthJst, todayJst, branchDisplayName } from '@/utils/format'
 import { useDelayedLoading } from '@/composables/useDelayedLoading'
 import { renderOffscreenToPdf } from '@/utils/pdfExport'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const branchStore = useBranchStore()
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.role === 'admin')
@@ -70,6 +70,16 @@ function isManual(supplier: Supplier) {
 function bankSummary(supplier: Supplier) {
   const parts = [supplier.bankName, supplier.branchName, supplier.accountType, supplier.accountNumber].filter(Boolean)
   return parts.length ? parts.join(' ') : '—'
+}
+
+// Which store branches make up payableFor(supplier)'s total — only worth
+// showing when that total isn't already scoped to one branch, i.e. admin
+// viewing "全部分店". monthlyPayable's own aggregate stays the single source
+// of truth for the amount; this is purely a read-only breakdown of it.
+const showBranchBreakdown = computed(() => isAdmin.value && !selectedBranchId.value)
+
+function storeBranchLabel(branchId: string) {
+  return branchDisplayName(branchStore.list.find((b) => b.id === branchId), locale.value, branchId)
 }
 
 async function fetchData() {
@@ -331,7 +341,17 @@ async function handleRestoreAutomatic(row: Supplier) {
 
       <el-table v-loading="loading" class="desktop-table" :data="suppliers" :empty-text="t('suppliers.empty')">
         <el-table-column prop="name" :label="t('suppliers.name')" min-width="150" />
-        <el-table-column prop="category" :label="t('suppliers.category')" width="90" />
+        <el-table-column v-if="showBranchBreakdown" :label="t('suppliers.branchBreakdown')" min-width="170">
+          <template #default="{ row }">
+            <div v-if="row.branchPayables.length" class="branch-payable-list">
+              <div v-for="bp in row.branchPayables" :key="bp.branchId" class="branch-payable-row">
+                <span>{{ storeBranchLabel(bp.branchId) }}</span>
+                <span>{{ formatCurrency(bp.amount) }}</span>
+              </div>
+            </div>
+            <span v-else>—</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="contact" :label="t('suppliers.contact')" width="110" />
         <el-table-column prop="phone" :label="t('suppliers.phone')" width="130" />
         <el-table-column :label="t('suppliers.bankAccount')" min-width="200" show-overflow-tooltip>
@@ -386,8 +406,15 @@ async function handleRestoreAutomatic(row: Supplier) {
               :title="t('suppliers.restoreAutomatic')" @click="handleRestoreAutomatic(row)"
             />
           </div>
-          <div class="supplier-card-row">
-            <span>{{ t('suppliers.category') }}</span><span>{{ row.category || '—' }}</span>
+          <div v-if="showBranchBreakdown" class="supplier-card-branches">
+            <span class="supplier-card-branches-label">{{ t('suppliers.branchBreakdown') }}</span>
+            <div v-if="row.branchPayables.length" class="branch-payable-list">
+              <div v-for="bp in row.branchPayables" :key="bp.branchId" class="branch-payable-row">
+                <span>{{ storeBranchLabel(bp.branchId) }}</span>
+                <span>{{ formatCurrency(bp.amount) }}</span>
+              </div>
+            </div>
+            <span v-else>—</span>
           </div>
           <div class="supplier-card-row">
             <span>{{ t('suppliers.contact') }}</span><span>{{ row.contact || '—' }}</span>
@@ -531,6 +558,40 @@ async function handleRestoreAutomatic(row: Supplier) {
   font-size: 13px;
   color: var(--text-secondary);
   padding: 3px 0;
+}
+
+.branch-payable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.branch-payable-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.branch-payable-row span:last-child {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.supplier-card-branches {
+  padding: 3px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.supplier-card-branches-label {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.supplier-card-branches .branch-payable-row {
+  font-size: 13px;
 }
 
 .supplier-card-row span:last-child {

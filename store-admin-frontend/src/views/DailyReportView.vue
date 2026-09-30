@@ -34,7 +34,9 @@ import DailyReportForm, {
 } from '@/components/DailyReportForm.vue'
 import { formatCurrency, formatNumber, branchDisplayName, todayJst, formatDateKanji } from '@/utils/format'
 import { downloadCustomExcel } from '@/utils/excelExport'
-import { renderOffscreenToPdf, el } from '@/utils/pdfExport'
+import {
+  renderOffscreenToPdf, el, styleReportRoot, buildReportHeader, reportSectionTitle, REPORT_PDF_TEXT,
+} from '@/utils/pdfExport'
 import {
   saveDraft, getDraft, clearDraft, listDrafts, isNetworkFailure, type DailyReportDraft,
 } from '@/utils/dailyReportDraft'
@@ -208,7 +210,7 @@ function buildCashRegisterRow(
   const qtyCell = el('td', { ...cellStyle, textAlign: 'center' })
   qtyCell.appendChild(el('div', { fontWeight: '700' }, formatNumber(breakdown.totalQuantity)))
   if (breakdown.defaultQuantity) {
-    qtyCell.appendChild(el('div', { fontSize: '9px', color: '#444', fontWeight: '400' }, `(${breakdown.rawQuantity}+${breakdown.defaultQuantity})`))
+    qtyCell.appendChild(el('div', { fontSize: '10px', color: '#444', fontWeight: '400' }, `(${breakdown.rawQuantity}+${breakdown.defaultQuantity})`))
   }
   tr.appendChild(qtyCell)
   tr.appendChild(el('td', { ...cellStyle, textAlign: 'right', fontWeight: '700' }, formatCurrency(breakdown.subtotal)))
@@ -254,25 +256,16 @@ function buildDailyReportPdf(
 ) {
   const derived = computeDerived(reportForm, freshMethods)
 
-  root.style.padding = '26px 30px'
-  root.style.fontFamily = '"Hiragino Sans", "Microsoft YaHei", sans-serif'
-  root.style.color = '#000000'
-  root.style.background = '#ffffff'
+  styleReportRoot(root)
 
   // 1. Header: date / branch / "日报" / person in charge -----------------
-  const header = el('div', {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
-    borderBottom: '2px solid #333', paddingBottom: '10px', marginBottom: '14px',
-  })
   const headerLeft = el('div', {})
-  headerLeft.appendChild(el('div', { fontSize: '22px', fontWeight: '800' }, `${branchName}　${reportDateWithWeekday(reportDate.value)}`))
+  headerLeft.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.title.fontSize, fontWeight: REPORT_PDF_TEXT.title.fontWeight }, `${branchName}　${reportDateWithWeekday(reportDate.value)}`))
   headerLeft.appendChild(el(
     'div', { fontSize: '13px', fontWeight: '700', marginTop: '4px' },
     `${t('dailyReport.personInCharge')}：${staffName(reportForm.personInCharge)}`,
   ))
-  header.appendChild(headerLeft)
-  header.appendChild(el('div', { fontSize: '18px', fontWeight: '800' }, t('dailyReport.pdfSuffix')))
-  root.appendChild(header)
+  root.appendChild(buildReportHeader(headerLeft, t('dailyReport.pdfSuffix')))
 
   // 2. Core numbers: 营业额（总）／客数（总）／组数, the reason anyone opens
   // this report — largest, boldest numbers on the page. -------------------
@@ -316,10 +309,7 @@ function buildDailyReportPdf(
   // see paymentmethods app's soft-delete). Order follows sortOrder as
   // already returned by fetchPaymentMethods. -----------------------------
   const pmSection = el('div', { marginBottom: '16px' })
-  pmSection.appendChild(el(
-    'div', { fontSize: '14px', fontWeight: '800', marginBottom: '6px', borderBottom: '1px solid #999', paddingBottom: '3px' },
-    t('dailyReport.paymentMethodsTitle'),
-  ))
+  pmSection.appendChild(reportSectionTitle(t('dailyReport.paymentMethodsTitle')))
   const pmTable = el('table', { width: '100%', borderCollapse: 'collapse', fontSize: '13px' })
   for (const method of freshMethods) {
     const amount = paymentMethodAmount(method, derived)
@@ -338,10 +328,7 @@ function buildDailyReportPdf(
   // fixed/expected amount is the branch's current setting, never a
   // hardcoded default. ---------------------------------------------------
   const crSection = el('div', { marginBottom: '16px' })
-  crSection.appendChild(el(
-    'div', { fontSize: '14px', fontWeight: '800', marginBottom: '6px', borderBottom: '1px solid #999', paddingBottom: '3px' },
-    t('dailyReport.cashRegisterTitle'),
-  ))
+  crSection.appendChild(reportSectionTitle(t('dailyReport.cashRegisterTitle')))
   const crGrid = el('div', { display: 'flex', gap: '18px', marginBottom: '8px' })
   crGrid.appendChild(buildCashRegisterTable(
     CASH_REGISTER_DENOMINATIONS.slice(0, 5), reportForm.cashRegisterCounts, freshCashDefaults.denominationDefaults,
@@ -507,6 +494,10 @@ async function handlePrint() {
   root.className = 'print-only-document'
   root.style.width = `${PDF_PAGE_WIDTH_PX}px`
   document.body.appendChild(root)
+  // Must go on <body>, not scoped CSS — #app has to disappear entirely for
+  // the print pass, and a component's `scoped` styles can't reach either
+  // <body> or #app (see the .is-printing-report rule in global.css).
+  document.body.classList.add('is-printing-report')
   try {
     const { freshMethods, freshCashDefaults, previousDay, branchName } = await loadPrintableSnapshot()
     buildDailyReportPdf(root, branchName, freshMethods, freshCashDefaults, previousDay)
@@ -517,6 +508,7 @@ async function handlePrint() {
     document.title = originalTitle
   } finally {
     printRoot.value = undefined
+    document.body.classList.remove('is-printing-report')
     document.body.removeChild(root)
     printing.value = false
   }

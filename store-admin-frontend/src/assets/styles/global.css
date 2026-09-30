@@ -75,4 +75,18 @@ a {
     position: static;
     left: auto;
   }
+
+  /* .no-print above only opts individual chrome pieces (nav, buttons,
+     banners) out of printing — it can't reach whatever a page's own live
+     content is (an editable form, its date/branch pickers...), so a plain
+     .no-print pass left the live daily-report form printing alongside its
+     .print-only-document, producing extra pages of editable inputs. A page
+     that builds one of these documents adds this class to <body> right
+     before window.print() and removes it in a `finally` (see
+     DailyReportView.vue's handlePrint), so it never touches a normal page
+     view or a different print flow that legitimately prints its own #app
+     content (e.g. SchedulingView's shift-grid print). */
+  body.is-printing-report #app {
+    display: none !important;
+  }
 }

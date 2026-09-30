@@ -61,9 +61,9 @@ a {
    DailyReportView.vue's buildDailyReportPdf/handlePrint): the node is built
    off-screen — `position: fixed` so it still has a real layout box to
    measure (usePrintFit needs actual scrollWidth/scrollHeight), just moved
-   out of the viewport instead of hidden — then this rule drops it back into
-   normal flow only for the actual print pass, once everything else on the
-   page is hidden via .no-print. */
+   out of the viewport instead of hidden — then the rules below drop it back
+   into normal flow only for the actual print pass, once everything else on
+   the page is hidden. */
 .print-only-document {
   position: fixed;
   top: 0;
@@ -71,22 +71,51 @@ a {
 }
 
 @media print {
-  .print-only-document {
-    position: static;
-    left: auto;
-  }
-
   /* .no-print above only opts individual chrome pieces (nav, buttons,
      banners) out of printing — it can't reach whatever a page's own live
-     content is (an editable form, its date/branch pickers...), so a plain
-     .no-print pass left the live daily-report form printing alongside its
-     .print-only-document, producing extra pages of editable inputs. A page
-     that builds one of these documents adds this class to <body> right
-     before window.print() and removes it in a `finally` (see
-     DailyReportView.vue's handlePrint), so it never touches a normal page
-     view or a different print flow that legitimately prints its own #app
-     content (e.g. SchedulingView's shift-grid print). */
-  body.is-printing-report #app {
+     content is (an editable form, its date/branch pickers...), nor
+     anything Element Plus teleports straight onto <body> (a message,
+     dialog, dropdown, loading mask — the .el-* rule above already lists
+     the classes, but a stray one is still one bug away). A page that
+     builds a .print-only-document adds `is-printing-report` to <body>
+     right before window.print() and removes it once printing settles (see
+     DailyReportView.vue's handlePrint), so this whole block only ever
+     applies during that one print pass — a normal page view, and a
+     different print flow that legitimately prints its own #app content
+     (e.g. SchedulingView's shift-grid print, which never sets this class),
+     are both untouched. */
+  html {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  body.is-printing-report {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    background: #fff !important;
+  }
+
+  /* Hide every direct child of <body> except the print document itself —
+     stronger than the old "#app { display: none }", since anything else
+     Vue, Element Plus, or a future page ever mounts straight onto <body>
+     (not just #app) is covered too, not just whatever happened to be
+     enumerated by name. */
+  body.is-printing-report > *:not(.print-only-document) {
     display: none !important;
+  }
+
+  body.is-printing-report > .print-only-document {
+    display: block !important;
+    position: static !important;
+    inset: auto !important;
+    margin: 0 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    break-after: avoid;
+    page-break-after: avoid;
   }
 }

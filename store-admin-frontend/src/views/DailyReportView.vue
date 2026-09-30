@@ -149,7 +149,10 @@ const isMobile = useIsMobile()
 // live-editing DOM entirely — target of `fitAndPrint` is reassigned to a
 // throwaway node per print (see handlePrint), never the on-screen form.
 const printRoot = ref<HTMLElement>()
-const { fitAndPrint } = usePrintFit(printRoot, { marginMm: 10 })
+// minScale: 0 — the daily report must always be exactly one page, so it's
+// allowed to shrink as far as needed (see usePrintFit's doc comment; the
+// old default of 1 here is exactly what caused printing to never shrink).
+const { fitAndPrint } = usePrintFit(printRoot, { marginMm: 10, minScale: 0 })
 
 const pdfDownloading = ref(false)
 
@@ -490,6 +493,7 @@ const printing = ref(false)
  */
 async function handlePrint() {
   printing.value = true
+  const originalTitle = document.title
   const root = document.createElement('div')
   root.className = 'print-only-document'
   root.style.width = `${PDF_PAGE_WIDTH_PX}px`
@@ -502,14 +506,20 @@ async function handlePrint() {
     const { freshMethods, freshCashDefaults, previousDay, branchName } = await loadPrintableSnapshot()
     buildDailyReportPdf(root, branchName, freshMethods, freshCashDefaults, previousDay)
     printRoot.value = root
-    const originalTitle = document.title
     document.title = exportFileName.value
+    // Waits for the browser's `afterprint` — not just for window.print() to
+    // return — so this doesn't tear the print node down (below) while the
+    // browser is still paginating from it. See usePrintFit's own doc
+    // comment for why that race was exactly what left printing at two pages.
     await fitAndPrint()
-    document.title = originalTitle
   } finally {
+    // originalTitle/is-printing-report/printRoot/root/printing must all be
+    // restored even if loadPrintableSnapshot, buildDailyReportPdf, or
+    // fitAndPrint itself throws — never left mid-print on an error.
+    document.title = originalTitle
     printRoot.value = undefined
     document.body.classList.remove('is-printing-report')
-    document.body.removeChild(root)
+    if (root.isConnected) root.remove()
     printing.value = false
   }
 }

@@ -21,7 +21,33 @@
 - **已知遗留、本次未处理**：月报/年报明细表表头的"日期"/"月份"两个字沿用旧代码的硬编码简体字面量（不走 `t()`），日语界面下也会显示"日期"而不是"日付"——这个问题在改动前就存在（Excel 导出同样如此），本次只统一了字号/分页，未做 i18n 修正，需要的话是独立的小改动。PDF 生成走 html2canvas 描边渲染，与浏览器原生打印在极小的抗锯齿观感上不会完全一致（人肉眼不可辨），这是两种技术路径的固有差异，不是 bug。
 - **自动测试**：前端 `npm run type-check`、`npm run build-only`、`npx eslint src`、`npm run test:schedule-save` 全绿；后端 `dashboard dailyreports purchasing paymentmethods` 112 项通过（本批未改后端代码）。
 - **浏览器实测**（管理员账号，本地库 2026-08 心斎橋店有完整 31 天数据，2026 年累计 7 个月数据）：日报打印用 `body.is-printing-report` + `#app` 隐藏方案在"跳过 `@media print` 本身、其余选择器逻辑不变"的前提下截图验证生效（沙箱环境无法真正弹出系统打印对话框，@media print 这一步只能验证选择器/类名切换逻辑，未做真实一次系统级打印）；日报下载 PDF（2026-09-05，心斎橋店）版式与之前一致、抬头 22px/18px、分区标题 14px 清晰可辨。月报下载 PDF：2026-08 全部分店 31 天 → 自动 3 页（页1汇总、页2 28 行、页3 剩 3 行，每页重复表头），字号全程未缩小；心斎橋店单店 2026-09（5 天）→ 自动 2 页（该场景支付方式+仕入先已经把汇总页撑满，测得 `scrollHeight 1249 > 阈值 1157.6`，触发分页，不是 bug）；一楽ホテル 2026-09（无数据）→ 单页，"支払方法構成"/"仕入先ランキング"分别显示"データがありません"，正确验证了日语与空数据两条路径。年报 PDF：2026 年 · 全部分店 → 自动 2 页（11 种支付方式 + 18 家供应商撑满页1，页2 是 12 个月明细）。月度经营 Excel 下载在改动后重新点击未报错（未改代码，回归确认）。手机视口 375px 下"日别详细一览"卡片改字号后截图确认可读、无溢出。
-- **部署**：无新 migration、无后端改动，`cd /www/wwwroot/shop && bash deploy.sh` 即可。
+- **部署**：无新 migration、无后端改动。部署命令见文末统一说明（不要用 `bash deploy.sh`，其内部含 `git reset --hard`）。
+
+## 2026-10-01 修复日报打印仍然两页、第二页元素重叠（已实现，未提交/未部署）
+
+- **两页问题的实际根因**：`usePrintFit.ts` 的 `minScale` 参数默认值是 `1`，而缩放公式是 `Math.max(minScale, Math.min(1, heightScale, widthScale))`——`minScale=1` 时 `Math.max(1, 任何≤1的数)` 恒等于 `1`，也就是说只要调用方没有显式传 `minScale`，内容**永远不会缩小**，这与代码原本的注释"强制单页"完全矛盾。日报调用点 `usePrintFit(printRoot, { marginMm: 10 })` 从未传过 `minScale`，所以一直踩着这个默认值——直到这批之前的字体统一把日报正文改成了 22/18/14/13px 的大字号后，内容自然宽度变成了 794px（超出 A4 可用宽度约 703.75px），必须缩小才能放下，之前"从来没缩小过"的潜伏 bug 才第一次真正触发成两页。第二页"元素重叠"是因为原来 `@media print` 只隐藏了 `#app`，Element Plus 挂在 `<body>` 下的遮罩/弹窗等其他节点仍可能进入第二页，和溢出的表单内容叠在一起。
+- **usePrintFit 修改前后的缩放计算**：
+  - 修改前：`const scale = Math.max(minScale ?? 1, Math.min(1, heightScale, widthScale))`——`minScale` 不传时恒为 1，`scale` 恒为 1，从不缩小；且用 `el.scrollWidth/scrollHeight` 做"缩放后再测一次"时，这两个属性在**被测量的元素自身**应用 `zoom` 后其实不会变化（`zoom` 是自指的——量它对自己的效果只有 `getBoundingClientRect()` 能看到，`scrollWidth/scrollHeight/offsetWidth/offsetHeight` 在同一个元素上永远读到"未缩放"的原始值，这一点用一个临时 div 实测确认过），如果沿用这个思路做二次校正只会不断误判"还是超了"从而过度缩小。
+  - 修改后：把纯计算逻辑拆成 `calculatePrintScale(naturalWidth, naturalHeight, availableWidth, availableHeight, minScale)`（`tests/printScale.test.ts` 8 个用例覆盖），`minScale` 改为**必填**参数（不再有默认值，逼着每个调用点显式做决定，防止再次"忘记传等于永远不缩小"）；可用宽高在换算前先乘 0.98 的安全系数；缩放并等待两帧后用 `getBoundingClientRect()`（而不是 `scrollWidth/scrollHeight`）重新测一次真实渲染尺寸，仍超出才做一次二次修正。
+  - 日报调用点显式传 `minScale: 0`（允许缩到能放下一页为止）；排班表 `SchedulingView.vue` 本来就显式传了 `minScale: 0.6`，未改动，行为不变。
+- **最终打印页数**：用 Playwright headless Chromium 对本地环境（心斎橋店 2026-09-05）做了真正的 `page.emulateMedia({ media: 'print' })` + `page.pdf()`，`pdfinfo` 确认 **`Pages: 1`**（A4，595.92×842.88pt）。读取该 PDF 确认内容完整、"每日现金剩余"底部区域未被裁切，也没有出现侧栏/表单/按钮/空白页。同时验证了 `page.evaluate` 在 `emulateMedia('print')` 之后 `#app` 的 `display` 计算样式为 `none`，`body` 直接子元素里只有 `.print-only-document` 保持可见——不是只测"去掉 @media print 再截图"这种间接方式。
+- **第二页重叠元素来自哪里**：旧版 `@media print` 规则只写了 `body.is-printing-report #app { display: none }`，只精确点名了 `#app`；Element Plus 的消息条/弹窗/下拉菜单/遮罩等组件用 `<Teleport>` 直接挂到 `<body>` 下、和 `#app` 平级，不在这条规则的覆盖范围内，如果打印发生时恰好有这类节点残留在 DOM 里，就会连同溢出的表单内容一起进入第二页，观感上表现为"重叠"。
+- **修改文件**：
+  - `store-admin-frontend/src/composables/usePrintFit.ts`（改写：导出 `calculatePrintScale` 纯函数、`minScale` 必填、安全系数、`getBoundingClientRect()` 二次校正、`fitAndPrint()` 真正 `await` 浏览器的 `afterprint` 而不是调用完 `window.print()` 就立刻重置）
+  - `store-admin-frontend/tests/printScale.test.ts`（新增，8 个用例）
+  - `store-admin-frontend/package.json`（新增 `test:print-scale` 脚本）
+  - `store-admin-frontend/src/views/DailyReportView.vue`（调用点显式传 `minScale: 0`；`handlePrint()` 生命周期收紧：`originalTitle` 移到 `try` 之前、只在 `finally` 里恢复，`root.remove()` 前判断 `root.isConnected`）
+  - `store-admin-frontend/src/assets/styles/global.css`（`@media print` 下 `body.is-printing-report > *:not(.print-only-document) { display: none }`，比原来只点名 `#app` 覆盖更全；同时重置 `html`/`body` 的高度和溢出，给 `.print-only-document` 加 `break-inside:/page-break-inside: avoid`）
+- **自动测试结果**：`npm run type-check`、`npm run build-only`、`npx eslint src`、`npm run test:schedule-save`、`npm run test:print-scale`（新增，8 项）全绿。
+- **真实打印媒体验证结果**：Playwright headless Chromium，`page.emulateMedia({media:'print'})` + `page.pdf()` + `pdfinfo`，确认 2026-09-05 心斎橋店日报为 1 页；另在应用内实测（浏览器前台可见、`requestAnimationFrame` 正常触发的前提下——后台/不可见的浏览器标签页会让 `requestAnimationFrame` 停摆，这只是测试环境的限制，不是应用本身的问题）2026-01-02（无经费、无前日报表）、2026-04-27（7 条经费）、2026-08-24（6 种支付方式）、中文界面、日文界面、深色模式（`.print-only-document` 计算样式确认 `background: rgb(255,255,255)` / `color: rgb(0,0,0)`）共 6 种场景，均是同一个 `zoom=0.886333`（受宽度而非高度约束）、单次 `window.print()` 调用、`afterprint` 后 `document.title`/`body` class/临时节点全部正确复原。经费名称/用途包含长文字的场景未用真实数据复现（本地库里这两个字段都是空的），但该处的自动换行样式本批未改动，且缩放逻辑本身是按整体渲染高度通用处理，不特定于某一处内容。
+- **仍未通过系统打印对话框验证的事项**：没有让真实操作系统弹出"打印"对话框肉眼确认（Playwright headless 环境和本工具的浏览器沙箱都无法弹出交互式系统对话框）——但 Playwright 的 `page.pdf()` 是在 `emulateMedia('print')` 之后按浏览器真实分页逻辑渲染的，不是近似模拟，`pdfinfo` 读到的页数就是浏览器认为的真实页数，这是除了让用户亲自点一次"打印"之外能做到的最接近的验证。建议用户在自己电脑上真实点一次"印刷/出力"按钮走一遍系统打印预览，作为最终确认。
+- **部署**：无新 migration、无后端改动。
+
+```bash
+cd /www/wwwroot/shop
+git pull --ff-only origin main
+docker compose up -d --build
+```
 
 ## 2026-09-25 手机端易用性与积分抽奖体验优化（已实现，未提交/未部署）
 
@@ -34,7 +60,7 @@
 - **文案**：新增文字全部在 `ja.ts` / `zh.ts`（`nav.tab*`、`dailyReport.m*`、`purchasing.m*`、`guest.wheel*`）。
 - **验证**：`npm run type-check`、eslint、`npm run build` 全绿；后端 `promotions dashboard dailyreports paymentmethods purchasing` 255 项通过（`promotions.tests` 新增断言：抽奖结果 `prize_id` 必在 `/api/guest/prizes/` 里）。浏览器实测 320/375/390/430 无横向滚动、≥48px 点击区（日报/仕入れ/顾客卡）、日报/仕入れ主体文字 ≥16px、256px 布局宽（≈200% 缩放）保存栏仍可点、暗色模式；真实抽奖一次，后端 prize_id=60（积分返还）与转盘停靠段一致；奖品接口 500 时显示重试并可恢复。
 - **独立复查后追加修复**：`/api/guest/prizes/` 不再列出 `weight=0`（已停用、永远抽不中）的奖品；转盘构建失败时禁用抽奖（`ready`），卸载时结算挂起的 Promise 并 `confetti.reset()`；手机日报点主 保存 时会先保存レジ设置里改过的默认枚数/应有金额；仕入れ手机筛选加请求序号防旧响应覆盖、加载更多失败回退页码、清空月份时同步清价格变动、两处筛选标签名修正；「その他」抽屉点当前页面也会关闭；手机端说明文字统一 ≥16px。
-- **部署**：无新 migration，`cd /www/wwwroot/shop && bash deploy.sh` 即可。
+- **部署**：无新 migration，部署命令见本文档顶部最新一节末尾的统一说明（不要用 `bash deploy.sh`）。
 
 ## 2026-09-22 日报 PDF 下载改为离屏打印稿（已实现，待部署）
 

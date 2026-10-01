@@ -14,8 +14,8 @@ import { useChartTheme } from '@/composables/useChartTheme'
 import { useDelayedLoading } from '@/composables/useDelayedLoading'
 import { downloadCustomExcel } from '@/utils/excelExport'
 import {
-  el, styleReportRoot, buildReportHeader, buildReportContinuationHeader, reportSectionTitle,
-  REPORT_PDF_TEXT, estimateUnshrunkHeightPx, downloadElementAsPdf, downloadElementsAsPdf,
+  el, buildReportHeader, buildReportContinuationHeader, reportSectionTitle,
+  REPORT_PDF_TEXT, estimateUnshrunkHeightPx, renderOffscreenPagesToPdf,
 } from '@/utils/pdfExport'
 
 const { t, locale } = useI18n()
@@ -233,7 +233,7 @@ async function handleDownload() {
         ws.addRow([])
 
         const headerRow = ws.addRow([
-          '日期',
+          t('monthlyAnalysis.detailDateColumn'),
           isAdmin.value ? t('monthlyAnalysis.branch') : null,
           t('monthlyAnalysis.revenue'),
           t('monthlyAnalysis.customers'),
@@ -276,7 +276,7 @@ async function handleDownload() {
         ws.addRow([])
 
         const headerRow = ws.addRow([
-          '月份', t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend'),
+          t('monthlyAnalysis.detailMonthColumn'), t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend'),
         ])
         headerRow.font = { bold: true }
         headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } }
@@ -296,18 +296,7 @@ const pdfDownloading = ref(false)
 // scales this down to fit the printable area, never up).
 const PDF_PAGE_WIDTH_PX = 794
 
-// A detail row at REPORT_PDF_TEXT.body (13px, 6px vertical padding, hairline
-// border) renders at roughly 30px tall; 28/page leaves comfortable slack
-// under the ~1150px-tall continuation-page budget (repeated header + table
-// header + rows) so nothing needs to shrink — this only budgets how many
-// rows go on a page, it can never truncate one, since pagination always
-// happens on a whole-row boundary.
-const DETAIL_ROWS_PER_PAGE = 28
-
-function buildSummarySection(root: HTMLElement, a: MonthlyAnalysis | YearlyAnalysis, titleText: string, reportTypeText: string) {
-  styleReportRoot(root)
-  root.appendChild(buildReportHeader(titleText, reportTypeText))
-
+function buildHeroAndGrid(root: HTMLElement, a: MonthlyAnalysis | YearlyAnalysis) {
   const revenueHero = el('div', { border: '1.5px solid #999', borderRadius: '4px', padding: '10px 14px', marginBottom: '10px' })
   revenueHero.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.heroLabel.fontSize, fontWeight: REPORT_PDF_TEXT.heroLabel.fontWeight, marginBottom: '4px' }, t('monthlyAnalysis.revenue')))
   revenueHero.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.heroValue.fontSize, fontWeight: REPORT_PDF_TEXT.heroValue.fontWeight }, formatCurrency(a.revenue)))
@@ -333,70 +322,65 @@ function buildSummarySection(root: HTMLElement, a: MonthlyAnalysis | YearlyAnaly
     summaryGrid.appendChild(cell)
   }
   root.appendChild(summaryGrid)
-
-  root.appendChild(reportSectionTitle(t('monthlyAnalysis.paymentMethodChart')))
-  if (paymentMethodRows.value.length) {
-    const pmTable = el('table', { width: '100%', borderCollapse: 'collapse', marginBottom: '10px' })
-    for (const row of paymentMethodRows.value) {
-      const tr = document.createElement('tr')
-      tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '700' }, row.name))
-      tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '800' }, formatCurrency(row.amount)))
-      tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', width: '60px', color: '#666', fontSize: '11px' }, `${row.pct.toFixed(1)}%`))
-      pmTable.appendChild(tr)
-    }
-    root.appendChild(pmTable)
-  } else {
-    root.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.body.fontSize, color: '#888', marginBottom: '10px' }, t('monthlyAnalysis.noData')))
-  }
-
-  root.appendChild(reportSectionTitle(t('monthlyAnalysis.supplierRankingChart')))
-  if (a.supplierRanking.length) {
-    const supplierTable = el('table', { width: '100%', borderCollapse: 'collapse', marginBottom: '10px' })
-    for (const row of a.supplierRanking.slice(0, 15)) {
-      const tr = document.createElement('tr')
-      tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '700' }, row.supplierName))
-      tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '800' }, formatCurrency(row.amount)))
-      supplierTable.appendChild(tr)
-    }
-    root.appendChild(supplierTable)
-  } else {
-    root.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.body.fontSize, color: '#888' }, t('monthlyAnalysis.noData')))
-  }
 }
 
-function buildDetailTable(title: string, columns: string[], rows: string[][], start: number, end: number): HTMLDivElement {
+/** A titled section's table shell — a `columns` header row only when given
+ * (payment methods and supplier ranking are plain unlabeled lists, same as
+ * before; the daily/monthly detail table is the one with column labels). */
+function buildSectionShell(sectionTitle: string, columns?: string[]) {
   const section = el('div', {})
-  section.appendChild(reportSectionTitle(title))
-  const table = el('table', { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' })
-  const thead = document.createElement('thead')
-  const headRow = document.createElement('tr')
-  for (const label of columns) {
-    headRow.appendChild(el('th', {
-      padding: '6px 8px', borderBottom: '1.5px solid #333', textAlign: 'left',
-      fontWeight: '800', fontSize: REPORT_PDF_TEXT.body.fontSize,
-    }, label))
-  }
-  thead.appendChild(headRow)
-  table.appendChild(thead)
-  const tbody = document.createElement('tbody')
-  for (let i = start; i < Math.min(end, rows.length); i++) {
-    const tr = document.createElement('tr')
-    if ((i - start) % 2 === 1) tr.style.backgroundColor = '#f7f7f7'
-    for (const cellText of rows[i] ?? []) {
-      tr.appendChild(el('td', { padding: '6px 8px', borderBottom: '0.5px solid #ddd', fontSize: REPORT_PDF_TEXT.body.fontSize }, cellText))
+  section.appendChild(reportSectionTitle(sectionTitle))
+  const table = el('table', {
+    width: '100%', borderCollapse: 'collapse', marginBottom: '10px',
+    ...(columns ? { tableLayout: 'fixed' } : {}),
+  })
+  if (columns) {
+    const thead = document.createElement('thead')
+    const headRow = document.createElement('tr')
+    for (const label of columns) {
+      headRow.appendChild(el('th', {
+        padding: '6px 8px', borderBottom: '1.5px solid #333', textAlign: 'left',
+        fontWeight: '800', fontSize: REPORT_PDF_TEXT.body.fontSize,
+      }, label))
     }
-    tbody.appendChild(tr)
+    thead.appendChild(headRow)
+    table.appendChild(thead)
   }
+  const tbody = document.createElement('tbody')
   table.appendChild(tbody)
   section.appendChild(table)
-  return section
+  return { section, tbody }
+}
+
+function buildPaymentRow(row: { name: string; amount: number; pct: number }): HTMLTableRowElement {
+  const tr = document.createElement('tr')
+  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '700' }, row.name))
+  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '800' }, formatCurrency(row.amount)))
+  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', width: '60px', color: '#666', fontSize: '11px' }, `${row.pct.toFixed(1)}%`))
+  return tr
+}
+
+function buildSupplierRow(row: { supplierName: string; amount: number }): HTMLTableRowElement {
+  const tr = document.createElement('tr')
+  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '700' }, row.supplierName))
+  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '800' }, formatCurrency(row.amount)))
+  return tr
+}
+
+function buildDetailRow(cells: string[], zebra: boolean): HTMLTableRowElement {
+  const tr = document.createElement('tr')
+  if (zebra) tr.style.backgroundColor = '#f7f7f7'
+  for (const cellText of cells) {
+    tr.appendChild(el('td', { padding: '6px 8px', borderBottom: '0.5px solid #ddd', fontSize: REPORT_PDF_TEXT.body.fontSize }, cellText))
+  }
+  return tr
 }
 
 function buildDetailColumnsAndRows(): { title: string; columns: string[]; rows: string[][] } {
   if (viewMode.value === 'month') {
     return {
       title: t('monthlyAnalysis.dailyDetailTitle'),
-      columns: ['日期', t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend')],
+      columns: [t('monthlyAnalysis.detailDateColumn'), t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend')],
       rows: (monthlyAnalysis.value?.dailyDetail ?? []).map((r) => [
         r.date, formatCurrency(r.revenue), String(r.customers), formatCurrency(r.avgSpend),
       ]),
@@ -404,7 +388,7 @@ function buildDetailColumnsAndRows(): { title: string; columns: string[]; rows: 
   }
   return {
     title: t('monthlyAnalysis.monthlyDetailTitle'),
-    columns: ['月份', t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend')],
+    columns: [t('monthlyAnalysis.detailMonthColumn'), t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend')],
     rows: (yearlyAnalysis.value?.monthlyDetail ?? []).map((r) => [
       r.month, formatCurrency(r.revenue), String(r.customers), formatCurrency(r.avgSpend),
     ]),
@@ -412,68 +396,119 @@ function buildDetailColumnsAndRows(): { title: string; columns: string[]; rows: 
 }
 
 /**
- * Builds the report offscreen and decides, from its actual measured height,
- * whether everything (summary + full detail table) fits one page without
- * any shrink — if so, it's kept as one page; only content that genuinely
- * doesn't fit spills the detail table onto its own continuation page(s),
- * each repeating the report name/period and the table header, chunked so a
- * row is never split across two pages. Never satisfies "fits one page" by
- * shrinking the whole document instead.
+ * Builds the report page by page, flowing content onto whatever page is
+ * currently open and only starting a fresh one when something genuinely
+ * doesn't fit — never by shrinking a page below its designed font size
+ * (estimateUnshrunkHeightPx is the fits-without-shrinking budget every
+ * measurement below is checked against).
+ *
+ * Title/hero/summary-grid is small and fixed-size and always opens page 1.
+ * Each of the three row-based sections (payment methods, supplier ranking,
+ * daily/monthly detail) is then flowed in order via `appendSection`, which
+ * tries three things in turn: (1) append the whole section to the page
+ * that's already open — the common case for a short report, where
+ * everything ends up sharing one page; (2) if that overflows, undo it and
+ * put the whole section on its own fresh page instead, avoiding a lone
+ * orphaned row at the bottom of a busy page; (3) if even a fresh page can't
+ * hold it all (a very long payment-method list, or a 31-day month), chunk
+ * its rows across as many further pages as it actually needs, always on a
+ * whole-row boundary. This is what makes "the summary itself is taller than
+ * one page" (payment methods + supplier ranking alone already fill page 1)
+ * resolve correctly: each section still gets a fair shot at fitting where
+ * it naturally falls, instead of forcing a fixed page-per-section layout.
  */
 async function handleDownloadPdf() {
   const a = analysis.value
   if (!a) return
   pdfDownloading.value = true
-  const host = document.createElement('div')
-  host.style.position = 'fixed'
-  host.style.top = '0'
-  host.style.left = '-99999px'
-  document.body.appendChild(host)
   try {
     const branchText = currentBranchLabel()
     const periodLabel = viewMode.value === 'month' ? formatMonthKanji(selectedMonth.value) : `${selectedYear.value}年`
     const reportTypeText = viewMode.value === 'month' ? t('monthlyAnalysis.pdfSuffixMonthly') : t('monthlyAnalysis.pdfSuffixYearly')
     const filename = `${periodLabel}_${branchText}_${reportTypeText}`
     const titleText = `${branchText}　${periodLabel}`
+    const threshold = estimateUnshrunkHeightPx(PDF_PAGE_WIDTH_PX)
 
-    function newPage(): HTMLDivElement {
-      const page = document.createElement('div')
-      page.style.width = `${PDF_PAGE_WIDTH_PX}px`
-      page.style.background = '#ffffff'
-      host.appendChild(page)
-      return page
-    }
+    await renderOffscreenPagesToPdf(filename, PDF_PAGE_WIDTH_PX, (addPage) => {
+      let page = addPage()
+      page.appendChild(buildReportHeader(titleText, reportTypeText))
+      buildHeroAndGrid(page, a)
 
-    const summaryPage = newPage()
-    buildSummarySection(summaryPage, a, titleText, reportTypeText)
+      // Filled in as continuation pages are created; their page-number
+      // label ("月报 2/3") can't be written until the total is known, so
+      // each one's right-hand header element is patched at the very end.
+      const continuationLabels: HTMLElement[] = []
+      let pageCount = 1
+      function startContinuationPage(): HTMLDivElement {
+        page = addPage()
+        pageCount += 1
+        const header = buildReportContinuationHeader(titleText, reportTypeText)
+        continuationLabels.push(header.children[1] as HTMLElement)
+        page.appendChild(header)
+        return page
+      }
 
-    const { title: detailTitle, columns: detailColumns, rows: detailRows } = buildDetailColumnsAndRows()
-    const fullDetailTable = buildDetailTable(detailTitle, detailColumns, detailRows, 0, detailRows.length)
-    summaryPage.appendChild(fullDetailTable)
+      function fits(): boolean {
+        return page.scrollHeight <= threshold
+      }
 
-    if (summaryPage.scrollHeight <= estimateUnshrunkHeightPx(PDF_PAGE_WIDTH_PX)) {
-      // Everything fits at full size — one page, no pagination needed.
-      await downloadElementAsPdf(summaryPage, filename)
-      return
-    }
+      function appendSection<T>(sectionTitle: string, rows: T[], buildRow: (row: T) => HTMLTableRowElement, columns?: string[]) {
+        if (rows.length === 0) {
+          const empty = el('div', {})
+          empty.appendChild(reportSectionTitle(sectionTitle))
+          empty.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.body.fontSize, color: '#888', marginBottom: '10px' }, t('monthlyAnalysis.noData')))
+          page.appendChild(empty)
+          return
+        }
 
-    // Doesn't fit: split the detail table off the summary page and
-    // continue it across as many pages as it actually needs.
-    summaryPage.removeChild(fullDetailTable)
-    const pages = [summaryPage]
-    const totalDetailPages = Math.max(1, Math.ceil(detailRows.length / DETAIL_ROWS_PER_PAGE))
-    for (let p = 0; p < totalDetailPages; p++) {
-      const page = newPage()
-      const pageLabel = `${reportTypeText}　${p + 2}/${totalDetailPages + 1}`
-      page.appendChild(buildReportContinuationHeader(titleText, pageLabel))
-      page.appendChild(buildDetailTable(
-        detailTitle, detailColumns, detailRows, p * DETAIL_ROWS_PER_PAGE, (p + 1) * DETAIL_ROWS_PER_PAGE,
-      ))
-      pages.push(page)
-    }
-    await downloadElementsAsPdf(pages, filename)
+        // Attempt 1: the whole section fits onto whatever's already here.
+        let { section, tbody } = buildSectionShell(sectionTitle, columns)
+        for (const row of rows) tbody.appendChild(buildRow(row))
+        page.appendChild(section)
+        if (fits()) return
+        page.removeChild(section)
+
+        // Attempt 2: it fits fine on a fresh page of its own.
+        startContinuationPage()
+        ;({ section, tbody } = buildSectionShell(sectionTitle, columns))
+        for (const row of rows) tbody.appendChild(buildRow(row))
+        page.appendChild(section)
+        if (fits()) return
+        page.removeChild(section)
+
+        // Attempt 3: even a fresh page can't hold it all — chunk by row,
+        // moving a row wholesale onto the next page rather than splitting it.
+        ;({ section, tbody } = buildSectionShell(sectionTitle, columns))
+        page.appendChild(section)
+        for (const row of rows) {
+          const tr = buildRow(row)
+          tbody.appendChild(tr)
+          if (!fits()) {
+            tbody.removeChild(tr)
+            startContinuationPage()
+            ;({ section, tbody } = buildSectionShell(sectionTitle, columns))
+            page.appendChild(section)
+            tbody.appendChild(tr)
+          }
+        }
+      }
+
+      appendSection(t('monthlyAnalysis.paymentMethodChart'), paymentMethodRows.value, buildPaymentRow)
+      appendSection(t('monthlyAnalysis.supplierRankingChart'), a.supplierRanking.slice(0, 15), buildSupplierRow)
+
+      const { title: detailTitle, columns: detailColumns, rows: detailRows } = buildDetailColumnsAndRows()
+      appendSection(
+        detailTitle,
+        detailRows.map((cells, i) => ({ cells, zebra: i % 2 === 1 })),
+        (row) => buildDetailRow(row.cells, row.zebra),
+        detailColumns,
+      )
+
+      continuationLabels.forEach((label, i) => {
+        label.textContent = `${reportTypeText}　${i + 2}/${pageCount}`
+      })
+    })
   } finally {
-    document.body.removeChild(host)
     pdfDownloading.value = false
   }
 }
@@ -579,7 +614,7 @@ async function handleDownloadPdf() {
         <h3>{{ t('monthlyAnalysis.dailyDetailTitle') }}</h3>
         <div class="table-scroll desktop-table">
           <el-table :data="monthlyAnalysis.dailyDetail" @row-click="(row: any) => goToDailyReport(row.date, row.branchId)" class="detail-table">
-            <el-table-column label="日期" prop="date" width="110" />
+            <el-table-column :label="t('monthlyAnalysis.detailDateColumn')" prop="date" width="110" />
             <el-table-column v-if="isAdmin" label="分店" width="110">
               <template #default="{ row }">{{ branchName(row.branchId) }}</template>
             </el-table-column>
@@ -613,7 +648,7 @@ async function handleDownloadPdf() {
         <h3>{{ t('monthlyAnalysis.monthlyDetailTitle') }}</h3>
         <div class="table-scroll desktop-table">
           <el-table :data="yearlyAnalysis.monthlyDetail" class="detail-table">
-            <el-table-column label="月份" prop="month" width="110" />
+            <el-table-column :label="t('monthlyAnalysis.detailMonthColumn')" prop="month" width="110" />
             <el-table-column :label="t('monthlyAnalysis.revenue')" width="120">
               <template #default="{ row }">{{ formatCurrency(row.revenue) }}</template>
             </el-table-column>

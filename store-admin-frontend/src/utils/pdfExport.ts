@@ -121,7 +121,13 @@ export async function renderOffscreenPagesToPdf(
   function addPage(): HTMLDivElement {
     const page = document.createElement('div')
     page.style.width = `${widthPx}px`
-    page.style.background = '#ffffff'
+    // Every page gets the same base styling (white background, black text,
+    // the shared report font, the shared padding) — not just the first one.
+    // A continuation page that skipped this would inherit whatever theme
+    // colors happen to be active on <body> (dark mode text on a white PDF
+    // page, for instance), since it's a plain offscreen div with nothing
+    // else setting its color/background.
+    styleReportRoot(page)
     host.appendChild(page)
     pages.push(page)
     return page

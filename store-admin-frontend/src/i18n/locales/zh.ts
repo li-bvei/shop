@@ -791,6 +791,8 @@ export default {
     insightsTitle: '自动分析',
     dailyDetailTitle: '详细日列表',
     monthlyDetailTitle: '详细月列表',
+    detailDateColumn: '日期',
+    detailMonthColumn: '月份',
     editCount: '当日修改次数',
     disclaimer: '本报表为系统内经营数据汇总，不属于正式会计损益表。',
     generatedAt: '生成时间',

@@ -787,6 +787,8 @@ export default {
     insightsTitle: '自動分析',
     dailyDetailTitle: '日別詳細一覧',
     monthlyDetailTitle: '月別詳細一覧',
+    detailDateColumn: '日付',
+    detailMonthColumn: '月',
     editCount: '当日の修正回数',
     disclaimer: '本レポートはシステム内の経営データ集計であり、正式な会計上の損益計算書ではありません。',
     generatedAt: '生成日時',

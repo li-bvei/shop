@@ -163,6 +163,89 @@ class BranchScopingTests(ApiTestCase):
         self.assertEqual(resp.data['branch'], self.branch_a.id)
 
 
+class CashRegisterFloatTests(ApiTestCase):
+    """The float is owned by each report: replenishing it on one day must
+    never change another day's stored value."""
+
+    def test_float_is_stored_per_report_and_independent_of_branch_defaults(self):
+        CashRegisterDefaults.objects.create(branch=self.branch_a, denomination_defaults={'500': 99})
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-10-01', 'total_revenue': 1000,
+            'cash_register_float': {'500': 10, '100': 20},
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        self.assertEqual(resp.data['cash_register_float'], {'500': 10, '100': 20, '50': 0, '10': 0, '5': 0})
+        CashRegisterDefaults.objects.filter(branch=self.branch_a).update(denomination_defaults={'500': 1})
+        report = DailyReport.objects.get(id=resp.data['id'])
+        self.assertEqual(report.cash_register_float['500'], 10)
+
+    def test_patch_without_float_keeps_stored_float(self):
+        self.login_as(self.branch_a_user)
+        created = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-10-01', 'total_revenue': 1000, 'cash_register_float': {'500': 7},
+        }, format='json')
+        resp = self.client.patch(f"/api/daily-reports/{created.data['id']}/", {'total_revenue': 2000}, format='json')
+        self.assertEqual(resp.status_code, 200, resp.data)
+        self.assertEqual(resp.data['cash_register_float']['500'], 7)
+
+    def test_float_can_be_lowered_on_a_later_day_without_touching_earlier_day(self):
+        self.login_as(self.branch_a_user)
+        day1 = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-10-01', 'total_revenue': 1000, 'cash_register_float': {'500': 10},
+        }, format='json')
+        self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-10-02', 'total_revenue': 1000, 'cash_register_float': {'500': 4},
+        }, format='json')
+        self.assertEqual(DailyReport.objects.get(id=day1.data['id']).cash_register_float['500'], 10)
+
+    def test_float_rejects_unknown_negative_and_fractional(self):
+        self.login_as(self.branch_a_user)
+        for i, bad in enumerate(({'10000': 1}, {'500': -1}, {'500': 1.5}, {'500': 'x'})):
+            resp = self.client.post('/api/daily-reports/', {
+                'branch': self.branch_a.id, 'date': f'2026-10-{i + 10:02d}', 'total_revenue': 1000, 'cash_register_float': bad,
+            }, format='json')
+            self.assertEqual(resp.status_code, 400, bad)
+
+    def test_previous_returns_latest_earlier_report_only(self):
+        DailyReport.objects.create(branch=self.branch_a, date='2026-10-01', cash_register_float={'500': 1})
+        DailyReport.objects.create(branch=self.branch_a, date='2026-10-03', cash_register_float={'500': 3})
+        DailyReport.objects.create(branch=self.branch_a, date='2026-10-05', cash_register_float={'500': 5})
+        DailyReport.objects.create(branch=self.branch_b, date='2026-10-04', cash_register_float={'500': 44})
+        self.login_as(self.branch_a_user)
+        resp = self.client.get('/api/daily-reports/previous/?date=2026-10-04')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([r['date'] for r in resp.data], ['2026-10-03'])
+        self.assertEqual(self.client.get('/api/daily-reports/previous/?date=2026-10-01').data, [])
+        self.assertEqual(self.client.get('/api/daily-reports/previous/').status_code, 400)
+
+    def test_admin_previous_is_scoped_by_branch_param(self):
+        DailyReport.objects.create(branch=self.branch_a, date='2026-10-03', cash_register_float={'500': 3})
+        DailyReport.objects.create(branch=self.branch_b, date='2026-10-02', cash_register_float={'500': 2})
+        self.login_as(self.admin)
+        resp = self.client.get(f'/api/daily-reports/previous/?date=2026-10-04&branch={self.branch_b.id}')
+        self.assertEqual([r['date'] for r in resp.data], ['2026-10-02'])
+
+
+class CashRegisterFloatBackfillTests(ApiTestCase):
+    def test_backfill_freezes_current_default_into_reports_on_or_after_cutoff_only(self):
+        import importlib
+        from django.apps import apps
+        migration = importlib.import_module('dailyreports.migrations.0004_dailyreport_cash_register_float')
+        CashRegisterDefaults.objects.create(branch=self.branch_a, denomination_defaults={'500': 12, '100': 3})
+        old = DailyReport.objects.create(branch=self.branch_a, date='2026-09-14')
+        new = DailyReport.objects.create(branch=self.branch_a, date='2026-09-15')
+        no_defaults = DailyReport.objects.create(branch=self.branch_b, date='2026-09-20')
+        before = DailyReport.objects.get(id=new.id).updated_at
+        migration.backfill_float(apps, None)
+        for r in (old, new, no_defaults):
+            r.refresh_from_db()
+        self.assertEqual(old.cash_register_float, {})
+        self.assertEqual(new.cash_register_float, {'500': 12, '100': 3})
+        self.assertEqual(no_defaults.cash_register_float, {})
+        self.assertEqual(new.updated_at, before)
+
+
 class CashRegisterDefaultsTests(ApiTestCase):
     def test_lazily_created_with_documented_defaults(self):
         self.login_as(self.branch_a_user)

@@ -19,6 +19,13 @@ export function formatCurrency(value: number): string {
   return `¥${value.toLocaleString('ja-JP')}`
 }
 
+/** Like formatCurrency but always shows the sign (±¥0 for zero) — for
+ * differences, where "+" vs "-" is the information. */
+export function formatSignedCurrency(value: number): string {
+  if (value === 0) return '±¥0'
+  return `${value > 0 ? '+' : '-'}${formatCurrency(Math.abs(value))}`
+}
+
 export function formatNumber(value: number): string {
   return value.toLocaleString('ja-JP')
 }

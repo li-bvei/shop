@@ -5,15 +5,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Close, EditPen, Plus } from '@element-plus/icons-vue'
 import {
   CASH_REGISTER_DENOMINATIONS,
-  CASH_REGISTER_DEFAULTS_CUTOFF_DATE,
   CASH_REGISTER_EXPECTED_TOTAL,
   CASH_REGISTER_FLOAT_DENOMINATIONS,
   cashRegisterDenominationBreakdown,
+  computeCashCarryover,
   computeCashRegisterStatus,
   computeDerived,
   syncPaymentAmountKeysOn,
   visiblePaymentMethodsFor,
   type DailyReportFormData,
+  type PreviousCashDay,
 } from '@/components/DailyReportForm.vue'
 import MobileNumberInput from '@/components/mobile/MobileNumberInput.vue'
 import MobileStepper from '@/components/mobile/MobileStepper.vue'
@@ -23,7 +24,7 @@ import {
 } from '@/api/masterData'
 import { fetchStaffByBranch, type StaffMember } from '@/api/staff'
 import { fetchCashRegisterDefaults, updateCashRegisterDefaults, type CashRegisterDefaults } from '@/api/cashRegisterDefaults'
-import { formatCurrency, formatNumber } from '@/utils/format'
+import { formatCurrency, formatNumber, formatSignedCurrency } from '@/utils/format'
 
 /**
  * The phone version of DailyReportForm: same `DailyReportFormData` object,
@@ -35,7 +36,8 @@ import { formatCurrency, formatNumber } from '@/utils/format'
  */
 const props = defineProps<{
   branchId: string
-  reportDate: string
+  /** The previous day's register snapshot (null: no report for it; undefined: unknown). */
+  previousDay?: PreviousCashDay | null
   readonly?: boolean
   saving?: boolean
   allowCashRegisterDefaultEdits?: boolean
@@ -62,11 +64,14 @@ const hallStaff = computed(() => staffList.value.filter((s) => s.workArea === 'h
 const visibleMethods = computed(() => visiblePaymentMethodsFor(paymentMethods.value, data.value.paymentAmounts))
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
 const cashStatus = computed(() => computeCashRegisterStatus(
-  data.value.cashRegisterCounts, cashDefaults.value.denominationDefaults, cashDefaults.value.expectedTotal, props.reportDate,
+  data.value.cashRegisterCounts, data.value.cashRegisterFloat, cashDefaults.value.expectedTotal,
 ))
-const showDefaultsSettings = computed(
-  () => !!props.allowCashRegisterDefaultEdits && props.reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE,
-)
+const cashCarryover = computed(() => (
+  props.previousDay
+    ? computeCashCarryover(cashStatus.value.difference, cashDefaults.value.expectedTotal, props.previousDay)
+    : null
+))
+const showDefaultsSettings = computed(() => !!props.allowCashRegisterDefaultEdits)
 
 function methodLabel(method: PaymentMethodDef) {
   return method.customName || (method.i18nKey ? t(method.i18nKey) : '')
@@ -128,9 +133,7 @@ async function addMethod() {
 
 // ---- cash register ---------------------------------------------------------
 function breakdown(denomination: number) {
-  return cashRegisterDenominationBreakdown(
-    denomination, data.value.cashRegisterCounts, cashDefaults.value.denominationDefaults, props.reportDate,
-  )
+  return cashRegisterDenominationBreakdown(denomination, data.value.cashRegisterCounts, data.value.cashRegisterFloat)
 }
 const cashStatusText = computed(() => {
   const s = cashStatus.value
@@ -141,29 +144,19 @@ const cashStatusText = computed(() => {
 })
 
 const savingSettings = ref(false)
-// Edits made in the collapsed settings block are sent along with the main 保存,
-// so the difference the user saw on screen matches what the PDF and tomorrow's
-// report will use (the desktop form saves each field as it changes).
+// The レジ固定金額 is a branch-wide setting (the float itself lives on the
+// report); an edit made in the collapsed settings block is sent along with
+// the main 保存 so the difference the user saw matches what the PDF uses.
 const settingsDirty = ref(false)
 async function saveCashSettings() {
   savingSettings.value = true
   try {
-    cashDefaults.value = await updateCashRegisterDefaults(props.branchId, {
-      expectedTotal: cashDefaults.value.expectedTotal,
-      denominationDefaults: { ...cashDefaults.value.denominationDefaults },
-    })
+    cashDefaults.value = await updateCashRegisterDefaults(props.branchId, { expectedTotal: cashDefaults.value.expectedTotal })
     settingsDirty.value = false
     ElMessage.success(t('dailyReport.mSettingsSaved'))
   } finally {
     savingSettings.value = false
   }
-}
-function defaultOf(denomination: number) {
-  return cashDefaults.value.denominationDefaults[String(denomination)] ?? 0
-}
-function setDefault(denomination: number, value: number | null | undefined) {
-  cashDefaults.value.denominationDefaults[String(denomination)] = value ?? 0
-  settingsDirty.value = true
 }
 function setExpectedTotal(value: number | null | undefined) {
   cashDefaults.value.expectedTotal = value ?? 0
@@ -269,14 +262,26 @@ function applyQuickSuggestion(s: ExpenseSuggestion) {
           v-model="data.cashRegisterCounts[String(denomination)]" :label="formatCurrency(denomination)"
           :minus-label="t('dailyReport.mMinus')" :plus-label="t('dailyReport.mPlus')" :disabled="readonly"
         />
-        <span v-if="breakdown(denomination).defaultQuantity" class="dmf-denom-default">
-          {{ t('dailyReport.mIncludesDefault', { count: breakdown(denomination).defaultQuantity }) }}
-        </span>
+        <template v-if="(CASH_REGISTER_FLOAT_DENOMINATIONS as readonly number[]).includes(denomination)">
+          <strong class="dmf-denom-name">{{ t('dailyReport.cashRegisterDefaultQuantity') }}</strong>
+          <MobileStepper
+            v-model="data.cashRegisterFloat[String(denomination)]"
+            :label="`${formatCurrency(denomination)} ${t('dailyReport.cashRegisterDefaultQuantity')}`"
+            :minus-label="t('dailyReport.mMinus')" :plus-label="t('dailyReport.mPlus')" :disabled="readonly"
+          />
+        </template>
       </div>
       <dl class="dmf-sum">
         <div><dt>{{ t('dailyReport.cashRegisterExpected') }}</dt><dd>{{ formatCurrency(cashDefaults.expectedTotal) }}</dd></div>
         <div><dt>{{ t('dailyReport.cashRegisterActual') }}</dt><dd>{{ formatCurrency(cashStatus.actual) }}</dd></div>
         <div class="is-strong" :class="`is-${cashStatus.status}`"><dt>{{ t('dailyReport.cashRegisterDifference') }}</dt><dd>{{ cashStatusText }}</dd></div>
+        <template v-if="previousDay !== undefined">
+          <template v-if="cashCarryover">
+            <div><dt>{{ t('dailyReport.cashRegisterPreviousCarryover') }}</dt><dd>{{ formatSignedCurrency(cashCarryover.previousDifference) }}</dd></div>
+            <div class="is-strong"><dt>{{ t('dailyReport.cashRegisterTodayDifference') }}</dt><dd>{{ formatSignedCurrency(cashCarryover.todayDifference) }}</dd></div>
+          </template>
+          <div v-else><dt class="dmf-denom-default">{{ t('dailyReport.cashRegisterPreviousDayUnavailable') }}</dt></div>
+        </template>
       </dl>
       <details v-if="showDefaultsSettings && !readonly" class="dmf-settings">
         <summary>{{ t('dailyReport.mCashSettings') }}</summary>
@@ -284,13 +289,6 @@ function applyQuickSuggestion(s: ExpenseSuggestion) {
           :model-value="cashDefaults.expectedTotal" :label="t('dailyReport.cashRegisterExpected')" prefix="¥"
           @update:model-value="setExpectedTotal"
         />
-        <div v-for="denomination in CASH_REGISTER_FLOAT_DENOMINATIONS" :key="denomination" class="dmf-denom">
-          <strong class="dmf-denom-name">{{ formatCurrency(denomination) }} · {{ t('dailyReport.cashRegisterDefaultQuantity') }}</strong>
-          <MobileStepper
-            :model-value="defaultOf(denomination)" :label="`${formatCurrency(denomination)} ${t('dailyReport.cashRegisterDefaultQuantity')}`"
-            :minus-label="t('dailyReport.mMinus')" :plus-label="t('dailyReport.mPlus')" @update:model-value="setDefault(denomination, $event)"
-          />
-        </div>
         <button type="button" class="dmf-btn dmf-btn-primary" :disabled="savingSettings" @click="saveCashSettings">
           {{ t('dailyReport.mCashSettingsSave') }}
         </button>

@@ -11,6 +11,7 @@ import { fetchPaymentMethods, type PaymentMethodDef } from '@/api/masterData'
 import { fetchStaffByBranch, type StaffMember } from '@/api/staff'
 import {
   fetchDailyReport,
+  fetchPreviousDailyReport,
   saveDailyReport,
   saveDailyReportHistorySnapshot,
   fetchDailyReportHistory,
@@ -25,14 +26,16 @@ import { ApiError } from '@/api/http'
 import DailyReportForm, {
   CASH_REGISTER_DENOMINATIONS,
   CASH_REGISTER_EXPECTED_TOTAL,
-  CASH_REGISTER_DEFAULTS_CUTOFF_DATE,
   cashRegisterDenominationBreakdown,
+  computeCashCarryover,
   computeCashRegisterTotal,
   computeDerived,
   normalizeDailyReportFormData,
+  createEmptyCashRegisterFloat,
   type DailyReportFormData,
+  type PreviousCashDay,
 } from '@/components/DailyReportForm.vue'
-import { formatCurrency, formatNumber, branchDisplayName, todayJst, formatDateKanji } from '@/utils/format'
+import { formatCurrency, formatNumber, formatSignedCurrency, branchDisplayName, todayJst, formatDateKanji } from '@/utils/format'
 import { downloadCustomExcel } from '@/utils/excelExport'
 import {
   renderOffscreenToPdf, el, styleReportRoot, buildReportHeader, reportSectionTitle, REPORT_PDF_TEXT,
@@ -50,7 +53,6 @@ const isAdmin = computed(() => auth.role === 'admin')
 const staffList = ref<StaffMember[]>([])
 const paymentMethods = ref<PaymentMethodDef[]>([])
 const cashRegisterExpectedTotal = ref(CASH_REGISTER_EXPECTED_TOTAL)
-const cashRegisterDenominationDefaults = ref<Record<string, number>>({})
 const branchId = ref(auth.branchId ?? '')
 
 // The branch an admin last picked in the dropdown, kept per account so the
@@ -72,6 +74,9 @@ function rememberedBranch(): string | null {
 }
 const reportDate = ref(todayJst())
 const reportId = ref<number | null>(null)
+// The previous calendar day's register snapshot (null when it has no report),
+// shown on the form as the difference carried over from yesterday.
+const previousCashDay = ref<PreviousCashDay | null | undefined>(undefined)
 const submitting = ref(false)
 
 const reportForm = reactive<DailyReportFormData>(normalizeDailyReportFormData({}))
@@ -186,34 +191,29 @@ function shiftReportDate(dateStr: string, days: number) {
   return date.toISOString().slice(0, 10)
 }
 
-function formatSignedCurrency(value: number) {
-  if (value === 0) return '±¥0'
-  return `${value > 0 ? '+' : '-'}${formatCurrency(Math.abs(value))}`
-}
-
 // A4 at 96dpi is ~794px wide — same convention as the supplier/monthly-
 // analysis PDFs (renderOffscreenToPdf scales this down to fit one page,
 // never up, so 1px here stays close to 1 printed px to reason about).
 const PDF_PAGE_WIDTH_PX = 794
 
 /** One 面额 row's <tr> for the PDF's cash-register table — quantity always
- * shows the actual total the subtotal was computed from (raw entered count
- * plus, where the cutoff date makes it eligible, the branch's float
- * default), with the breakdown in small text underneath whenever a default
- * contributed, so "数量" can never look inconsistent with "小计". */
+ * shows the actual total the subtotal was computed from (the entered count
+ * plus this report's own float), with the breakdown in small text underneath
+ * whenever a float contributed, so "数量" can never look inconsistent with
+ * "小计". */
 function buildCashRegisterRow(
   denomination: number,
   counts: DailyReportFormData['cashRegisterCounts'],
-  denominationDefaults: Record<string, number>,
+  cashRegisterFloat: DailyReportFormData['cashRegisterFloat'],
 ) {
-  const breakdown = cashRegisterDenominationBreakdown(denomination, counts, denominationDefaults, reportDate.value)
+  const breakdown = cashRegisterDenominationBreakdown(denomination, counts, cashRegisterFloat)
   const tr = document.createElement('tr')
   const cellStyle = { padding: '3px 5px', borderBottom: '1px solid #ccc' }
   tr.appendChild(el('td', { ...cellStyle, fontWeight: '700' }, formatCurrency(denomination)))
   const qtyCell = el('td', { ...cellStyle, textAlign: 'center' })
   qtyCell.appendChild(el('div', { fontWeight: '700' }, formatNumber(breakdown.totalQuantity)))
-  if (breakdown.defaultQuantity) {
-    qtyCell.appendChild(el('div', { fontSize: '10px', color: '#444', fontWeight: '400' }, `(${breakdown.rawQuantity}+${breakdown.defaultQuantity})`))
+  if (breakdown.floatQuantity) {
+    qtyCell.appendChild(el('div', { fontSize: '10px', color: '#444', fontWeight: '400' }, `(${breakdown.rawQuantity}+${breakdown.floatQuantity})`))
   }
   tr.appendChild(qtyCell)
   tr.appendChild(el('td', { ...cellStyle, textAlign: 'right', fontWeight: '700' }, formatCurrency(breakdown.subtotal)))
@@ -223,7 +223,7 @@ function buildCashRegisterRow(
 function buildCashRegisterTable(
   denominations: readonly number[],
   counts: DailyReportFormData['cashRegisterCounts'],
-  denominationDefaults: Record<string, number>,
+  cashRegisterFloat: DailyReportFormData['cashRegisterFloat'],
 ) {
   const table = el('table', { width: '100%', borderCollapse: 'collapse', fontSize: '12px' })
   const headRow = document.createElement('tr')
@@ -233,7 +233,7 @@ function buildCashRegisterTable(
   headRow.appendChild(el('th', { ...headStyle, textAlign: 'right' }, t('dailyReport.cashRegisterSubtotal')))
   table.appendChild(headRow)
   for (const denomination of denominations) {
-    table.appendChild(buildCashRegisterRow(denomination, counts, denominationDefaults))
+    table.appendChild(buildCashRegisterRow(denomination, counts, cashRegisterFloat))
   }
   return table
 }
@@ -255,7 +255,7 @@ function buildDailyReportPdf(
   branchName: string,
   freshMethods: PaymentMethodDef[],
   freshCashDefaults: CashRegisterDefaults,
-  previousDay: { date: string; cashRegisterCounts: DailyReportFormData['cashRegisterCounts'] } | null,
+  previousDay: PreviousCashDay | null,
 ) {
   const derived = computeDerived(reportForm, freshMethods)
 
@@ -334,14 +334,14 @@ function buildDailyReportPdf(
   crSection.appendChild(reportSectionTitle(t('dailyReport.cashRegisterTitle')))
   const crGrid = el('div', { display: 'flex', gap: '18px', marginBottom: '8px' })
   crGrid.appendChild(buildCashRegisterTable(
-    CASH_REGISTER_DENOMINATIONS.slice(0, 5), reportForm.cashRegisterCounts, freshCashDefaults.denominationDefaults,
+    CASH_REGISTER_DENOMINATIONS.slice(0, 5), reportForm.cashRegisterCounts, reportForm.cashRegisterFloat,
   ))
   crGrid.appendChild(buildCashRegisterTable(
-    CASH_REGISTER_DENOMINATIONS.slice(5), reportForm.cashRegisterCounts, freshCashDefaults.denominationDefaults,
+    CASH_REGISTER_DENOMINATIONS.slice(5), reportForm.cashRegisterCounts, reportForm.cashRegisterFloat,
   ))
   crSection.appendChild(crGrid)
 
-  const actualTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, freshCashDefaults.denominationDefaults, reportDate.value)
+  const actualTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, reportForm.cashRegisterFloat)
   const expectedTotal = freshCashDefaults.expectedTotal
   const diff = actualTotal - expectedTotal
   // Same wording/thresholds as the on-screen cashRegister.status, not a
@@ -369,13 +369,7 @@ function buildDailyReportPdf(
     background: '#f7f7f7', fontSize: '12px', fontWeight: '700',
   })
   if (previousDay) {
-    const previousActual = computeCashRegisterTotal(
-      previousDay.cashRegisterCounts,
-      freshCashDefaults.denominationDefaults,
-      previousDay.date,
-    )
-    const previousDifference = previousActual - expectedTotal
-    const todayDifference = diff - previousDifference
+    const { previousDifference, todayDifference } = computeCashCarryover(diff, expectedTotal, previousDay)
     const reconciliation = el('div', { display: 'flex', justifyContent: 'space-between', gap: '16px' })
     reconciliation.appendChild(el(
       'div', {},
@@ -435,6 +429,46 @@ function buildDailyReportPdf(
   root.appendChild(remainingBox)
 }
 
+/** True when a float record actually holds a recorded value — a report
+ * saved before floats existed (or a brand-new branch) comes back all-null. */
+function floatIsRecorded(cashRegisterFloat: DailyReportFormData['cashRegisterFloat'] | undefined) {
+  return !!cashRegisterFloat && Object.values(cashRegisterFloat).some((v) => v != null)
+}
+
+/**
+ * What the report for `date` needs from the days before it:
+ *  - `carryDay`: strictly the previous calendar day, to split today's
+ *    cumulative register difference into "carried from yesterday" and
+ *    "arising today" — null when there is no report for that day (the split
+ *    can't be known then, and we say so rather than blame today for it).
+ *  - `prefillFloat`: the float a not-yet-saved report starts from — the
+ *    latest earlier report's own float (so a closed day in between doesn't
+ *    break the chain), or null when no earlier report recorded one.
+ * A locally saved previous-day draft is newer than the server copy and wins
+ * for its own day, matching loadReport's draft-wins rule.
+ */
+async function loadPreviousCashDay(branch: string, date: string) {
+  const previousDate = shiftReportDate(date, -1)
+  const prior = await fetchPreviousDailyReport(branch, date)
+  const draft = getDraft(branch, previousDate)
+  const priorIsYesterday = prior?.date === previousDate
+  let carryDay: PreviousCashDay | null = null
+  let prefillFloat: DailyReportFormData['cashRegisterFloat'] | null = floatIsRecorded(prior?.cashRegisterFloat)
+    ? prior!.cashRegisterFloat
+    : null
+  if (draft) {
+    // A draft saved before floats existed has none — keep the server's.
+    const draftFloat = floatIsRecorded(draft.data.cashRegisterFloat)
+      ? draft.data.cashRegisterFloat
+      : (priorIsYesterday ? prior!.cashRegisterFloat : {})
+    carryDay = { date: previousDate, cashRegisterCounts: draft.data.cashRegisterCounts, cashRegisterFloat: draftFloat }
+    if (floatIsRecorded(draftFloat)) prefillFloat = draftFloat
+  } else if (priorIsYesterday) {
+    carryDay = { date: previousDate, cashRegisterCounts: prior!.cashRegisterCounts, cashRegisterFloat: prior!.cashRegisterFloat }
+  }
+  return { carryDay, prefillFloat }
+}
+
 /**
  * Fresh, not this view's page-load-time paymentMethods/cashRegister* refs —
  * DailyReportForm lets staff rename/add/delete payment methods and edit the
@@ -444,23 +478,11 @@ function buildDailyReportPdf(
  * document from the exact same data.
  */
 async function loadPrintableSnapshot() {
-  const previousDate = shiftReportDate(reportDate.value, -1)
-  const [freshMethods, freshCashDefaults, previousReport] = await Promise.all([
+  const [freshMethods, freshCashDefaults, { carryDay: previousDay }] = await Promise.all([
     fetchPaymentMethods(branchId.value),
     fetchCashRegisterDefaults(branchId.value),
-    fetchDailyReport(branchId.value, previousDate),
+    loadPreviousCashDay(branchId.value, reportDate.value),
   ])
-  // A locally saved previous-day draft is newer than the server copy and
-  // should be the carryover source for this device, matching loadReport's
-  // existing draft-wins rule. Without either a draft or a saved report we
-  // explicitly say the daily split is unavailable instead of pretending
-  // yesterday's difference was zero and blaming the whole amount on today.
-  const previousDraft = getDraft(branchId.value, previousDate)
-  const previousDay = previousDraft
-    ? { date: previousDate, cashRegisterCounts: previousDraft.data.cashRegisterCounts }
-    : previousReport.id
-      ? { date: previousDate, cashRegisterCounts: previousReport.cashRegisterCounts }
-      : null
   const branch = branchStore.list.find((b) => b.id === branchId.value)
   const branchName = branchDisplayName(branch, locale.value, branchId.value)
   return { freshMethods, freshCashDefaults, previousDay, branchName }
@@ -559,19 +581,20 @@ function formatDateTime(iso: string) {
 async function loadReport() {
   // A chain with no branch yet has no report to load.
   if (!branchId.value) return
-  const [staff, methods, seed, cashRegisterDefaults] = await Promise.all([
+  const [staff, methods, seed, cashRegisterDefaults, previous] = await Promise.all([
     fetchStaffByBranch(branchId.value),
     fetchPaymentMethods(branchId.value),
     fetchDailyReport(branchId.value, reportDate.value),
     fetchCashRegisterDefaults(branchId.value),
+    loadPreviousCashDay(branchId.value, reportDate.value),
   ])
+  previousCashDay.value = previous.carryDay
 
   staffList.value = staff
   paymentMethods.value = methods
   // Only used for the Excel export — DailyReportForm.vue fetches and owns
   // its own copy for the on-screen comparison/editing.
   cashRegisterExpectedTotal.value = cashRegisterDefaults.expectedTotal
-  cashRegisterDenominationDefaults.value = cashRegisterDefaults.denominationDefaults
 
   reportId.value = seed.id
   reportUpdatedAt.value = seed.updatedAt
@@ -594,6 +617,16 @@ async function loadReport() {
   reportForm.paymentAmounts = { ...source.paymentAmounts }
   reportForm.expenses = source.expenses.map((e) => ({ ...e }))
   reportForm.cashRegisterCounts = { ...source.cashRegisterCounts }
+  // The float belongs to the report. A saved report (or a draft that has
+  // one) keeps its own; a day nobody has saved yet starts from the previous
+  // report's float, falling back to the branch's old default only when there
+  // is nothing earlier to read (first report of a branch).
+  const ownFloat = floatIsRecorded(source.cashRegisterFloat) ? source.cashRegisterFloat : null
+  const savedFloat = seed.id !== null ? seed.cashRegisterFloat : null
+  reportForm.cashRegisterFloat = {
+    ...createEmptyCashRegisterFloat(),
+    ...(ownFloat ?? savedFloat ?? previous.prefillFloat ?? cashRegisterDefaults.denominationDefaults),
+  }
 }
 
 onMounted(async () => {
@@ -775,10 +808,25 @@ watch(historyFilterDate, () => {
   if (historyDialogVisible.value) refreshHistoryList()
 })
 
-function openHistoryEdit(entry: DailyReportHistoryEntry) {
-  historyEditForm.value = JSON.parse(JSON.stringify(entry.data)) as DailyReportFormData
+// Same "carried from yesterday" split as the main form, for the day being
+// edited in the history dialog (undefined until loaded → block hidden).
+const historyEditPreviousDay = ref<PreviousCashDay | null | undefined>(undefined)
+
+async function openHistoryEdit(entry: DailyReportHistoryEntry) {
+  const form = JSON.parse(JSON.stringify(entry.data)) as DailyReportFormData
+  historyEditPreviousDay.value = undefined
   historyEditDate.value = entry.date
   historyEditUnlockToken.value = null
+  const [live, previous] = await Promise.all([
+    // A snapshot saved before reports carried a float only has zeros there;
+    // resaving it would wipe the float the live report holds, so start from
+    // the live report's instead.
+    entry.legacyFloat ? fetchDailyReport(branchId.value, entry.date) : Promise.resolve(null),
+    loadPreviousCashDay(branchId.value, entry.date),
+  ])
+  if (live?.id) form.cashRegisterFloat = { ...live.cashRegisterFloat }
+  historyEditForm.value = form
+  historyEditPreviousDay.value = previous.carryDay
   historyEditDialogVisible.value = true
 }
 
@@ -875,13 +923,13 @@ async function handleDownload() {
       t('dailyReport.cashRegisterQuantity'),
       t('dailyReport.cashRegisterSubtotal'),
     ]).font = { bold: true }
-    const defaultsEligible = reportDate.value >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
     for (const denomination of CASH_REGISTER_DENOMINATIONS) {
-      const rawQuantity = reportForm.cashRegisterCounts[String(denomination)] ?? 0
-      const defaultQuantity = defaultsEligible ? (cashRegisterDenominationDefaults.value[String(denomination)] ?? 0) : 0
-      ws.addRow([denomination, rawQuantity, denomination * (rawQuantity + defaultQuantity)])
+      const { rawQuantity, subtotal } = cashRegisterDenominationBreakdown(
+        denomination, reportForm.cashRegisterCounts, reportForm.cashRegisterFloat,
+      )
+      ws.addRow([denomination, rawQuantity, subtotal])
     }
-    const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, cashRegisterDenominationDefaults.value, reportDate.value)
+    const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, reportForm.cashRegisterFloat)
     ws.addRow([t('dailyReport.cashRegisterExpected'), cashRegisterExpectedTotal.value])
     ws.addRow([t('dailyReport.cashRegisterActual'), cashRegisterTotal])
     ws.addRow([t('dailyReport.cashRegisterDifference'), cashRegisterTotal - cashRegisterExpectedTotal.value])
@@ -929,14 +977,14 @@ async function handleDownload() {
 
       <DailyReportMobileForm
         v-if="isMobile && branchId"
-        v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate"
+        v-model:data="reportForm" :branch-id="branchId" :previous-day="previousCashDay"
         :readonly="mainFormLocked" :saving="submitting" allow-cash-register-default-edits
         @save="handleSubmit" @history="openHistory"
       />
       <div v-else>
         <DailyReportForm
           v-if="branchId"
-          v-model:data="reportForm" :branch-id="branchId" :report-date="reportDate"
+          v-model:data="reportForm" :branch-id="branchId" :previous-day="previousCashDay"
           :readonly="mainFormLocked" allow-cash-register-default-edits
         />
       </div>
@@ -1002,7 +1050,7 @@ async function handleDownload() {
       </div>
       <DailyReportForm
         v-if="historyEditForm" v-model:data="historyEditForm" :branch-id="branchId"
-        :report-date="historyEditDate" :readonly="historyEditFormLocked"
+        :previous-day="historyEditPreviousDay" :readonly="historyEditFormLocked"
       />
       <template #footer>
         <el-button @click="historyEditDialogVisible = false">{{ t('common.cancel') }}</el-button>

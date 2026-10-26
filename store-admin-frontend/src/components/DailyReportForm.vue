@@ -6,21 +6,14 @@ export interface ExpenseRow {
 }
 
 export const CASH_REGISTER_DENOMINATIONS = [10000, 5000, 1000, 500, 100, 50, 10, 5, 1] as const
-// The subset that behaves like a fixed till float and gets a per-branch
-// default (see api/cashRegisterDefaults.ts) — large bills and 1-yen coins
-// move too much with actual business to have a meaningful default.
+// The subset that behaves like a standing till float, stored on each report
+// (cashRegisterFloat) — large bills and 1-yen coins move too much with
+// actual business to have a float.
 export const CASH_REGISTER_FLOAT_DENOMINATIONS = [500, 100, 50, 10, 5] as const
 // Fallback only — a branch with no CashRegisterDefaults row yet (never
 // fetched, or the fetch hasn't resolved) compares against this, matching
 // what every branch used before the per-branch setting existed.
 export const CASH_REGISTER_EXPECTED_TOTAL = 130000
-// Every report dated before this shipped before the register-defaults
-// feature existed — cash_register_counts on those often comes back as {}
-// entirely (see computeCashRegisterTotal). Their data predates the concept
-// of a "float default", so the default must never be added to them, no
-// matter which rows do or don't have a value.
-export const CASH_REGISTER_DEFAULTS_CUTOFF_DATE = '2026-09-15'
-
 export interface DailyReportFormData {
   personInCharge: string
   totalRevenue: number | null
@@ -32,6 +25,15 @@ export interface DailyReportFormData {
   paymentAmounts: Record<string, number | null>
   expenses: ExpenseRow[]
   cashRegisterCounts: Record<string, number | null>
+  /** The register's standing change float (CASH_REGISTER_FLOAT_DENOMINATIONS)
+   * as of this report — owned by the report itself, so replenishing it on one
+   * day never rewrites another day's totals. A new day is pre-filled from the
+   * previous report's float (see DailyReportView.vue). */
+  cashRegisterFloat: Record<string, number | null>
+}
+
+export function createEmptyCashRegisterFloat(): Record<string, number | null> {
+  return Object.fromEntries(CASH_REGISTER_FLOAT_DENOMINATIONS.map((denomination) => [String(denomination), null]))
 }
 
 export function createEmptyCashRegisterCounts(): Record<string, number | null> {
@@ -53,6 +55,10 @@ export function normalizeDailyReportFormData(data: Partial<DailyReportFormData>)
     cashRegisterCounts: {
       ...createEmptyCashRegisterCounts(),
       ...data.cashRegisterCounts,
+    },
+    cashRegisterFloat: {
+      ...createEmptyCashRegisterFloat(),
+      ...data.cashRegisterFloat,
     },
   }
 }
@@ -90,19 +96,12 @@ export function computeDerived(
   return { afternoonRevenue, afternoonCustomers, afternoonGroupCount, expenseTotal, cashAmount, cashRemaining }
 }
 
-// `denominationDefaults` (the per-branch float reserve, keyed by denomination
-// string) is added on top of each counted quantity before multiplying — the
-// count entered on the report is only what's counted beyond the fixed float,
-// so the float itself must be added back in here rather than ever being
-// written into the count field. This happens unconditionally for every row
-// (including one nobody touched this time — that's the whole point: the
-// float is presumed present without re-entering it) as long as `reportDate`
-// is on/after CASH_REGISTER_DEFAULTS_CUTOFF_DATE. A report dated before the
-// feature existed must never have the default added, full stop — that cutoff
-// is the only gate; per-row null-checking was tried and removed; it broke
-// the "don't need to type anything to get the float counted" behaviour for
-// eligible dates without being needed once the date gate exists (a report
-// before the cutoff never got the default even when a row had a real value).
+// `cashRegisterFloat` (this report's own float, keyed by denomination string)
+// is added on top of each counted quantity before multiplying — the count
+// entered on the report is only what's counted beyond the standing float, so
+// the float itself is added back in here rather than ever being written into
+// the count field. It is stored on the report (not read from a branch-wide
+// setting), so changing the float on one day never moves another day's total.
 /**
  * Single source of truth for one denomination row's quantity/subtotal math
  * — used by the on-screen row, computeCashRegisterTotal below, and the PDF
@@ -112,50 +111,62 @@ export function computeDerived(
 export function cashRegisterDenominationBreakdown(
   denomination: number,
   counts: Record<string, number | null | undefined>,
-  denominationDefaults: Record<string, number | null | undefined> = {},
-  reportDate?: string,
+  cashRegisterFloat: Record<string, number | null | undefined> = {},
 ) {
-  const defaultsEligible = !!reportDate && reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
   const key = String(denomination)
-  const rawQuantity = counts[key] ?? 0
-  const defaultQuantity = defaultsEligible ? (denominationDefaults[key] ?? 0) : 0
-  const totalQuantity = rawQuantity + defaultQuantity
-  return { rawQuantity, defaultQuantity, totalQuantity, subtotal: denomination * totalQuantity }
+  const rawQuantity = Number(counts[key]) || 0
+  const floatQuantity = Number(cashRegisterFloat[key]) || 0
+  const totalQuantity = rawQuantity + floatQuantity
+  return { rawQuantity, floatQuantity, totalQuantity, subtotal: denomination * totalQuantity }
 }
 
 export function computeCashRegisterTotal(
   counts: Record<string, number | null | undefined>,
-  denominationDefaults: Record<string, number | null | undefined> = {},
-  reportDate?: string,
+  cashRegisterFloat: Record<string, number | null | undefined> = {},
 ) {
   return CASH_REGISTER_DENOMINATIONS.reduce(
-    (sum, denomination) => sum + cashRegisterDenominationBreakdown(denomination, counts, denominationDefaults, reportDate).subtotal,
+    (sum, denomination) => sum + cashRegisterDenominationBreakdown(denomination, counts, cashRegisterFloat).subtotal,
     0,
   )
 }
-/** The cash-register match/over/short state shown under the count table.
- * `hasInput` is true once the float defaults contribute or any count has
- * been typed — an untouched register reads "please count" rather than a
- * misleading "short ¥130,000". Shared by the desktop form and the phone form. */
+
+/** The register's fixed-amount comparison, shared by the desktop form and the
+ * phone form. `status` is 'empty' until something has actually been entered
+ * (a float or a count) — an untouched register reads "please count" rather
+ * than a misleading "short ¥130,000". */
 export function computeCashRegisterStatus(
   counts: Record<string, number | null | undefined>,
-  denominationDefaults: Record<string, number | null | undefined>,
+  cashRegisterFloat: Record<string, number | null | undefined>,
   expectedTotal: number,
-  reportDate: string,
 ) {
-  const actual = computeCashRegisterTotal(counts, denominationDefaults, reportDate)
+  const actual = computeCashRegisterTotal(counts, cashRegisterFloat)
   const difference = actual - expectedTotal
-  const defaultsEligible = reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE
-  const hasDefaultContribution = defaultsEligible
-    && Object.values(denominationDefaults).some((v) => (v ?? 0) > 0)
-  const hasInput = hasDefaultContribution || CASH_REGISTER_DENOMINATIONS.some(
-    (denomination) => counts[String(denomination)] != null,
-  )
+  const hasInput = Object.values(cashRegisterFloat).some((v) => (Number(v) || 0) > 0)
+    || CASH_REGISTER_DENOMINATIONS.some((denomination) => counts[String(denomination)] != null)
   return {
     actual,
     difference,
     status: !hasInput ? 'empty' : difference === 0 ? 'match' : difference > 0 ? 'over' : 'short',
   } as const
+}
+
+/** The day before's snapshot a report needs to split its cumulative
+ * difference into "carried from yesterday" and "arising today". */
+export interface PreviousCashDay {
+  date: string
+  cashRegisterCounts: Record<string, number | null | undefined>
+  cashRegisterFloat: Record<string, number | null | undefined>
+}
+
+/** A shortage/surplus is cumulative: yesterday's mismatch stays in the drawer
+ * and shows up again in today's actual total even when nothing new went wrong
+ * today. Splits today's difference into yesterday's carried amount and
+ * today's own change. Shared by the screen, the PDF and print so none of
+ * them can attribute the whole cumulative shortage to today's shift. */
+export function computeCashCarryover(difference: number, expectedTotal: number, previousDay: PreviousCashDay) {
+  const previousActual = computeCashRegisterTotal(previousDay.cashRegisterCounts, previousDay.cashRegisterFloat)
+  const previousDifference = previousActual - expectedTotal
+  return { previousDifference, todayDifference: difference - previousDifference }
 }
 
 /** A deactivated ("deleted") payment method only stays in the entry list
@@ -207,23 +218,21 @@ import {
 import { fetchStaffByBranch, type StaffMember } from '@/api/staff'
 import type { PaymentMethodDef } from '@/api/masterData'
 import { fetchCashRegisterDefaults, updateCashRegisterDefaults, type CashRegisterDefaults } from '@/api/cashRegisterDefaults'
-import { formatCurrency } from '@/utils/format'
+import { formatCurrency, formatSignedCurrency } from '@/utils/format'
 import MoneyInput from '@/components/MoneyInput.vue'
 
 const props = defineProps<{
   branchId: string
-  /** The business date of the report currently loaded — used only to gate
-   * whether the register float default is eligible to apply at all (see
-   * CASH_REGISTER_DEFAULTS_CUTOFF_DATE); reports from before the feature
-   * existed must never have it added, regardless of row content. */
-  reportDate: string
-  /** Only the live "fill out today's report" screen should let staff edit
-   * the register float defaults / expected total — editing a past report
-   * (the history dialog) must never let someone change what today's count
-   * gets added to after the fact. The defaults are still fetched and added
-   * into the subtotal/total in both places, since a saved count always
-   * means "counted beyond the float" regardless of where it's viewed. */
+  /** Only the live "fill out today's report" screen lets staff edit the
+   * branch-wide レジ固定金額 (expected total) — editing a past report (the
+   * history dialog) must not change what every day is compared against.
+   * The report's own float (data.cashRegisterFloat) is editable in both
+   * places, since it belongs to the report being edited. */
   allowCashRegisterDefaultEdits?: boolean
+  /** The day before this report (null when there's no report for it), used
+   * to show how much of today's difference is carried over from yesterday.
+   * Left undefined where that isn't known, which hides the block. */
+  previousDay?: PreviousCashDay | null
   /** True while `reportDate` is locked and hasn't been unlocked this
    * editing session (see DailyReportView.vue) — cascades disabled to
    * every Element Plus input/select/etc. in the form via <el-form>. */
@@ -243,32 +252,26 @@ const topSuggestions = ref<SuggestionOption[]>([])
 const cashRegisterDefaults = ref<CashRegisterDefaults>({
   denominationDefaults: {}, expectedTotal: CASH_REGISTER_EXPECTED_TOTAL,
 })
-const savingDenominationDefault = ref<number | null>(null)
 const savingExpectedTotal = ref(false)
 
-// Delegates to cashRegisterDenominationBreakdown (see that function's
-// comment for why the default applies unconditionally — not just to rows
-// that were touched — once the date gate is eligible) so this on-screen
-// subtotal can never drift from the PDF export's or computeCashRegisterTotal's.
+// Delegates to cashRegisterDenominationBreakdown so this on-screen subtotal
+// can never drift from the PDF export's or computeCashRegisterTotal's.
 function cashRegisterRowSubtotal(denomination: number) {
   return cashRegisterDenominationBreakdown(
-    denomination, data.value.cashRegisterCounts, cashRegisterDefaults.value.denominationDefaults, props.reportDate,
+    denomination, data.value.cashRegisterCounts, data.value.cashRegisterFloat,
   ).subtotal
 }
-
-// The デフォルト枚数 column only makes sense — and only gets shown — for a
-// report dated on/after the cutoff: showing it (even read-only) on an older
-// report implies the default applies there, which it never does.
-const showDefaultsColumn = computed(
-  () => !!props.allowCashRegisterDefaultEdits && props.reportDate >= CASH_REGISTER_DEFAULTS_CUTOFF_DATE,
-)
 
 const derived = computed(() => computeDerived(data.value, paymentMethods.value))
 const cashRegister = computed(() => computeCashRegisterStatus(
   data.value.cashRegisterCounts,
-  cashRegisterDefaults.value.denominationDefaults,
+  data.value.cashRegisterFloat,
   cashRegisterDefaults.value.expectedTotal,
-  props.reportDate,
+))
+const cashCarryover = computed(() => (
+  props.previousDay
+    ? computeCashCarryover(cashRegister.value.difference, cashRegisterDefaults.value.expectedTotal, props.previousDay)
+    : null
 ))
 
 // Only hall (front-of-house) staff can be recorded as the person in charge
@@ -319,27 +322,25 @@ async function loadReferenceData() {
 onMounted(loadReferenceData)
 watch(() => props.branchId, loadReferenceData)
 
-async function handleUpdateDenominationDefault(denomination: number) {
-  const key = String(denomination)
-  savingDenominationDefault.value = denomination
-  try {
-    cashRegisterDefaults.value = await updateCashRegisterDefaults(props.branchId, {
-      denominationDefaults: {
-        ...cashRegisterDefaults.value.denominationDefaults,
-        [key]: cashRegisterDefaults.value.denominationDefaults[key] ?? 0,
-      },
-    })
-  } finally {
-    savingDenominationDefault.value = null
-  }
+// An el-input[type=number] under v-model.number yields '' once cleared (and
+// NaN-ish values for partial input) — the API only accepts non-negative
+// integers, so anything else is normalised here instead of being sent as-is.
+function toNonNegativeInt(raw: unknown): number | null {
+  const n = Number(raw)
+  if (raw === '' || raw === null || raw === undefined || !Number.isFinite(n) || n < 0) return null
+  return Math.floor(n)
 }
 
 async function handleUpdateExpectedTotal() {
   savingExpectedTotal.value = true
   try {
-    cashRegisterDefaults.value = await updateCashRegisterDefaults(props.branchId, {
-      expectedTotal: cashRegisterDefaults.value.expectedTotal,
-    })
+    const expectedTotal = toNonNegativeInt(cashRegisterDefaults.value.expectedTotal)
+    if (expectedTotal === null) {
+      // No sensible fallback for a cleared fixed amount — restore the saved one.
+      cashRegisterDefaults.value = await fetchCashRegisterDefaults(props.branchId)
+      return
+    }
+    cashRegisterDefaults.value = await updateCashRegisterDefaults(props.branchId, { expectedTotal })
   } finally {
     savingExpectedTotal.value = false
   }
@@ -530,12 +531,12 @@ async function handleAddPaymentMethod() {
           </div>
           <p class="cash-register-hint">{{ t('dailyReport.cashRegisterHint') }}</p>
           <div class="cash-register-layout">
-            <div class="cash-register-table" :class="{ 'has-defaults-column': showDefaultsColumn }">
+            <div class="cash-register-table has-defaults-column">
               <div class="cash-register-row cash-register-header">
                 <span>{{ t('dailyReport.cashRegisterDenomination') }}</span>
                 <span>{{ t('dailyReport.cashRegisterQuantity') }}</span>
                 <span>{{ t('dailyReport.cashRegisterSubtotal') }}</span>
-                <span v-if="showDefaultsColumn">{{ t('dailyReport.cashRegisterDefaultQuantity') }}</span>
+                <span>{{ t('dailyReport.cashRegisterDefaultQuantity') }}</span>
               </div>
               <div v-for="denomination in CASH_REGISTER_DENOMINATIONS" :key="denomination" class="cash-register-row">
                 <strong>{{ formatCurrency(denomination) }}</strong>
@@ -548,16 +549,14 @@ async function handleAddPaymentMethod() {
                 />
                 <span class="cash-register-subtotal">{{ formatCurrency(cashRegisterRowSubtotal(denomination)) }}</span>
                 <el-input
-                  v-if="showDefaultsColumn && (CASH_REGISTER_FLOAT_DENOMINATIONS as readonly number[]).includes(denomination)"
-                  v-model.number="cashRegisterDefaults.denominationDefaults[String(denomination)]"
+                  v-if="(CASH_REGISTER_FLOAT_DENOMINATIONS as readonly number[]).includes(denomination)"
+                  v-model.number="data.cashRegisterFloat[String(denomination)]"
                   type="number"
                   min="0"
                   step="1"
                   class="cash-register-default"
-                  :disabled="savingDenominationDefault === denomination"
-                  @change="handleUpdateDenominationDefault(denomination)"
                 />
-                <span v-else-if="showDefaultsColumn" class="cash-register-default-empty" />
+                <span v-else class="cash-register-default-empty" />
               </div>
             </div>
             <div class="cash-register-summary">
@@ -589,6 +588,19 @@ async function handleAddPaymentMethod() {
                 <span v-else-if="cashRegister.status === 'over'">{{ t('dailyReport.cashRegisterOver', { amount: formatCurrency(cashRegister.difference) }) }}</span>
                 <span v-else-if="cashRegister.status === 'short'">{{ t('dailyReport.cashRegisterShort', { amount: formatCurrency(Math.abs(cashRegister.difference)) }) }}</span>
                 <span v-else>{{ t('dailyReport.cashRegisterEmpty') }}</span>
+              </div>
+              <div v-if="previousDay !== undefined" class="cash-register-carryover">
+                <template v-if="cashCarryover">
+                  <div class="cash-register-summary-row">
+                    <span>{{ t('dailyReport.cashRegisterPreviousCarryover') }}</span>
+                    <strong>{{ formatSignedCurrency(cashCarryover.previousDifference) }}</strong>
+                  </div>
+                  <div class="cash-register-summary-row actual">
+                    <span>{{ t('dailyReport.cashRegisterTodayDifference') }}</span>
+                    <strong>{{ formatSignedCurrency(cashCarryover.todayDifference) }}</strong>
+                  </div>
+                </template>
+                <p v-else class="cash-register-carryover-note">{{ t('dailyReport.cashRegisterPreviousDayUnavailable') }}</p>
               </div>
             </div>
           </div>
@@ -1095,6 +1107,19 @@ async function handleAddPaymentMethod() {
 
 .cash-register-status.is-empty {
   color: var(--text-secondary);
+}
+
+.cash-register-carryover {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.cash-register-carryover-note {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 @media (max-width: 680px) {

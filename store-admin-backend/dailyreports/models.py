@@ -25,6 +25,13 @@ class DailyReport(models.Model):
     # because JSON object keys are strings. An empty object is kept for older
     # reports that were saved before the cash-register count was introduced.
     cash_register_counts = models.JSONField(default=dict, blank=True)
+    # The register's standing change float (500/100/50/10/5 yen) *as of this
+    # report* — owned by the report itself, not looked up from a branch-wide
+    # setting, so replenishing the float on one day never rewrites the totals
+    # of already-saved days. A new report is pre-filled from the previous
+    # day's float (see DailyReportViewSet.previous). Keyed like
+    # cash_register_counts; only ever holds CashRegisterDefaults.FLOAT_DENOMINATIONS.
+    cash_register_float = models.JSONField(default=dict, blank=True)
     updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
     )

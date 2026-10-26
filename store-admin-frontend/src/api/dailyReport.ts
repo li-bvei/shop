@@ -1,11 +1,15 @@
 import { http } from './http'
 import {
+  CASH_REGISTER_FLOAT_DENOMINATIONS,
   createEmptyCashRegisterCounts,
+  createEmptyCashRegisterFloat,
   normalizeDailyReportFormData,
   type DailyReportFormData,
 } from '@/components/DailyReportForm.vue'
 
 export interface DailyReportSeed extends DailyReportFormData {
+  /** Only set on fetchPreviousDailyReport results (the date it was found for). */
+  date?: string
   /** null when no report has ever been saved for this branch+date yet. */
   id: number | null
   /** null alongside id === null. Used to detect whether the server's copy
@@ -15,7 +19,10 @@ export interface DailyReportSeed extends DailyReportFormData {
 }
 
 const EMPTY_SEED: DailyReportFormData & { id: null; updatedAt: null } = {
-  ...normalizeDailyReportFormData({ cashRegisterCounts: createEmptyCashRegisterCounts() }),
+  ...normalizeDailyReportFormData({
+    cashRegisterCounts: createEmptyCashRegisterCounts(),
+    cashRegisterFloat: createEmptyCashRegisterFloat(),
+  }),
   id: null,
   updatedAt: null,
 }
@@ -34,6 +41,7 @@ interface DailyReportDto {
   payment_amounts: Record<string, number>
   expenses: DailyReportFormData['expenses']
   cash_register_counts?: Record<string, number>
+  cash_register_float?: Record<string, number>
   updated_at: string
 }
 
@@ -52,12 +60,21 @@ function fromDto(dto: DailyReportDto): DailyReportSeed {
       paymentAmounts: dto.payment_amounts,
       expenses: dto.expenses,
       cashRegisterCounts: dto.cash_register_counts,
+      cashRegisterFloat: dto.cash_register_float,
     }),
   }
 }
 
 function numericOrZero(value: number | null) {
   return value ?? 0
+}
+
+/** A cleared el-input[type=number] under v-model.number holds '' (not null),
+ * which the API rejects as an invalid count — treat anything that isn't a
+ * non-negative number as 0 and drop fractions. */
+function countOrZero(value: unknown) {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
 }
 
 function toDto(branchId: string, date: string, data: DailyReportFormData) {
@@ -79,8 +96,18 @@ function toDto(branchId: string, date: string, data: DailyReportFormData) {
     expenses: data.expenses.map((expense) => ({ ...expense, amount: numericOrZero(expense.amount) })),
     cash_register_counts: Object.fromEntries(
       Object.entries({ ...createEmptyCashRegisterCounts(), ...data.cashRegisterCounts })
-        .map(([key, value]) => [key, numericOrZero(value)]),
+        .map(([key, value]) => [key, countOrZero(value)]),
     ),
+    // Left out entirely when the data carries no float at all (e.g. an
+    // offline draft saved before the float existed) so the server keeps the
+    // float it has instead of having it reset to zeros.
+    ...(data.cashRegisterFloat
+      ? {
+        cash_register_float: Object.fromEntries(
+          CASH_REGISTER_FLOAT_DENOMINATIONS.map((d) => [String(d), countOrZero(data.cashRegisterFloat[String(d)])]),
+        ),
+      }
+      : {}),
   }
 }
 
@@ -88,6 +115,15 @@ export async function fetchDailyReport(branchId: string, date: string): Promise<
   const params = new URLSearchParams({ branch: branchId, date })
   const rows = await http.get<DailyReportDto[]>(`/daily-reports/?${params.toString()}`)
   return rows[0] ? fromDto(rows[0]) : { ...EMPTY_SEED }
+}
+
+/** The most recent report strictly before `date` for the branch, or null.
+ * A new day's report starts from this one's cash-register float, and the
+ * screen/PDF derive the carried-over difference from it. */
+export async function fetchPreviousDailyReport(branchId: string, date: string): Promise<DailyReportSeed | null> {
+  const params = new URLSearchParams({ branch: branchId, date })
+  const rows = await http.get<DailyReportDto[]>(`/daily-reports/previous/?${params.toString()}`)
+  return rows[0] ? { ...fromDto(rows[0]), date: rows[0].date } : null
 }
 
 /** Upserts the branch+date's live report; returns its id (new or existing).
@@ -120,6 +156,9 @@ export interface DailyReportHistoryEntry {
   totalRevenue: number
   cashRemaining: number
   data: DailyReportFormData
+  /** True for a snapshot saved before reports carried their own float — its
+   * `data.cashRegisterFloat` is just zeros, not a recorded value. */
+  legacyFloat: boolean
 }
 
 interface HistoryDto {
@@ -145,6 +184,7 @@ function fromHistoryDto(dto: HistoryDto): DailyReportHistoryEntry {
     totalRevenue: Number(dto.total_revenue),
     cashRemaining: Number(dto.cash_remaining),
     data: normalizeDailyReportFormData(dto.data),
+    legacyFloat: !dto.data?.cashRegisterFloat,
   }
 }
 

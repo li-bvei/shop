@@ -10,6 +10,29 @@ from .models import CashRegisterDefaults, DailyReport, DailyReportHistory
 CASH_REGISTER_DENOMINATIONS = ('10000', '5000', '1000', '500', '100', '50', '10', '5', '1')
 
 
+def clean_cash_register_float(value):
+    """Validates a {denomination: count} float and returns it with every
+    float denomination present (missing/blank → 0), non-negative integers only."""
+    if not isinstance(value, dict):
+        raise serializers.ValidationError({'cash_register_float': ['Must be an object.']})
+    unknown = sorted(set(map(str, value)) - set(CashRegisterDefaults.FLOAT_DENOMINATIONS))
+    if unknown:
+        raise serializers.ValidationError({
+            'cash_register_float': [f'unknown-denomination:{key}' for key in unknown],
+        })
+    cleaned = {}
+    for denomination in CashRegisterDefaults.FLOAT_DENOMINATIONS:
+        raw = value.get(denomination, 0)
+        try:
+            count = Decimal(str(raw if raw not in (None, '') else 0))
+        except (InvalidOperation, TypeError, ValueError):
+            raise serializers.ValidationError({'cash_register_float': [f'invalid-count:{denomination}']})
+        if count < 0 or count != count.to_integral_value():
+            raise serializers.ValidationError({'cash_register_float': [f'non-negative-integer-required:{denomination}']})
+        cleaned[denomination] = int(count)
+    return cleaned
+
+
 class CashRegisterDefaultsSerializer(serializers.ModelSerializer):
     class Meta:
         model = CashRegisterDefaults
@@ -42,7 +65,7 @@ class DailyReportSerializer(serializers.ModelSerializer):
             'id', 'branch', 'date', 'person_in_charge',
             'total_revenue', 'total_customers', 'group_count',
             'morning_revenue', 'morning_customers', 'morning_group_count',
-            'payment_amounts', 'expenses', 'cash_register_counts', 'cash_remaining',
+            'payment_amounts', 'expenses', 'cash_register_counts', 'cash_register_float', 'cash_remaining',
             'updated_by', 'updated_at',
         ]
         read_only_fields = ['updated_by', 'updated_at', 'cash_remaining']
@@ -123,6 +146,12 @@ class DailyReportSerializer(serializers.ModelSerializer):
                 })
             cleaned_cash_counts[denomination] = int(count)
         attrs['cash_register_counts'] = cleaned_cash_counts
+
+        # Only validated when the client actually sent it — a client that
+        # predates the field (e.g. an old offline draft) must leave the
+        # stored float alone rather than have it reset to zeros.
+        if 'cash_register_float' in attrs:
+            attrs['cash_register_float'] = clean_cash_register_float(attrs['cash_register_float'])
 
         expenses = attrs.get('expenses', self.instance.expenses if self.instance else []) or []
         for index, expense in enumerate(expenses):

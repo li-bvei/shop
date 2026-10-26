@@ -1,5 +1,6 @@
 from django.contrib.auth.hashers import check_password
 from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import viewsets
 from rest_framework.decorators import action
@@ -40,6 +41,26 @@ class DailyReportViewSet(BranchScopedQuerysetMixin, viewsets.ModelViewSet):
         date = serializer.validated_data.get('date') or serializer.instance.date
         self._enforce_report_lock(date)
         super().perform_update(serializer)
+
+    @action(detail=False, methods=['get'])
+    def previous(self, request):
+        """GET /api/daily-reports/previous/?branch=<id>&date=YYYY-MM-DD —
+        the most recent report strictly before `date` for the branch (a
+        0-or-1 element list, same shape as the list endpoint). A new day's
+        report reads its starting cash-register float from this, and the
+        screen/PDF derive the prior day's carried difference from it."""
+        date = request.query_params.get('date')
+        if not date:
+            raise ValidationError({'date': ['This field is required.']})
+        qs = self.get_queryset()
+        branch_id = request.query_params.get('branch')
+        if branch_id:
+            qs = qs.filter(branch_id=branch_id)
+        try:
+            report = qs.filter(date__lt=date).order_by('-date').first()
+        except (ValueError, TypeError, DjangoValidationError):
+            raise ValidationError({'date': ['Invalid date.']})
+        return Response([self.get_serializer(report).data] if report else [])
 
     @action(detail=False, methods=['get'])
     def expense_suggestions(self, request):

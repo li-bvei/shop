@@ -95,6 +95,36 @@ class CashCalculationTests(ApiTestCase):
         report = DailyReport.objects.get(id=response.data['id'])
         self.assertEqual(report.payment_amounts[str(cash.id)], -1)
 
+    def test_resaving_a_negative_cash_day_is_accepted(self):
+        """Cash can be stored negative; both a client that echoes it back and a
+        PATCH that omits payment_amounts entirely must still save."""
+        credit = PaymentMethodDef.objects.get(branch=self.branch_a, code='creditCard')
+        cash = PaymentMethodDef.objects.get(branch=self.branch_a, protected=True)
+        self.login_as(self.branch_a_user)
+        created = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-02-03', 'total_revenue': 100,
+            'payment_amounts': {str(credit.id): 150},
+        }, format='json')
+        self.assertEqual(created.status_code, 201, created.data)
+        report_id = created.data['id']
+        self.assertEqual(DailyReport.objects.get(id=report_id).payment_amounts[str(cash.id)], -50)
+        echoed = self.client.patch(f'/api/daily-reports/{report_id}/', {
+            'total_revenue': 100, 'payment_amounts': {str(cash.id): -50, str(credit.id): 160},
+        }, format='json')
+        self.assertEqual(echoed.status_code, 200, echoed.data)
+        self.assertEqual(DailyReport.objects.get(id=report_id).payment_amounts[str(cash.id)], -60)
+        omitted = self.client.patch(f'/api/daily-reports/{report_id}/', {'total_customers': 3}, format='json')
+        self.assertEqual(omitted.status_code, 200, omitted.data)
+
+    def test_non_cash_negative_amount_is_still_rejected(self):
+        credit = PaymentMethodDef.objects.get(branch=self.branch_a, code='creditCard')
+        self.login_as(self.branch_a_user)
+        resp = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-02-04', 'total_revenue': 100,
+            'payment_amounts': {str(credit.id): -1},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
     def test_cash_register_counts_are_saved_and_normalized(self):
         self.login_as(self.branch_a_user)
         response = self.client.post('/api/daily-reports/', {

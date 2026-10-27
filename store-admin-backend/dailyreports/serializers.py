@@ -105,14 +105,20 @@ class DailyReportSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'payment_amounts': [f'unknown-payment-method:{key}' for key in unknown]})
         cleaned = {}
         for key, value in raw.items():
+            # The cash row is always recomputed server-side (DailyReport.save)
+            # and may legitimately be negative, so whatever the client echoes
+            # back for it (or what is already stored) is ignored, not
+            # validated — checking it first made every re-save of a
+            # negative-cash day fail with non-negative-yen-required.
+            if methods[str(key)].protected:
+                continue
             try:
                 amount = Decimal(str(value))
             except (InvalidOperation, TypeError, ValueError):
                 raise serializers.ValidationError({'payment_amounts': [f'invalid-amount:{key}']})
             if amount < 0 or amount != amount.to_integral_value():
                 raise serializers.ValidationError({'payment_amounts': [f'non-negative-yen-required:{key}']})
-            if not methods[str(key)].protected:
-                cleaned[str(key)] = int(amount)
+            cleaned[str(key)] = int(amount)
         # No cap against total_revenue: computed cash may legitimately go
         # negative (expenses paid out of pocket, a short previous day).
         attrs['payment_amounts'] = cleaned

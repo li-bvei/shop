@@ -14,6 +14,7 @@
 
 - **根因（保存后刷新没变化）**：后端 `DailyReportSerializer.validate` 规定"非现金支付方式合计不能超过売上"，超过即 400，数据完全没存；前端又把 400 当作"意外错误"弹泛泛提示，看起来像"改了没生效"。
 - **现金允许为负**：删除上述校验（报销多了、前一天钱不够都会让现金为负，这是合法状态）。原测试 `test_non_cash_total_cannot_make_computed_cash_negative` 改为 `test_non_cash_total_may_exceed_revenue_and_cash_goes_negative`。保存被 400 拒绝时前端现在显示服务器给出的具体原因（`saveRejectedText`），不再只弹泛泛提示。
+- **负现金日报再保存报 `non-negative-yen-required:<现金id>`（已修）**：现金可为负后，库里存的「現金」项为负；再次打开该日报，前端会把它原样回传（或 PATCH 不带 payment_amounts 时用库里的旧值），而序列化器先做「不能为负」检查、后判断是否是自动计算的现金行，导致 400。现改为先跳过现金行（它本来就由 `DailyReport.save()` 重算），非现金项为负仍然拒绝。新增测试 `test_resaving_a_negative_cash_day_is_accepted`、`test_non_cash_negative_amount_is_still_rejected`。
 - **昨日不足分：自动带入、可手动改**：新增 `PaymentMethodDef.auto_source`（`'previous_shortage'`）。迁移 `paymentmethods.0003` 把现有名称为「昨日不足分」的自定义支付方式标记出来；之后新建的同名行、新分店的默认支付方式（`DEFAULT_METHOD_SPECS` 第 9 项 `previousShortage`）也会自动标记。该标记**只用于前端预填**，行本身仍是普通的、可手动输入/改名/删除的非现金支付方式，后端按客户端传来的金额原样保存（不覆盖、不级联改其他日期）。
 - **预填口径**：还没保存过的新日期（且本地没有该日草稿），该行预填 max(0, −前一份日报的「本日の現金残高」)；前一份指**更早的最近一份日报**（店休日不断链，与备用金预填同一规则），前一天不为负则 0；本地有前一天未同步草稿时用草稿算。已保存的日报显示服务器存的值，之后改前一天不会回头改它（要更新需手动改）。
 - 验证：后端 `manage.py test dailyreports paymentmethods` 58 项通过（`PreviousShortageTests`：自动标记、同名行标记、手填 27881 原样保存且现金相应减少、改某一天不改其他日期的该行）；vue-tsc/eslint 通过；本地真实浏览器：10-26 新日期预填 ¥3,000，可编辑，改成 27,881（売上 ¥100,000）保存后刷新仍为 27,881，现金 ¥72,119。
@@ -28,7 +29,7 @@
 - 屏幕底部差额区新增「前日からの繰越差額 / 本日発生差額」，与 PDF/印刷同一函数 `computeCashCarryover`；前一天没有日报时显示「前日の日報がないため…」。PDF/印刷里前一天的差额也改用前一天自己的备用金，不再用今天的默认值。历史记录编辑弹窗里同样显示；旧快照（无备用金字段）编辑时取线上日报当前备用金，避免重存把它清零。离线草稿若不含备用金，保存时不提交该字段（服务器保留原值）。
 - 手机端日报：备用金 stepper 在每个小额面额下（绑定当天日报），「设置」折叠块只剩レジ固定金額；删除无用 i18n `mIncludesDefault`，`mCashSettings` 文案去掉「デフォルト枚数」。
 - 验证：后端 `manage.py test dailyreports` 36 项通过（新增 per-report float、局部 PATCH 不重置、校验、previous 接口、迁移回填函数）；前端 vue-tsc/eslint 通过；本地真实浏览器：新一天自动带入前一天备用金、改小当天不影响前一天、清空输入不再 400、PDF 与屏幕一致（1 页）、手机端 stepper 与繰越差额显示正常。
-- **顺带发现、未处理**：日报「売上」留空直接保存时，`/api/daily-report-history/` 因 `total_revenue: null` 返回 400（日报本身已保存成功，仅历史快照没写入）。非本次引入。
+- **已修复（2026-10-27）**：日报「売上」留空（进行中的当天）直接保存时，`/api/daily-report-history/` 因 `total_revenue: null` 返回 400——日报本身已保存成功，但前端把这个 400 当作保存失败，弹出错误且不执行后续的清草稿/刷新。现在历史快照里 `total_revenue` 空值按 0 提交（`api/dailyReport.ts` `saveDailyReportHistorySnapshot`）。
 - 部署（**含 migration，`docker compose up` 不会自动执行迁移**，必须单独跑；顺序：拉取 → 构建 → 迁移 → 启动）：
   ```
   cd /www/wwwroot/shop

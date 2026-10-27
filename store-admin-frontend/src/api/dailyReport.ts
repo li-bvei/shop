@@ -214,7 +214,9 @@ export async function saveDailyReportHistorySnapshot(payload: SaveHistorySnapsho
     ...(payload.branchId ? { branch: payload.branchId } : {}),
     date: payload.date,
     person_in_charge: payload.data.personInCharge ? Number(payload.data.personInCharge) : null,
-    total_revenue: payload.data.totalRevenue,
+    // 売上 is still blank on an in-progress day (null) — the column is NOT
+    // NULL, and a 400 here made a save that had already succeeded look failed.
+    total_revenue: payload.data.totalRevenue ?? 0,
     cash_remaining: payload.cashRemaining,
     data: payload.data,
   })

@@ -56,6 +56,10 @@ export interface PaymentMethodDef {
   customName?: string
   sortOrder: number
   protected: boolean
+  /** 'previous_shortage' for the 昨日不足分 row: its daily-report amount is
+   * never typed — the server fills it from the previous report's shortfall.
+   * '' for an ordinary method. */
+  autoSource: string
   /** False once "deleted" — the row itself is kept (not hard-deleted) so
    * historical daily-report amounts filed under its id can still resolve
    * to a name in monthly/yearly reports instead of showing a bare number.
@@ -74,6 +78,7 @@ interface PaymentMethodDto {
   sort_order: number
   protected: boolean
   active: boolean
+  auto_source?: string
 }
 
 function fromPaymentMethodDto(dto: PaymentMethodDto): PaymentMethodDef {
@@ -85,6 +90,7 @@ function fromPaymentMethodDto(dto: PaymentMethodDto): PaymentMethodDef {
     customName: dto.custom_name,
     sortOrder: dto.sort_order,
     protected: dto.protected,
+    autoSource: dto.auto_source ?? '',
     active: dto.active,
   }
 }

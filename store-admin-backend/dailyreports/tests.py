@@ -83,14 +83,17 @@ class CashCalculationTests(ApiTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(DailyReport.objects.filter(date='2026-02-01').exists())
 
-    def test_non_cash_total_cannot_make_computed_cash_negative(self):
+    def test_non_cash_total_may_exceed_revenue_and_cash_goes_negative(self):
         credit = PaymentMethodDef.objects.get(branch=self.branch_a, code='creditCard')
+        cash = PaymentMethodDef.objects.get(branch=self.branch_a, protected=True)
         self.login_as(self.branch_a_user)
         response = self.client.post('/api/daily-reports/', {
-            'date': '2026-02-03', 'total_revenue': 100,
+            'branch': self.branch_a.id, 'date': '2026-02-03', 'total_revenue': 100,
             'payment_amounts': {str(credit.id): 101},
         }, format='json')
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 201, response.data)
+        report = DailyReport.objects.get(id=response.data['id'])
+        self.assertEqual(report.payment_amounts[str(cash.id)], -1)
 
     def test_cash_register_counts_are_saved_and_normalized(self):
         self.login_as(self.branch_a_user)
@@ -415,3 +418,47 @@ class ReportLockTests(ApiTestCase):
         self.login_as(self.branch_a_user)
         resp = self.client.post('/api/daily-reports-unlock/', {'password': 'anything'}, format='json')
         self.assertEqual(resp.status_code, 404)
+
+
+class PreviousShortageTests(ApiTestCase):
+    """昨日不足分 is an ordinary hand-editable non-cash row; the only thing that
+    marks it is `auto_source`, which tells the frontend to pre-fill it from the
+    previous day. The server stores whatever amount is sent."""
+
+    def setUp(self):
+        super().setUp()
+        self.cash = PaymentMethodDef.objects.get(branch=self.branch_a, protected=True)
+        self.auto = PaymentMethodDef.objects.get(branch=self.branch_a, code='previousShortage')
+        self.login_as(self.branch_a_user)
+
+    def test_seeded_row_is_flagged_auto(self):
+        self.assertEqual(self.auto.auto_source, 'previous_shortage')
+
+    def test_rows_named_like_the_manual_one_are_flagged_on_creation(self):
+        manual = PaymentMethodDef.objects.create(branch=self.branch_a, code='custom-1', custom_name='昨日不足分')
+        self.assertEqual(manual.auto_source, 'previous_shortage')
+        other = PaymentMethodDef.objects.create(branch=self.branch_a, code='custom-2', custom_name='商品券')
+        self.assertEqual(other.auto_source, '')
+
+    def test_hand_entered_amount_is_saved_as_is_and_lowers_cash(self):
+        resp = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-10-02', 'total_revenue': 10000,
+            'payment_amounts': {str(self.auto.id): 27881},
+        }, format='json')
+        self.assertEqual(resp.status_code, 201, resp.data)
+        report = DailyReport.objects.get(id=resp.data['id'])
+        self.assertEqual(report.payment_amounts[str(self.auto.id)], 27881)
+        self.assertEqual(report.payment_amounts[str(self.cash.id)], 10000 - 27881)
+
+    def test_editing_a_day_never_rewrites_another_days_amount(self):
+        day1 = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-10-01', 'total_revenue': 5000,
+        }, format='json')
+        day2 = self.client.post('/api/daily-reports/', {
+            'branch': self.branch_a.id, 'date': '2026-10-02', 'total_revenue': 10000,
+            'payment_amounts': {str(self.auto.id): 1234},
+        }, format='json')
+        self.client.patch(f"/api/daily-reports/{day1.data['id']}/", {
+            'expenses': [{'itemName': 'x', 'amount': 9000, 'purpose': ''}],
+        }, format='json')
+        self.assertEqual(DailyReport.objects.get(id=day2.data['id']).payment_amounts[str(self.auto.id)], 1234)

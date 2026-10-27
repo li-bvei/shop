@@ -10,6 +10,15 @@
 - `docs/ai-handoff/05_TESTS_AND_RISKS.md` 是 2026-09-14 一次独立审计留下的记录，审计范围覆盖到 `960bbac`；其中 P1-01（批量替换空字符串/日期校验）和 P1-08（reconcile 命令事务边界）已在 `1fc5fa1` 修复，其余条目仍待处理，见该文件本身。
 - **本文档撰写之后（2026-09-19 ～ 09-22）还有几轮未在本文件其余章节回填的改动**（手机端响应式布局、供应商聚合加载改用后端已有字段、支付方式改成软删除、月度经营新增年度切换与 PDF、日报 PDF 重做）——这些改动现已进入 Git 版本管理；下面单独列一节说明日报 PDF，其余批次尚未完整回填，接手前建议同时查看 `git log`，不要只依赖本文档。
 
+## 2026-10-27 日报：现金允许为负 + 「昨日不足分」支付方式自动取前一天数据（已实现，未提交/未部署，含 1 个新 migration）
+
+- **根因（保存后刷新没变化）**：后端 `DailyReportSerializer.validate` 规定"非现金支付方式合计不能超过売上"，超过即 400，数据完全没存；前端又把 400 当作"意外错误"弹泛泛提示，看起来像"改了没生效"。
+- **现金允许为负**：删除上述校验（报销多了、前一天钱不够都会让现金为负，这是合法状态）。原测试 `test_non_cash_total_cannot_make_computed_cash_negative` 改为 `test_non_cash_total_may_exceed_revenue_and_cash_goes_negative`。保存被 400 拒绝时前端现在显示服务器给出的具体原因（`saveRejectedText`），不再只弹泛泛提示。
+- **昨日不足分：自动带入、可手动改**：新增 `PaymentMethodDef.auto_source`（`'previous_shortage'`）。迁移 `paymentmethods.0003` 把现有名称为「昨日不足分」的自定义支付方式标记出来；之后新建的同名行、新分店的默认支付方式（`DEFAULT_METHOD_SPECS` 第 9 项 `previousShortage`）也会自动标记。该标记**只用于前端预填**，行本身仍是普通的、可手动输入/改名/删除的非现金支付方式，后端按客户端传来的金额原样保存（不覆盖、不级联改其他日期）。
+- **预填口径**：还没保存过的新日期（且本地没有该日草稿），该行预填 max(0, −前一份日报的「本日の現金残高」)；前一份指**更早的最近一份日报**（店休日不断链，与备用金预填同一规则），前一天不为负则 0；本地有前一天未同步草稿时用草稿算。已保存的日报显示服务器存的值，之后改前一天不会回头改它（要更新需手动改）。
+- 验证：后端 `manage.py test dailyreports paymentmethods` 58 项通过（`PreviousShortageTests`：自动标记、同名行标记、手填 27881 原样保存且现金相应减少、改某一天不改其他日期的该行）；vue-tsc/eslint 通过；本地真实浏览器：10-26 新日期预填 ¥3,000，可编辑，改成 27,881（売上 ¥100,000）保存后刷新仍为 27,881，现金 ¥72,119。
+- 部署（含新 migration `paymentmethods.0003`，`docker compose up` 不会自动迁移，必须单独跑）：`cd /www/wwwroot/shop` → `git pull --ff-only origin main` → `docker compose build backend frontend` → `docker compose run --rm backend python manage.py migrate` → `docker compose up -d`。
+
 ## 2026-10-26 日报备用金（零钱底数）改为每张日报自己保存；屏幕显示前日繰越差额（已实现，未提交/未部署，含 1 个 migration）
 
 - **原设计的问题**：`CashRegisterDefaults.denomination_defaults` 是分店级的全局值，显示时才加到各面额「枚数」上、不存进日报。结果：①当天备用金只能比默认值多、不能少；②改一次默认值，09-15 之后所有已保存日报的现金合计都会变；③默认值输入框改完即时保存，容易误改。

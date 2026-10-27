@@ -466,7 +466,14 @@ async function loadPreviousCashDay(branch: string, date: string) {
   } else if (priorIsYesterday) {
     carryDay = { date: previousDate, cashRegisterCounts: prior!.cashRegisterCounts, cashRegisterFloat: prior!.cashRegisterFloat }
   }
-  return { carryDay, prefillFloat }
+  // 本日の現金残高 of the day before, for the auto 昨日不足分 row of an unsaved
+  // report: the local draft when there is one (it's newer than the server),
+  // otherwise the server's own figure for the latest earlier report.
+  function previousCashRemaining(methods: PaymentMethodDef[]): number | null {
+    if (draft) return computeDerived(normalizeDailyReportFormData(draft.data), methods).cashRemaining
+    return prior ? prior.cashRemaining : null
+  }
+  return { carryDay, prefillFloat, previousCashRemaining }
 }
 
 /**
@@ -621,6 +628,14 @@ async function loadReport() {
   // one) keeps its own; a day nobody has saved yet starts from the previous
   // report's float, falling back to the branch's old default only when there
   // is nothing earlier to read (first report of a branch).
+  // 昨日不足分 (the auto payment row) of a day nobody has saved yet is the
+  // previous day's shortfall; a saved report keeps what the server stored.
+  const autoMethod = methods.find((m) => m.autoSource && m.active)
+  if (autoMethod && seed.id === null && !draft) {
+    const remaining = previous.previousCashRemaining(methods)
+    reportForm.paymentAmounts[String(autoMethod.id)] = remaining !== null && remaining < 0 ? -remaining : 0
+  }
+
   const ownFloat = floatIsRecorded(source.cashRegisterFloat) ? source.cashRegisterFloat : null
   const savedFloat = seed.id !== null ? seed.cashRegisterFloat : null
   reportForm.cashRegisterFloat = {
@@ -662,6 +677,15 @@ watch([branchId, reportDate], () => {
   loadReport()
 })
 
+/** The server's validation reason for a rejected save. Without this a 400
+ * only reached the generic "unexpected error" toast, so nothing told the user
+ * the amounts had NOT been saved (and why) — it just looked like the edit
+ * silently didn't stick after a refresh. */
+function saveRejectedText(err: ApiError) {
+  const reasons = err.messages()
+  return reasons.length ? `${t('dailyReport.saveRejected')}${reasons.join(' / ')}` : t('common.unexpectedError')
+}
+
 async function handleSubmit() {
   submitting.value = true
   try {
@@ -690,6 +714,10 @@ async function handleSubmit() {
         // instead of silently retrying as if it were a network blip.
         mainUnlockToken.value = null
         ElMessage.error(t('dailyReport.reportLockExpired'))
+        return
+      }
+      if (err instanceof ApiError && err.status === 400) {
+        ElMessage.error(saveRejectedText(err))
         return
       }
       if (!isNetworkFailure(err)) throw err
@@ -851,6 +879,10 @@ async function handleSaveHistoryEdit() {
       if (err instanceof ApiError && err.status === 403) {
         historyEditUnlockToken.value = null
         ElMessage.error(t('dailyReport.reportLockExpired'))
+        return
+      }
+      if (err instanceof ApiError && err.status === 400) {
+        ElMessage.error(saveRejectedText(err))
         return
       }
       throw err

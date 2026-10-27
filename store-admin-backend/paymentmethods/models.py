@@ -1,6 +1,15 @@
 from django.db import models
 
 
+# A method whose daily-report amount is never typed in: it is the previous
+# report's cash shortfall, filled in server-side (see
+# dailyreports.models.DailyReport.save). Recognised by this flag, which is set
+# on creation for a row named like PREVIOUS_SHORTAGE_NAMES (the chain's
+# existing hand-made "昨日不足分" row) or seeded for new branches.
+AUTO_PREVIOUS_SHORTAGE = 'previous_shortage'
+PREVIOUS_SHORTAGE_NAMES = {'昨日不足分'}
+
+
 class PaymentMethodDef(models.Model):
     """Per-branch master data: which payment methods are available on that
     branch's daily report form. `protected=True` marks the auto-calculated
@@ -22,6 +31,9 @@ class PaymentMethodDef(models.Model):
     # the branch's active list, but still resolvable by id everywhere that
     # looks up historical amounts (dashboard/analysis.py in particular).
     active = models.BooleanField(default=True)
+    # '' for an ordinary hand-entered method; AUTO_PREVIOUS_SHORTAGE for the
+    # auto-calculated 昨日不足分 row (amount comes from the previous day).
+    auto_source = models.CharField(max_length=30, blank=True, default='')
 
     class Meta:
         ordering = ['branch_id', 'sort_order', 'code']
@@ -31,6 +43,11 @@ class PaymentMethodDef(models.Model):
 
     def __str__(self):
         return self.custom_name or self.i18n_key or self.code
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and not self.auto_source and self.custom_name.strip() in PREVIOUS_SHORTAGE_NAMES:
+            self.auto_source = AUTO_PREVIOUS_SHORTAGE
+        super().save(*args, **kwargs)
 
 
 DEFAULT_METHOD_SPECS = [
@@ -42,7 +59,10 @@ DEFAULT_METHOD_SPECS = [
     ('wechat', 'paymentMethod.wechat', 6, False),
     ('osakaCoupon', 'paymentMethod.osakaCoupon', 7, False),
     ('onCredit', 'paymentMethod.onCredit', 8, False),
+    ('previousShortage', 'paymentMethod.previousShortage', 9, False),
 ]
+
+_AUTO_SOURCE_BY_CODE = {'previousShortage': AUTO_PREVIOUS_SHORTAGE}
 
 
 def seed_default_payment_methods(branch):
@@ -51,6 +71,7 @@ def seed_default_payment_methods(branch):
     PaymentMethodDef.objects.bulk_create(
         PaymentMethodDef(
             branch=branch, code=code, i18n_key=i18n_key, sort_order=sort_order, protected=protected,
+            auto_source=_AUTO_SOURCE_BY_CODE.get(code, ''),
         )
         for code, i18n_key, sort_order, protected in DEFAULT_METHOD_SPECS
     )

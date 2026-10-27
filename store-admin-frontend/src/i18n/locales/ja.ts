@@ -284,6 +284,7 @@ export default {
     reportLockPasswordPrompt: '解除パスワードを入力してください',
     reportLockWrongPassword: 'パスワードが違います',
     reportLockExpired: '解除の有効期限が切れました。もう一度パスワードを入力してください',
+    saveRejected: '保存できませんでした：',
   },
   paymentMethod: {
     cash: '現金',
@@ -295,6 +296,7 @@ export default {
     points: 'ポイント',
     emoney: '電子マネー',
     onCredit: '掛金',
+    previousShortage: '昨日不足分',
   },
   suppliers: {
     pageTitle: '仕入先管理',

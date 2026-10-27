@@ -284,6 +284,7 @@ export default {
     reportLockPasswordPrompt: '请输入解锁密码',
     reportLockWrongPassword: '密码错误',
     reportLockExpired: '解锁已过期，请重新输入密码',
+    saveRejected: '未能保存：',
   },
   // Payment method names are kept in their original Japanese/brand form even
   // in Chinese mode — staff recognize 電子マネー/大阪プレミアム券/掛金 on
@@ -299,6 +300,7 @@ export default {
     points: 'ポイント',
     emoney: '電子マネー',
     onCredit: '掛金',
+    previousShortage: '昨日不足分',
   },
   suppliers: {
     pageTitle: '供应商',

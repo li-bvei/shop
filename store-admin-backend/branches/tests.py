@@ -28,8 +28,9 @@ class BranchCreationSeedsPaymentMethodsTests(ApiTestCase):
         }, format='json')
         self.assertEqual(resp.status_code, 201)
         methods = PaymentMethodDef.objects.filter(branch_id='new-branch')
-        self.assertEqual(methods.count(), 8)
+        self.assertEqual(methods.count(), 9)
         self.assertTrue(methods.filter(protected=True).exists())
+        self.assertEqual(methods.get(code='previousShortage').auto_source, 'previous_shortage')
 
 
 class BranchPermissionBoundaryTests(ApiTestCase):

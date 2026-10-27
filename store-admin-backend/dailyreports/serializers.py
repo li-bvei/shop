@@ -113,9 +113,8 @@ class DailyReportSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'payment_amounts': [f'non-negative-yen-required:{key}']})
             if not methods[str(key)].protected:
                 cleaned[str(key)] = int(amount)
-        total_revenue = attrs.get('total_revenue', self.instance.total_revenue if self.instance else 0)
-        if sum(cleaned.values()) > total_revenue:
-            raise serializers.ValidationError({'payment_amounts': ['non-cash-payments-exceed-total-revenue']})
+        # No cap against total_revenue: computed cash may legitimately go
+        # negative (expenses paid out of pocket, a short previous day).
         attrs['payment_amounts'] = cleaned
 
         raw_cash_counts = attrs.get(

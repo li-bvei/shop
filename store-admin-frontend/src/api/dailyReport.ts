@@ -16,15 +16,19 @@ export interface DailyReportSeed extends DailyReportFormData {
    * changed underneath an offline-saved draft before syncing it back —
    * see utils/dailyReportDraft.ts. */
   updatedAt: string | null
+  /** 本日の現金残高 as the server computed it (cash − expenses); negative means
+   * the day ended short, which the next day starts out carrying as 昨日不足分. */
+  cashRemaining: number
 }
 
-const EMPTY_SEED: DailyReportFormData & { id: null; updatedAt: null } = {
+const EMPTY_SEED: DailyReportFormData & { id: null; updatedAt: null; cashRemaining: number } = {
   ...normalizeDailyReportFormData({
     cashRegisterCounts: createEmptyCashRegisterCounts(),
     cashRegisterFloat: createEmptyCashRegisterFloat(),
   }),
   id: null,
   updatedAt: null,
+  cashRemaining: 0,
 }
 
 interface DailyReportDto {
@@ -42,6 +46,7 @@ interface DailyReportDto {
   expenses: DailyReportFormData['expenses']
   cash_register_counts?: Record<string, number>
   cash_register_float?: Record<string, number>
+  cash_remaining?: string | number
   updated_at: string
 }
 
@@ -49,6 +54,7 @@ function fromDto(dto: DailyReportDto): DailyReportSeed {
   return {
     id: dto.id,
     updatedAt: dto.updated_at,
+    cashRemaining: Number(dto.cash_remaining ?? 0),
     ...normalizeDailyReportFormData({
       personInCharge: dto.person_in_charge != null ? String(dto.person_in_charge) : '',
       totalRevenue: Number(dto.total_revenue),

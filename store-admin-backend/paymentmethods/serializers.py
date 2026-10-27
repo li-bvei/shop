@@ -6,8 +6,8 @@ from .models import PaymentMethodDef
 class PaymentMethodDefSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentMethodDef
-        fields = ['id', 'branch', 'code', 'custom_name', 'i18n_key', 'sort_order', 'protected', 'active']
-        read_only_fields = ['protected', 'active']
+        fields = ['id', 'branch', 'code', 'custom_name', 'i18n_key', 'sort_order', 'protected', 'active', 'auto_source']
+        read_only_fields = ['protected', 'active', 'auto_source']
 
     def validate(self, attrs):
         if self.instance and self.instance.protected:

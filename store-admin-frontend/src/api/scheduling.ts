@@ -337,6 +337,11 @@ export async function deleteShift(id: string): Promise<void> {
 // ---- Actual work records ---------------------------------------------
 
 export type ActualWorkStatus = 'pending' | 'manager_confirmed' | 'admin_locked'
+/** Where a day's attendance times came from. 'plan' = brought forward from
+ * the published schedule, 'punch' = derived from the employee's own clock
+ * events, 'manual' = typed by a manager, 'correction' = set by an approved
+ * correction request. */
+export type ActualWorkSource = 'plan' | 'punch' | 'manual' | 'correction'
 
 export interface ActualWorkRecord {
   id: string
@@ -359,6 +364,14 @@ export interface ActualWorkRecord {
   plannedEnd: string | null
   plannedBreakMinutes: number | null
   plannedCrossesMidnight: boolean | null
+  /** Where this day's times came from — punch-derived days are the ones a
+   * manager has not looked at yet. */
+  source: ActualWorkSource
+  /** Deviation from the planned shift, past the branch's grace period.
+   * Both 0 for a day that went to plan, an unscheduled day, or an
+   * absence. */
+  lateMinutes: number
+  earlyLeaveMinutes: number
 }
 
 interface ActualWorkRecordDto {
@@ -379,6 +392,9 @@ interface ActualWorkRecordDto {
   planned_end: string | null
   planned_break_minutes: number | null
   planned_crosses_midnight: boolean | null
+  source: ActualWorkSource
+  late_minutes: number
+  early_leave_minutes: number
 }
 
 function fromActualWorkDto(dto: ActualWorkRecordDto): ActualWorkRecord {
@@ -400,12 +416,18 @@ function fromActualWorkDto(dto: ActualWorkRecordDto): ActualWorkRecord {
     plannedEnd: dto.planned_end,
     plannedBreakMinutes: dto.planned_break_minutes,
     plannedCrossesMidnight: dto.planned_crosses_midnight,
+    source: dto.source,
+    lateMinutes: dto.late_minutes,
+    earlyLeaveMinutes: dto.early_leave_minutes,
   }
 }
 
 export async function fetchActualWorkRecords(params: {
   branchId?: string; employeeId?: string; workDate?: string; status?: string
   dateFrom?: string; dateTo?: string
+  /** true = only days needing attention (late, early, absent, unfinished);
+   * false = only days that went to plan. Omit for all. */
+  exception?: boolean
 } = {}): Promise<ActualWorkRecord[]> {
   const query = new URLSearchParams()
   if (params.branchId) query.set('branch', params.branchId)
@@ -414,6 +436,7 @@ export async function fetchActualWorkRecords(params: {
   if (params.status) query.set('status', params.status)
   if (params.dateFrom) query.set('date_from', params.dateFrom)
   if (params.dateTo) query.set('date_to', params.dateTo)
+  if (params.exception !== undefined) query.set('exception', String(params.exception))
   const rows = await http.get<ActualWorkRecordDto[]>(`/actual-work-records/?${query.toString()}`)
   return rows.map(fromActualWorkDto)
 }
@@ -456,4 +479,267 @@ export async function lockActualWorkRecord(id: string): Promise<ActualWorkRecord
 export async function unlockActualWorkRecord(id: string, reason: string): Promise<ActualWorkRecord> {
   const dto = await http.post<ActualWorkRecordDto>(`/actual-work-records/${id}/unlock/`, { reason })
   return fromActualWorkDto(dto)
+}
+
+// ---- Attendance: clock punches ----------------------------------------
+
+export type PunchKind = 'clock_in' | 'clock_out' | 'break_start' | 'break_end'
+export type PunchSource = 'self' | 'manager'
+
+export interface AttendancePunch {
+  id: string
+  employeeId: string
+  employeeName: string
+  branchId: string
+  workDate: string
+  kind: PunchKind
+  /** ISO datetime, always the server's clock — never the device's. */
+  punchedAt: string
+  source: PunchSource
+  note: string
+}
+
+interface AttendancePunchDto {
+  id: number
+  employee: number
+  employee_name: string
+  branch: string
+  work_date: string
+  kind: PunchKind
+  punched_at: string
+  source: PunchSource
+  note: string
+}
+
+function fromPunchDto(dto: AttendancePunchDto): AttendancePunch {
+  return {
+    id: String(dto.id),
+    employeeId: String(dto.employee),
+    employeeName: dto.employee_name,
+    branchId: dto.branch,
+    workDate: dto.work_date,
+    kind: dto.kind,
+    punchedAt: dto.punched_at,
+    source: dto.source,
+    note: dto.note,
+  }
+}
+
+/** Which punch the employee may make next, as the server sees it. The UI
+ * disables rather than hides the others, so the screen always shows the
+ * full set of actions and never looks broken. */
+export interface PunchState {
+  workDate: string
+  employee: number
+  clockedIn: boolean
+  clockedOut: boolean
+  onBreak: boolean
+  canClockIn: boolean
+  canClockOut: boolean
+  canStartBreak: boolean
+  canEndBreak: boolean
+  punchCount: number
+  selfPunchEnabled: boolean
+}
+
+export async function fetchPunchState(employeeId?: string): Promise<PunchState> {
+  const query = employeeId ? `?employee=${encodeURIComponent(employeeId)}` : ''
+  return http.get<PunchState>(`/attendance-punches/today/${query}`)
+}
+
+export async function fetchAttendancePunches(params: {
+  branchId?: string; employeeId?: string; workDate?: string
+  dateFrom?: string; dateTo?: string
+} = {}): Promise<AttendancePunch[]> {
+  const query = new URLSearchParams()
+  if (params.branchId) query.set('branch', params.branchId)
+  if (params.employeeId) query.set('employee', params.employeeId)
+  if (params.workDate) query.set('work_date', params.workDate)
+  if (params.dateFrom) query.set('date_from', params.dateFrom)
+  if (params.dateTo) query.set('date_to', params.dateTo)
+  const rows = await http.get<AttendancePunchDto[]>(`/attendance-punches/?${query.toString()}`)
+  return rows.map(fromPunchDto)
+}
+
+/** `employeeId` is only for a manager punching on someone's behalf — a
+ * staff account always punches for itself and the server ignores any id it
+ * sends. `punched_at` is deliberately never sent: the server clock decides. */
+export async function createAttendancePunch(kind: PunchKind, employeeId?: string): Promise<AttendancePunch> {
+  const payload: Record<string, unknown> = { kind }
+  if (employeeId) payload.employee = Number(employeeId)
+  const dto = await http.post<AttendancePunchDto>('/attendance-punches/', payload)
+  return fromPunchDto(dto)
+}
+
+// ---- Attendance: correction requests ----------------------------------
+
+export type CorrectionStatus = 'pending' | 'approved' | 'rejected' | 'withdrawn'
+
+export interface AttendanceCorrection {
+  id: string
+  employeeId: string
+  employeeName: string
+  branchId: string
+  workDate: string
+  requestedStart: string | null
+  requestedEnd: string | null
+  requestedBreakMinutes: number | null
+  requestedCrossesMidnight: boolean
+  requestedAbsent: boolean
+  reason: string
+  status: CorrectionStatus
+  createdAt: string
+  decidedAt: string | null
+  decisionNote: string
+}
+
+interface AttendanceCorrectionDto {
+  id: number
+  employee: number
+  employee_name: string
+  branch: string
+  work_date: string
+  requested_start: string | null
+  requested_end: string | null
+  requested_break_minutes: number | null
+  requested_crosses_midnight: boolean
+  requested_absent: boolean
+  reason: string
+  status: CorrectionStatus
+  created_at: string
+  decided_at: string | null
+  decision_note: string
+}
+
+function fromCorrectionDto(dto: AttendanceCorrectionDto): AttendanceCorrection {
+  return {
+    id: String(dto.id),
+    employeeId: String(dto.employee),
+    employeeName: dto.employee_name,
+    branchId: dto.branch,
+    workDate: dto.work_date,
+    requestedStart: dto.requested_start ? dto.requested_start.slice(0, 5) : null,
+    requestedEnd: dto.requested_end ? dto.requested_end.slice(0, 5) : null,
+    requestedBreakMinutes: dto.requested_break_minutes,
+    requestedCrossesMidnight: dto.requested_crosses_midnight,
+    requestedAbsent: dto.requested_absent,
+    reason: dto.reason,
+    status: dto.status,
+    createdAt: dto.created_at,
+    decidedAt: dto.decided_at,
+    decisionNote: dto.decision_note,
+  }
+}
+
+export async function fetchAttendanceCorrections(params: {
+  branchId?: string; employeeId?: string; status?: CorrectionStatus
+  dateFrom?: string; dateTo?: string
+} = {}): Promise<AttendanceCorrection[]> {
+  const query = new URLSearchParams()
+  if (params.branchId) query.set('branch', params.branchId)
+  if (params.employeeId) query.set('employee', params.employeeId)
+  if (params.status) query.set('status', params.status)
+  if (params.dateFrom) query.set('date_from', params.dateFrom)
+  if (params.dateTo) query.set('date_to', params.dateTo)
+  const rows = await http.get<AttendanceCorrectionDto[]>(`/attendance-corrections/?${query.toString()}`)
+  return rows.map(fromCorrectionDto)
+}
+
+export async function submitAttendanceCorrection(payload: {
+  workDate: string
+  requestedStart?: string | null
+  requestedEnd?: string | null
+  requestedBreakMinutes?: number | null
+  requestedCrossesMidnight?: boolean
+  requestedAbsent?: boolean
+  reason: string
+  employeeId?: string
+}): Promise<AttendanceCorrection> {
+  const body: Record<string, unknown> = {
+    work_date: payload.workDate,
+    requested_absent: payload.requestedAbsent ?? false,
+    requested_crosses_midnight: payload.requestedCrossesMidnight ?? false,
+    reason: payload.reason,
+  }
+  // Only send the fields actually being requested — the server rejects an
+  // absence that also carries times, and treats "nothing requested" as an
+  // error rather than a no-op request sitting in a manager's queue.
+  if (payload.requestedStart) body.requested_start = payload.requestedStart
+  if (payload.requestedEnd) body.requested_end = payload.requestedEnd
+  if (payload.requestedBreakMinutes != null) body.requested_break_minutes = payload.requestedBreakMinutes
+  if (payload.employeeId) body.employee = Number(payload.employeeId)
+  const dto = await http.post<AttendanceCorrectionDto>('/attendance-corrections/', body)
+  return fromCorrectionDto(dto)
+}
+
+export async function approveAttendanceCorrection(id: string, note = ''): Promise<AttendanceCorrection> {
+  const dto = await http.post<AttendanceCorrectionDto>(`/attendance-corrections/${id}/approve/`, { note })
+  return fromCorrectionDto(dto)
+}
+
+/** The note is required by the server — an employee is owed a reason. */
+export async function rejectAttendanceCorrection(id: string, note: string): Promise<AttendanceCorrection> {
+  const dto = await http.post<AttendanceCorrectionDto>(`/attendance-corrections/${id}/reject/`, { note })
+  return fromCorrectionDto(dto)
+}
+
+export async function withdrawAttendanceCorrection(id: string): Promise<AttendanceCorrection> {
+  const dto = await http.post<AttendanceCorrectionDto>(`/attendance-corrections/${id}/withdraw/`)
+  return fromCorrectionDto(dto)
+}
+
+// ---- Attendance: change log -------------------------------------------
+
+export type AttendanceChangeSource = 'punch' | 'manual' | 'correction' | 'generated' | 'status'
+
+export interface AttendanceChangeLogEntry {
+  id: string
+  employeeId: string
+  employeeName: string
+  branchId: string
+  workDate: string
+  source: AttendanceChangeSource
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+  reason: string
+  changedByName: string | null
+  changedAt: string
+}
+
+interface AttendanceChangeLogDto {
+  id: number
+  employee: number
+  employee_name: string
+  branch: string
+  work_date: string
+  source: AttendanceChangeSource
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+  reason: string
+  changed_by_name: string | null
+  changed_at: string
+}
+
+export async function fetchAttendanceChangeLog(params: {
+  branchId?: string; employeeId?: string; workDate?: string; recordId?: string
+} = {}): Promise<AttendanceChangeLogEntry[]> {
+  const query = new URLSearchParams()
+  if (params.branchId) query.set('branch', params.branchId)
+  if (params.employeeId) query.set('employee', params.employeeId)
+  if (params.workDate) query.set('work_date', params.workDate)
+  if (params.recordId) query.set('record', params.recordId)
+  const rows = await http.get<AttendanceChangeLogDto[]>(`/attendance-change-logs/?${query.toString()}`)
+  return rows.map((dto) => ({
+    id: String(dto.id),
+    employeeId: String(dto.employee),
+    employeeName: dto.employee_name,
+    branchId: dto.branch,
+    workDate: dto.work_date,
+    source: dto.source,
+    before: dto.before,
+    after: dto.after,
+    reason: dto.reason,
+    changedByName: dto.changed_by_name,
+    changedAt: dto.changed_at,
+  }))
 }

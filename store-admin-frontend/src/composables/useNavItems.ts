@@ -1,7 +1,7 @@
 import { computed } from 'vue'
 import {
-  Odometer, Document, Box, OfficeBuilding, User, Setting, TrendCharts, Calendar, Money, Lock,
-  Goods, Files, Present, Postcard, Switch as SwitchIcon,
+  Odometer, Document, Box, OfficeBuilding, User, Setting, TrendCharts, Calendar, Money, Lock, Clock,
+  Goods, Files, Present, Postcard, Compass, QuestionFilled, Switch as SwitchIcon,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -28,6 +28,7 @@ const adminBranchNavItems: NavItem[] = [
   { path: '/inventory', icon: Files, labelKey: 'nav.inventory', feature: 'inventory' },
   { path: '/staff', icon: User, labelKey: 'nav.staff' },
   { path: '/scheduling', icon: Calendar, labelKey: 'nav.scheduling', feature: 'scheduling' },
+  { path: '/attendance', icon: Clock, labelKey: 'nav.attendance', feature: 'scheduling' },
   { path: '/wages', icon: Money, labelKey: 'nav.wages', feature: 'wages' },
   { path: '/promotions', icon: Present, labelKey: 'nav.promotions', feature: 'promotions' },
   { path: '/kiosk/verify', icon: Postcard, labelKey: 'nav.promoVerify', external: true, feature: 'promotions' },
@@ -35,6 +36,7 @@ const adminBranchNavItems: NavItem[] = [
 
 const staffNavItems: NavItem[] = [
   { path: '/my-availability', icon: Calendar, labelKey: 'nav.myAvailability' },
+  { path: '/my-attendance', icon: Clock, labelKey: 'nav.myAttendance', feature: 'scheduling' },
   { path: '/my-shifts', icon: Document, labelKey: 'nav.myShifts', feature: 'scheduling' },
   { path: '/my-wages', icon: Money, labelKey: 'nav.myWages', feature: 'wages' },
   { path: '/kiosk/verify', icon: Postcard, labelKey: 'nav.promoVerify', external: true, feature: 'promotions' },
@@ -63,8 +65,15 @@ export function useNavItems() {
   const systemItems = computed<NavItem[]>(() => {
     if (auth.isSuperuser) return []
     return auth.role === 'staff'
-      ? [{ path: '/my-password', icon: Lock, labelKey: 'nav.myPassword' }]
-      : [{ path: '/settings', icon: Setting, labelKey: 'nav.settings' }]
+      ? [
+          { path: '/guide', icon: QuestionFilled, labelKey: 'nav.guide' },
+          { path: '/my-password', icon: Lock, labelKey: 'nav.myPassword' },
+        ]
+      : [
+          { path: '/guide', icon: QuestionFilled, labelKey: 'nav.guide' },
+          { path: '/demo', icon: Compass, labelKey: 'nav.demo' },
+          { path: '/settings', icon: Setting, labelKey: 'nav.settings' },
+        ]
   })
   return { navItems, systemItems }
 }

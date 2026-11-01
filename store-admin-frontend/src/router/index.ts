@@ -133,6 +133,12 @@ const router = createRouter({
           meta: { roles: ['admin', 'branch'], feature: 'scheduling' },
         },
         {
+          path: 'attendance',
+          name: 'attendance',
+          component: () => import('@/views/AttendanceView.vue'),
+          meta: { roles: ['admin', 'branch'], feature: 'scheduling' },
+        },
+        {
           path: 'wages',
           name: 'wages',
           component: () => import('@/views/WagesView.vue'),
@@ -143,6 +149,25 @@ const router = createRouter({
           name: 'promotions',
           component: () => import('@/views/PromotionsView.vue'),
           meta: { roles: ['admin', 'branch'], feature: 'promotions' },
+        },
+        {
+          // The guided product tour. Open to admin and branch accounts —
+          // it doubles as onboarding for a new customer, not only as a
+          // sales script, and it only ever links to screens the account
+          // can already reach.
+          path: 'demo',
+          name: 'demo',
+          component: () => import('@/views/DemoView.vue'),
+          meta: { roles: ['admin', 'branch'] },
+        },
+        {
+          // The operating guide is open to every signed-in role, including
+          // staff — a staff account's chapters are the ones about its own
+          // screens (see utils/guide/guideContent.ts).
+          path: 'guide',
+          name: 'guide',
+          component: () => import('@/views/GuideView.vue'),
+          meta: { roles: ['admin', 'branch', 'staff'] },
         },
         {
           path: 'settings',
@@ -160,6 +185,12 @@ const router = createRouter({
           path: 'my-shifts',
           name: 'my-shifts',
           component: () => import('@/views/staff/MyShiftsView.vue'),
+          meta: { roles: ['staff'], feature: 'scheduling' },
+        },
+        {
+          path: 'my-attendance',
+          name: 'my-attendance',
+          component: () => import('@/views/staff/MyAttendanceView.vue'),
           meta: { roles: ['staff'], feature: 'scheduling' },
         },
         {

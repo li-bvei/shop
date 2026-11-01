@@ -4,6 +4,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from branches.models import Branch
 from common.features import enabled_features_for_org
+from organizations.demo import is_demo_organization
 from staff.models import StaffMember
 
 from .models import User, UserPreference
@@ -44,6 +45,13 @@ class MeSerializer(serializers.ModelSerializer):
     organizationNameJa = serializers.CharField(source='organization.name_ja', read_only=True)
     branchNameZh = serializers.CharField(source='branch.name_zh', read_only=True, allow_null=True)
     branchNameJa = serializers.CharField(source='branch.name_ja', read_only=True, allow_null=True)
+    # True only inside the sales-demo tenant built by
+    # `manage.py seed_customer_demo`. The frontend uses it to put a standing
+    # "this is sample data" banner on screen, so nobody can mistake a demo
+    # session for their own books. Derived from the Organization code rather
+    # than stored, so it is impossible for a real tenant to acquire it by
+    # editing a row.
+    isDemo = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -51,7 +59,7 @@ class MeSerializer(serializers.ModelSerializer):
             'account', 'displayName', 'role', 'branchId', 'staffMemberId',
             'organizationId', 'organizationNameZh', 'organizationNameJa',
             'branchNameZh', 'branchNameJa',
-            'isSuperuser', 'enabledFeatures',
+            'isSuperuser', 'enabledFeatures', 'isDemo',
         ]
 
     def get_displayName(self, obj):
@@ -62,6 +70,9 @@ class MeSerializer(serializers.ModelSerializer):
 
     def get_enabledFeatures(self, obj):
         return enabled_features_for_org(obj.organization_id)
+
+    def get_isDemo(self, obj):
+        return is_demo_organization(obj.organization if obj.organization_id else None)
 
 
 class UserSerializer(serializers.ModelSerializer):

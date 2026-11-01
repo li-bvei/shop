@@ -98,6 +98,48 @@ export async function renderOffscreenToPdf(filename: string, widthPx: number, bu
   }
 }
 
+/** Class marking one logical report page inside a multi-page document (see
+ * buildPagesInHost). Only the *print* path needs it — the page-break rules
+ * keyed off it live in global.css — but every page carries it so the node
+ * tree a PDF is rasterized from and the node tree the browser paginates are
+ * byte-for-byte the same document. */
+export const REPORT_PAGE_CLASS = 'report-page'
+
+/**
+ * Fills `host` with as many logical report pages as `build` asks for, and
+ * returns them in order. Each page is a `widthPx`-wide node carrying the
+ * shared report base styling (white background, black text, the report
+ * font, the shared padding) — not just the first one. A continuation page
+ * that skipped this would inherit whatever theme colors happen to be active
+ * on <body> (dark mode text on a white page, for instance), since it's a
+ * plain div with nothing else setting its color/background.
+ *
+ * Shared by both report destinations — `renderOffscreenPagesToPdf` (host
+ * off-screen, pages rasterized into a PDF) and a page's print flow (host is
+ * the `.print-only-document` node the browser paginates). That sharing is
+ * the point: the printed document and the downloaded PDF are built by the
+ * same builder into the same node structure, so their content, pagination,
+ * headers and amount formatting cannot drift apart.
+ */
+export function buildPagesInHost(
+  host: HTMLElement,
+  widthPx: number,
+  build: (addPage: () => HTMLDivElement) => void,
+): HTMLDivElement[] {
+  const pages: HTMLDivElement[] = []
+  function addPage(): HTMLDivElement {
+    const page = document.createElement('div')
+    page.className = REPORT_PAGE_CLASS
+    page.style.width = `${widthPx}px`
+    styleReportRoot(page)
+    host.appendChild(page)
+    pages.push(page)
+    return page
+  }
+  build(addPage)
+  return pages
+}
+
 /**
  * Multi-page counterpart of renderOffscreenToPdf: `build` receives an
  * `addPage()` function it can call as many times as it needs logical pages,
@@ -117,24 +159,8 @@ export async function renderOffscreenPagesToPdf(
   host.style.top = '0'
   host.style.left = '-99999px'
   document.body.appendChild(host)
-  const pages: HTMLDivElement[] = []
-  function addPage(): HTMLDivElement {
-    const page = document.createElement('div')
-    page.style.width = `${widthPx}px`
-    // Every page gets the same base styling (white background, black text,
-    // the shared report font, the shared padding) — not just the first one.
-    // A continuation page that skipped this would inherit whatever theme
-    // colors happen to be active on <body> (dark mode text on a white PDF
-    // page, for instance), since it's a plain offscreen div with nothing
-    // else setting its color/background.
-    styleReportRoot(page)
-    host.appendChild(page)
-    pages.push(page)
-    return page
-  }
   try {
-    build(addPage)
-    await downloadElementsAsPdf(pages, filename)
+    await downloadElementsAsPdf(buildPagesInHost(host, widthPx, build), filename)
   } finally {
     document.body.removeChild(host)
   }
@@ -226,4 +252,156 @@ export function reportSectionTitle(text: string): HTMLDivElement {
     fontSize: REPORT_PDF_TEXT.sectionTitle.fontSize, fontWeight: REPORT_PDF_TEXT.sectionTitle.fontWeight,
     marginBottom: '6px', borderBottom: '1px solid #999', paddingBottom: '3px',
   }, text)
+}
+
+// ---------------------------------------------------------------------------
+// Table cells shared by every hand-built report document. The amount cell
+// exists so "right-aligned, tabular-figure, accounting-formatted" is stated
+// exactly once rather than re-declared at each of the ~10 call sites that
+// render money into a report — which is how the daily and monthly reports
+// drifted into showing the same amount two different ways.
+// ---------------------------------------------------------------------------
+
+const CELL_BASE: Partial<CSSStyleDeclaration> = {
+  padding: '5px 7px',
+  borderBottom: '1px solid #ccc',
+  fontSize: REPORT_PDF_TEXT.body.fontSize,
+}
+
+/** A text cell (labels, dates, names) — left-aligned, and allowed to wrap
+ * rather than being clipped, so a long supplier or branch name stays fully
+ * readable in the document instead of ending in an ellipsis. */
+export function reportTextCell(text: string, options: { bold?: boolean } = {}): HTMLTableCellElement {
+  return el('td', {
+    ...CELL_BASE,
+    textAlign: 'left',
+    fontWeight: options.bold ? '700' : '400',
+    wordBreak: 'break-word',
+  }, text)
+}
+
+/**
+ * An amount or count cell. Right-aligned and set in tabular figures
+ * (`fontVariantNumeric`), so digits occupy identical widths and the column
+ * reads as a column of numbers — the thing that makes a negative in
+ * brackets line up under the positives above it. `text` is expected to come
+ * from formatAccountingCurrency/formatAccountingNumber; this function
+ * deliberately does no formatting of its own, so there is exactly one place
+ * that decides how an amount reads (see utils/format.ts).
+ */
+export function reportAmountCell(text: string, options: { bold?: boolean; muted?: boolean } = {}): HTMLTableCellElement {
+  return el('td', {
+    ...CELL_BASE,
+    textAlign: 'right',
+    whiteSpace: 'nowrap',
+    fontVariantNumeric: 'tabular-nums',
+    fontWeight: options.bold ? '800' : '400',
+    ...(options.muted ? { color: '#666' } : {}),
+  }, text)
+}
+
+/** A table header cell, aligned to match the column it heads — an amount
+ * column's header is right-aligned over its own digits, which is what makes
+ * a continuation page's repeated header line up with the rows under it. */
+export function reportHeaderCell(text: string, align: 'left' | 'right' = 'left'): HTMLTableCellElement {
+  return el('th', {
+    padding: '6px 7px',
+    borderBottom: '1.5px solid #333',
+    textAlign: align,
+    fontWeight: '800',
+    fontSize: REPORT_PDF_TEXT.body.fontSize,
+    whiteSpace: align === 'right' ? 'nowrap' : 'normal',
+  }, text)
+}
+
+/**
+ * Flows a sequence of small blocks across as many pages as they need.
+ *
+ * The table-shaped reports paginate by row (see
+ * utils/reports/analysisReport.ts, which has its own fit-whole-section-or
+ * -chunk-by-row logic). A prose document — the in-app guide — has no rows;
+ * it has headings, paragraphs and list items, and wants the plainest
+ * possible rule: keep filling the current page, and start a new one the
+ * moment something no longer fits.
+ *
+ * Callers append at PARAGRAPH granularity, never whole sections. That is
+ * what keeps this simple and correct: every block is comfortably smaller
+ * than a page, so "put it on a fresh page instead" always succeeds. A
+ * block genuinely taller than a printable page would still overflow its
+ * page rather than being split mid-sentence — appendBlock reports that by
+ * returning false so a caller can decide, instead of silently producing a
+ * clipped page.
+ *
+ * `keepWithNext` is how a heading avoids being orphaned at the foot of a
+ * page: the heading and the block after it are measured together, and if
+ * they don't both fit, the heading moves to the next page with its text.
+ */
+export function createPageFlow(
+  addPage: () => HTMLDivElement,
+  options: {
+    widthPx: number
+    /** Drawn at the top of every page after the first. */
+    continuationHeader?: (page: HTMLDivElement, pageNumber: number) => void
+  },
+) {
+  const threshold = estimateUnshrunkHeightPx(options.widthPx)
+  let page = addPage()
+  let pageCount = 1
+  let pendingKeep: HTMLElement[] = []
+
+  function newPage() {
+    page = addPage()
+    pageCount += 1
+    options.continuationHeader?.(page, pageCount)
+  }
+
+  function fits() {
+    return page.scrollHeight <= threshold
+  }
+
+  function place(nodes: HTMLElement[]): boolean {
+    for (const node of nodes) page.appendChild(node)
+    if (fits()) return true
+    for (const node of nodes) page.removeChild(node)
+    newPage()
+    for (const node of nodes) page.appendChild(node)
+    // Still overflowing on a page of its own: the block is taller than a
+    // printable page. Keep it (losing content is worse than one tight
+    // page) and tell the caller.
+    return fits()
+  }
+
+  return {
+    /** Appends `node`. With `keepWithNext`, holds it back until the
+     * following block arrives so the two are placed together. */
+    appendBlock(node: HTMLElement, keepWithNext = false): boolean {
+      if (keepWithNext) {
+        pendingKeep.push(node)
+        return true
+      }
+      const nodes = [...pendingKeep, node]
+      pendingKeep = []
+      return place(nodes)
+    },
+    /** Flushes any held-back block — call once at the end, so a document
+     * ending on a heading still renders that heading. */
+    flush() {
+      if (pendingKeep.length) {
+        const nodes = pendingKeep
+        pendingKeep = []
+        place(nodes)
+      }
+    },
+    /** Starts the next block on a fresh page (a new top-level chapter). */
+    breakPage() {
+      this.flush()
+      newPage()
+    },
+    get pageCount() {
+      return pageCount
+    },
+    get currentPage() {
+      return page
+    },
+  }
 }

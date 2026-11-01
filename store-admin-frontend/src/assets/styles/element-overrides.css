@@ -182,3 +182,68 @@
     width: min(85vw, 420px) !important;
   }
 }
+
+/* ---------------------------------------------------------------------
+ * Phone-width fixes that belong to the whole app rather than to any one
+ * page. Each of these was found by auditing every main screen at 375px
+ * (horizontal overflow, clipped text, ellipsised text, tap-target size);
+ * fixing them here fixes every screen at once, including screens added
+ * later, instead of re-patching the same thing per view.
+ * --------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  /* `size="small"` inline row actions (edit / delete / transfer, in the
+   * staff, settings, scheduling and supplier tables) render as 24px tall.
+   * That is well under any usable touch target and was the single most
+   * common finding of the audit. Raised to 36px — comfortable for a
+   * secondary action sitting inside a table row, without the 44px of a
+   * primary action making every row a third taller. `auto` height plus a
+   * min keeps a wrapped two-line label from being clipped. */
+  .el-button--small {
+    min-height: 36px;
+    height: auto;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+
+  /* A link-style button inside a row needs the same reachable target
+   * without gaining a border or background. */
+  .el-button.is-link {
+    min-height: 36px;
+  }
+
+  /* Element Plus truncates every table cell with an ellipsis by default.
+   * On a wide screen that is reasonable; at 375px it hides real content —
+   * a column header like "店舗名（中国語）" would read as "店舗名（中国…".
+   * Wrapping costs vertical space, which a phone has, and buys back the
+   * words, which it does not. Applies to headers and body cells alike so
+   * a column and its header stay legible together. */
+  .el-table .cell {
+    white-space: normal;
+    word-break: break-word;
+    /* Allows a break inside an otherwise unbreakable run. At 375px a
+     * fully readable column header is worth more than ideal Japanese
+     * typography. Known remaining case: a header that ends in a closing
+     * bracket, e.g. "店舗名（中国語）", still renders on one line with an
+     * ellipsis — Japanese line-breaking rules forbid a break before the
+     * bracket, and neither of these properties overrides that. Headers
+     * without trailing brackets ("アカウント", "所属店舗") wrap correctly. */
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+  }
+
+  /* A table wider than the phone scrolls horizontally inside its own
+   * wrapper (the page itself never scrolls sideways). Without a hint that
+   * is invisible, so the right edge gets a soft fade that disappears once
+   * the table is scrolled to its end — a scroll affordance that costs no
+   * layout and no markup. */
+  .el-table__body-wrapper,
+  .el-table__header-wrapper {
+    scrollbar-width: thin;
+  }
+
+  .el-table--scrollable-x .el-table__body-wrapper {
+    background:
+      linear-gradient(to left, var(--surface) 0, transparent 24px) right center / 24px 100% no-repeat local,
+      linear-gradient(to left, rgba(0, 0, 0, 0.08) 0, transparent 10px) right center / 10px 100% no-repeat scroll;
+  }
+}

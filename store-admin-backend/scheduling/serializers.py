@@ -2,7 +2,12 @@ import calendar
 
 from rest_framework import serializers
 
-from .models import ActualWorkRecord, AvailabilityRequest, BranchScheduleSetting, SchedulePeriod, Shift
+from staff.models import StaffMember
+
+from .models import (
+    ActualWorkRecord, AttendanceChangeLog, AttendanceCorrectionRequest, AttendancePunch,
+    AvailabilityRequest, BranchScheduleSetting, SchedulePeriod, Shift,
+)
 from .services import check_shift
 
 
@@ -12,7 +17,8 @@ class BranchScheduleSettingSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'branch', 'morning_start', 'morning_end', 'afternoon_start', 'afternoon_end',
             'full_day_start', 'full_day_end', 'full_day_break_start', 'full_day_break_end',
-            'active', 'updated_at',
+            'late_grace_minutes', 'early_leave_grace_minutes', 'attendance_day_cutover_hour',
+            'self_punch_enabled', 'active', 'updated_at',
         ]
         read_only_fields = ['branch']
 
@@ -155,9 +161,16 @@ class ActualWorkRecordSerializer(serializers.ModelSerializer):
             'crosses_midnight', 'actual_break_minutes', 'absent', 'statutory_holiday',
             'adjustment_reason', 'status', 'confirmed_by', 'confirmed_at',
             'planned_start', 'planned_end', 'planned_break_minutes', 'planned_crosses_midnight',
+            'source', 'late_minutes', 'early_leave_minutes',
             'updated_by', 'updated_at', 'created_at',
         ]
-        read_only_fields = ['status', 'confirmed_by', 'confirmed_at', 'updated_by']
+        # `source` and the two deviation minute fields are derived, never
+        # client-supplied: a caller must not be able to label a hand-typed
+        # record as punch-derived, or to declare itself 0 minutes late.
+        read_only_fields = [
+            'status', 'confirmed_by', 'confirmed_at', 'updated_by',
+            'source', 'late_minutes', 'early_leave_minutes',
+        ]
 
     def validate(self, attrs):
         instance = self.instance
@@ -211,3 +224,112 @@ class ActualWorkRecordSerializer(serializers.ModelSerializer):
                     {'adjustment_reason': ['Required when actual times differ from the scheduled shift.']},
                 )
         return attrs
+
+
+class AttendancePunchSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.name', read_only=True)
+    # Optional on the wire, resolved by the view: a staff account is
+    # punching for itself and has no employee id to send (and anything it
+    # did send would be ignored), while a manager must name one — which
+    # the view enforces, since only the view knows the caller's role.
+    employee = serializers.PrimaryKeyRelatedField(
+        queryset=StaffMember.objects.all(), required=False, allow_null=True,
+    )
+
+    class Meta:
+        model = AttendancePunch
+        fields = [
+            'id', 'employee', 'employee_name', 'branch', 'work_date', 'kind',
+            'punched_at', 'source', 'note', 'created_by', 'created_at',
+        ]
+        # Everything except `kind`, `employee` and `note` is decided by the
+        # server. `punched_at` especially: accepting a client timestamp
+        # would let a phone with a wrong — or deliberately set — clock
+        # choose its own attendance time, and `work_date` is derived from
+        # it through the branch's cutover hour, so both must be ours.
+        read_only_fields = ['branch', 'work_date', 'punched_at', 'source', 'created_by']
+
+
+class AttendanceCorrectionRequestSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.name', read_only=True)
+    # See AttendancePunchSerializer.employee — same reason.
+    employee = serializers.PrimaryKeyRelatedField(
+        queryset=StaffMember.objects.all(), required=False, allow_null=True,
+    )
+
+    class Meta:
+        model = AttendanceCorrectionRequest
+        fields = [
+            'id', 'employee', 'employee_name', 'branch', 'work_date',
+            'requested_start', 'requested_end', 'requested_break_minutes',
+            'requested_crosses_midnight', 'requested_absent', 'reason',
+            'status', 'submitted_by', 'created_at',
+            'decided_by', 'decided_at', 'decision_note',
+        ]
+        read_only_fields = [
+            'branch', 'status', 'submitted_by', 'created_at', 'decided_by', 'decided_at', 'decision_note',
+        ]
+
+    def validate_reason(self, value):
+        if not value.strip():
+            raise serializers.ValidationError('correction-reason-required')
+        return value.strip()
+
+    def validate(self, attrs):
+        absent = attrs.get('requested_absent', False)
+        start = attrs.get('requested_start')
+        end = attrs.get('requested_end')
+        break_minutes = attrs.get('requested_break_minutes')
+
+        if absent:
+            if start or end:
+                raise serializers.ValidationError({'requested_absent': ['correction-absent-with-times']})
+        else:
+            # A request that changes nothing is not a request — it would
+            # otherwise sit in a manager's queue meaning nothing.
+            if start is None and end is None and break_minutes is None:
+                raise serializers.ValidationError({'requested_start': ['correction-nothing-requested']})
+            if (start is None) != (end is None):
+                raise serializers.ValidationError({'requested_start': ['correction-start-and-end-required']})
+            if start is not None and end is not None:
+                start_minutes = start.hour * 60 + start.minute
+                end_minutes = end.hour * 60 + end.minute + (
+                    1440 if attrs.get('requested_crosses_midnight', False) else 0
+                )
+                if end_minutes <= start_minutes:
+                    raise serializers.ValidationError({'requested_end': ['correction-invalid-time-range']})
+                if break_minutes is not None and break_minutes > end_minutes - start_minutes:
+                    raise serializers.ValidationError(
+                        {'requested_break_minutes': ['correction-break-exceeds-duration']},
+                    )
+
+        # NOTE: "at most one PENDING request per employee per day" is NOT
+        # checked here. `employee` is optional on the wire (a staff account
+        # submits for itself and sends no id), so at this point `attrs` has
+        # no employee for exactly the caller the rule matters most for —
+        # the check would silently pass for every staff submission. It
+        # lives in AttendanceCorrectionRequestViewSet.perform_create, which
+        # is where the effective employee is actually known. It is also not
+        # a database constraint: MySQL silently drops the condition on a
+        # conditional UniqueConstraint (Django models.W036), so a partial
+        # unique index would simply not exist in production.
+        return attrs
+
+
+class AttendanceChangeLogSerializer(serializers.ModelSerializer):
+    employee_name = serializers.CharField(source='employee.name', read_only=True)
+    # The account's display name is stored in first_name (see
+    # accounts.serializers' displayName mapping) — there is no
+    # display_name field on User.
+    changed_by_name = serializers.CharField(source='changed_by.first_name', read_only=True, default=None)
+
+    class Meta:
+        model = AttendanceChangeLog
+        fields = [
+            'id', 'record', 'employee', 'employee_name', 'branch', 'work_date', 'source',
+            'before', 'after', 'reason', 'correction_request',
+            'changed_by', 'changed_by_name', 'changed_at',
+        ]
+        # The log is append-only: it is produced by scheduling.attendance,
+        # never written through the API.
+        read_only_fields = fields

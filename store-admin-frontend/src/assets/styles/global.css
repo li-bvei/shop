@@ -118,4 +118,34 @@ a {
     break-after: avoid;
     page-break-after: avoid;
   }
+
+  /* A report whose builder already paginated itself into several
+     page-sized nodes (the monthly/yearly report — see pdfExport's
+     buildPagesInHost, which emits one .report-page per logical page) opts
+     into `is-paged` instead. The single-page rule above must not apply to
+     it: `break-inside: avoid` on the container asks the browser to keep
+     the *whole* multi-page document on one sheet, which is how such a
+     document ends up either clipped or shrunk to micro-print. Here the
+     container is free to break, and each page node instead takes the
+     break and refuses to be split internally — so a sheet boundary only
+     ever lands exactly where the builder put one, never mid-table-row. */
+  body.is-printing-report > .print-only-document.is-paged {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+
+  body.is-printing-report > .print-only-document.is-paged > .report-page {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    break-after: page;
+    page-break-after: always;
+  }
+
+  /* No trailing blank sheet: the last page must not force a break after
+     itself. (`:last-child` rather than a JS-applied class so it stays
+     correct however many pages the builder happened to produce.) */
+  body.is-printing-report > .print-only-document.is-paged > .report-page:last-child {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
 }

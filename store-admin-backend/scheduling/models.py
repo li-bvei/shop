@@ -26,6 +26,30 @@ class BranchScheduleSetting(models.Model):
     full_day_break_start = models.TimeField(default=time(15, 0))
     full_day_break_end = models.TimeField(default=time(17, 0))
     active = models.BooleanField(default=True)
+
+    # --- Attendance (clock-in/out) policy --------------------------------
+    # Grace before a punch counts as late / early, in minutes. Both
+    # reference projects make this configurable rather than fixed (Frappe
+    # HR: late_entry_grace_period / early_exit_grace_period on Shift Type;
+    # Horilla: a GraceTime record), because a minute's tolerance is a
+    # business decision, not a technical one. Default 0 = no tolerance,
+    # which is the honest default: a branch that wants slack opts into it.
+    late_grace_minutes = models.PositiveSmallIntegerField(default=0)
+    early_leave_grace_minutes = models.PositiveSmallIntegerField(default=0)
+    # The hour of day at which one business day's attendance ends and the
+    # next begins. A punch before this hour belongs to the PREVIOUS
+    # business date, which is what makes a 01:30 clock-out from a 22:00
+    # shift land on the right day (and on the right wage month, at a month
+    # boundary). 5 fits this chain's existing latest closing time of 22:00
+    # with room for overrun; it is per branch because a branch that opens
+    # earlier needs a different one.
+    attendance_day_cutover_hour = models.PositiveSmallIntegerField(default=5)
+    # Whether employees of this branch may clock themselves in and out.
+    # Off = attendance stays manager-entered exactly as before this
+    # feature existed, so a branch can adopt self-service when it's ready
+    # rather than being switched over by a deployment.
+    self_punch_enabled = models.BooleanField(default=True)
+
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -167,6 +191,37 @@ class ActualWorkRecord(models.Model):
         max_length=255, blank=True,
         help_text='Required whenever actual times differ from the shift they were generated from.',
     )
+
+    class Source(models.TextChoices):
+        PLAN = 'plan', 'Generated from the published schedule'
+        PUNCH = 'punch', 'Derived from the employee\'s clock punches'
+        MANUAL = 'manual', 'Entered or edited directly by a manager'
+        CORRECTION = 'correction', 'Set by an approved correction request'
+
+    # Where this day's times came from. Visible in the manager's list so a
+    # row that nobody has looked at since a punch created it is
+    # distinguishable from one a manager typed. Set at the point of writing
+    # by every path that creates or edits a record. Rows that predate the
+    # field are labelled best-effort by migration 0008, whose docstring
+    # states exactly what that label can and cannot mean.
+    source = models.CharField(max_length=12, choices=Source.choices, default=Source.MANUAL)
+
+    # Deviation from the planned shift, in minutes, after the branch's
+    # grace period. Stored rather than derived on read so the manager's
+    # "show me only the exceptions" filter is a plain indexed query over
+    # a month rather than a per-row recomputation, and so the number a
+    # manager reviewed is still the number recorded afterwards even if the
+    # shift is later edited. Recomputed by
+    # scheduling.attendance.apply_exception_minutes on every write.
+    #
+    # Deliberately minutes, not the booleans both reference projects use
+    # (Frappe's late_entry/early_exit Checks, Horilla's
+    # AttendanceLateComeEarlyOut rows, which carry no duration at all):
+    # "3 minutes late" and "90 minutes late" are different conversations,
+    # and a boolean cannot tell them apart.
+    late_minutes = models.PositiveIntegerField(default=0)
+    early_leave_minutes = models.PositiveIntegerField(default=0)
+
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     confirmed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
@@ -186,3 +241,200 @@ class ActualWorkRecord(models.Model):
 
     def __str__(self):
         return f'{self.employee_id} {self.work_date} [{self.status}]'
+
+
+class AttendancePunch(models.Model):
+    """One clock event — the raw evidence layer under ActualWorkRecord.
+
+    Design note (see docs/ai-handoff/08_ATTENDANCE.md for the full
+    comparison): both mature open-source references studied for this
+    feature — Horilla (Django, LGPL-2.1) and Frappe HR (GPL-3.0) — split
+    attendance into exactly two layers, a raw punch log and a per-day
+    aggregate that payroll reads. This project already had the per-day
+    aggregate (ActualWorkRecord, unique per employee+date, which is also
+    what both references key their daily row on), so only this punch layer
+    was missing. Neither project's code is used here: both are copyleft,
+    so the *design* was taken and the implementation written from scratch.
+
+    One immutable row per event, carrying its own `kind`, rather than
+    Horilla's single row holding a clock_in/clock_out pair. A paired row
+    turns "the employee forgot to clock out" into an UPDATE of an existing
+    row (Horilla's own `duration()` even back-fills clock_out to `now` as a
+    side effect of being read), which is the wrong shape for something
+    payroll is derived from. Append-only rows can be audited, replayed and
+    never silently rewritten: nothing in the API updates or deletes a
+    punch, and a mistaken punch is answered by another punch plus a
+    correction request, exactly like a till roll.
+
+    A punch NEVER confirms attendance by itself. It feeds
+    ActualWorkRecord via scheduling.attendance.rebuild_from_punches, which
+    always leaves the day at status=PENDING for a manager to confirm — so
+    the wage engine's existing contract (it only reads MANAGER_CONFIRMED /
+    ADMIN_LOCKED records; see wages/calculation.py) is unchanged, and no
+    employee can move their own pay by clocking in.
+    """
+
+    class Kind(models.TextChoices):
+        CLOCK_IN = 'clock_in', 'Clock in'
+        CLOCK_OUT = 'clock_out', 'Clock out'
+        BREAK_START = 'break_start', 'Break start'
+        BREAK_END = 'break_end', 'Break end'
+
+    class Source(models.TextChoices):
+        SELF = 'self', 'Employee self-service'
+        MANAGER = 'manager', 'Entered by a manager on the employee\'s behalf'
+
+    employee = models.ForeignKey('staff.StaffMember', on_delete=models.CASCADE, related_name='attendance_punches')
+    branch = models.ForeignKey('branches.Branch', on_delete=models.CASCADE, related_name='attendance_punches')
+    # The *business* day this punch belongs to, which is not simply
+    # punched_at's calendar date: a 01:30 clock-out from a shift that
+    # started at 22:00 belongs to the previous business day. Resolved once,
+    # at punch time, by scheduling.attendance.business_date_for() using the
+    # branch's own cutover hour, and stored — so the day a punch counts
+    # toward can't silently change later if that setting is retuned.
+    # (Frappe HR has no overnight concept on its Shift Type at all;
+    # Horilla keeps clock_in_date separate from attendance_date, which is
+    # the approach followed here.)
+    work_date = models.DateField()
+    kind = models.CharField(max_length=12, choices=Kind.choices)
+    # Always server time (timezone.now()), never a client-supplied clock —
+    # a phone with a wrong or deliberately-set clock must not be able to
+    # move an attendance time.
+    punched_at = models.DateTimeField()
+    source = models.CharField(max_length=10, choices=Source.choices, default=Source.SELF)
+    note = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['work_date', 'employee_id', 'punched_at']
+        indexes = [
+            models.Index(fields=['branch', 'work_date'], name='punch_branch_date_idx'),
+            models.Index(fields=['employee', 'work_date'], name='punch_employee_date_idx'),
+        ]
+        verbose_name_plural = 'attendance punches'
+
+    def __str__(self):
+        return f'{self.employee_id} {self.work_date} {self.kind} @{self.punched_at:%H:%M}'
+
+
+class AttendanceCorrectionRequest(models.Model):
+    """An employee's request to fix one day's attendance — the 補正申請 /
+    补卡 flow (forgot to clock in, clocked out late, was actually absent).
+
+    Modelled as its own record, following Frappe HR's separate
+    `Attendance Request` doctype rather than Horilla's approach of smearing
+    request state across the attendance row itself (`is_validate_request`,
+    `is_validate_request_approved`, `request_type`, `requested_data` JSON).
+    A separate record means a day can have a full history of who asked for
+    what and who decided, instead of one in-flight request overwriting the
+    last; it also keeps request state out of the row the wage engine reads.
+
+    Approving one is the ONLY path by which an employee's own submission
+    reaches ActualWorkRecord, and approval is a manager action — so the
+    "employee can never move their own pay" rule holds here too.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = 'pending', 'Awaiting manager decision'
+        APPROVED = 'approved', 'Approved and applied'
+        REJECTED = 'rejected', 'Rejected'
+        WITHDRAWN = 'withdrawn', 'Withdrawn by the employee'
+
+    employee = models.ForeignKey('staff.StaffMember', on_delete=models.CASCADE, related_name='attendance_corrections')
+    branch = models.ForeignKey('branches.Branch', on_delete=models.CASCADE, related_name='attendance_corrections')
+    work_date = models.DateField()
+
+    # What the employee says the day actually was. All optional except the
+    # reason: a request may be "I was absent" (requested_absent) with no
+    # times at all, or purely a break correction.
+    requested_start = models.TimeField(null=True, blank=True)
+    requested_end = models.TimeField(null=True, blank=True)
+    requested_break_minutes = models.PositiveIntegerField(null=True, blank=True)
+    requested_crosses_midnight = models.BooleanField(default=False)
+    requested_absent = models.BooleanField(default=False)
+    # Never blank — an unexplained attendance change is exactly what this
+    # whole flow exists to prevent.
+    reason = models.TextField()
+
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['branch', 'status'], name='correction_branch_status_idx'),
+            models.Index(fields=['employee', 'work_date'], name='correction_employee_date_idx'),
+        ]
+        # "At most one PENDING request per employee per day" is enforced in
+        # AttendanceCorrectionRequestSerializer, not here: MySQL ignores the
+        # condition on a conditional UniqueConstraint (Django raises
+        # models.W036 for exactly this — see inventory.Product), so a
+        # partial index here would be silently absent in production and
+        # give a false sense of protection.
+
+    def __str__(self):
+        return f'{self.employee_id} {self.work_date} [{self.status}]'
+
+
+class AttendanceChangeLog(models.Model):
+    """Append-only record of every change to one day's ActualWorkRecord.
+
+    The attendance row is a payroll input, so "who changed this day, when,
+    from what, to what, and why" has to survive the change itself. Both
+    reference projects have an equivalent (Horilla's HorillaAuditLog,
+    Frappe's track_changes); this project has no generic audit framework,
+    so attendance carries its own narrow one rather than acquiring a
+    general-purpose dependency for a single model.
+
+    `before`/`after` hold only the attendance-relevant fields, as plain
+    JSON-safe values, so a log entry stays readable even after the record
+    it describes has been deleted (hence on_delete=SET_NULL).
+    """
+
+    class Source(models.TextChoices):
+        PUNCH = 'punch', 'Rebuilt from clock punches'
+        MANUAL = 'manual', 'Edited directly by a manager'
+        CORRECTION = 'correction', 'Applied from an approved correction request'
+        GENERATED = 'generated', 'Generated from the published schedule'
+        STATUS = 'status', 'Confirmation / lock state change'
+
+    record = models.ForeignKey(
+        ActualWorkRecord, on_delete=models.SET_NULL, null=True, blank=True, related_name='change_logs',
+    )
+    # Denormalized so a log entry still says who/when/where after its
+    # record is gone.
+    employee = models.ForeignKey('staff.StaffMember', on_delete=models.CASCADE, related_name='attendance_change_logs')
+    branch = models.ForeignKey('branches.Branch', on_delete=models.CASCADE, related_name='attendance_change_logs')
+    work_date = models.DateField()
+
+    source = models.CharField(max_length=12, choices=Source.choices)
+    before = models.JSONField(null=True, blank=True)
+    after = models.JSONField(null=True, blank=True)
+    reason = models.CharField(max_length=255, blank=True)
+    correction_request = models.ForeignKey(
+        AttendanceCorrectionRequest, on_delete=models.SET_NULL, null=True, blank=True, related_name='change_logs',
+    )
+    changed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='+',
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-changed_at']
+        indexes = [
+            models.Index(fields=['branch', 'work_date'], name='changelog_branch_date_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.employee_id} {self.work_date} [{self.source}]'

@@ -3,26 +3,34 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import type { EChartsOption } from 'echarts'
-import { Download } from '@element-plus/icons-vue'
+import type ExcelJS from 'exceljs'
+import { Download, Printer } from '@element-plus/icons-vue'
 import { fetchMonthlyAnalysis, type MonthlyAnalysis } from '@/api/monthlyAnalysis'
 import { fetchYearlyAnalysis, type YearlyAnalysis } from '@/api/yearlyAnalysis'
 import { fetchPaymentMethods } from '@/api/masterData'
 import { useAuthStore } from '@/stores/auth'
 import { useBranchStore } from '@/stores/branches'
-import { formatCurrency, formatNumber, branchDisplayName, todayJst, formatMonthKanji } from '@/utils/format'
+import {
+  formatCurrency, formatNumber, branchDisplayName, todayJst, formatMonthKanji,
+  excelAmount, EXCEL_CURRENCY_FORMAT, EXCEL_COUNT_FORMAT,
+} from '@/utils/format'
 import { useChartTheme } from '@/composables/useChartTheme'
 import { useDelayedLoading } from '@/composables/useDelayedLoading'
-import { downloadCustomExcel } from '@/utils/excelExport'
+import { useIsMobile } from '@/composables/useIsMobile'
+import { usePagedDocumentPrint } from '@/composables/usePagedDocumentPrint'
+import { applyA4PageSetup, downloadCustomExcel } from '@/utils/excelExport'
+import { renderOffscreenPagesToPdf } from '@/utils/pdfExport'
 import {
-  el, buildReportHeader, buildReportContinuationHeader, reportSectionTitle,
-  REPORT_PDF_TEXT, estimateUnshrunkHeightPx, renderOffscreenPagesToPdf,
-} from '@/utils/pdfExport'
+  ANALYSIS_REPORT_PAGE_WIDTH_PX, buildAnalysisReportPages,
+  type AnalysisReportCell, type AnalysisReportDocument,
+} from '@/utils/reports/analysisReport'
 
 const { t, locale } = useI18n()
 const router = useRouter()
 const auth = useAuthStore()
 const branchStore = useBranchStore()
 const chartTheme = useChartTheme()
+const isMobile = useIsMobile()
 const isAdmin = computed(() => auth.role === 'admin')
 
 const viewMode = ref<'month' | 'year'>('month')
@@ -204,314 +212,268 @@ function currentBranchLabel() {
     : branchName(isAdmin.value ? selectedBranchId.value : (auth.branchId ?? ''))
 }
 
-async function handleDownload() {
-  const branchText = currentBranchLabel()
+// --- Report document ------------------------------------------------------
+// One description of the report, built once and rendered to all three
+// destinations (PDF download, print, Excel) so they can't disagree about
+// content, pagination, titles or how an amount reads. Amounts stay raw
+// numbers right up to the point each destination renders them — PDF/print
+// through analysisReport's accounting cells, Excel into numeric cells with
+// an accounting number format — so no destination ever receives a
+// pre-formatted string it can no longer calculate with.
 
-  if (viewMode.value === 'month') {
-    const a = monthlyAnalysis.value
-    if (!a) return
-    await downloadCustomExcel(
-      `月度经营-${branchText}-${selectedMonth.value}`,
-      t('monthlyAnalysis.pageTitle'),
-      (ws) => {
-        const summaryRows: [string, string | number][] = [
-          [t('monthlyAnalysis.revenue'), a.revenue],
-          [t('monthlyAnalysis.customers'), a.customers],
-          [t('monthlyAnalysis.avgSpend'), a.avgSpend],
-          [t('monthlyAnalysis.purchasing'), a.purchasing],
-          [t('monthlyAnalysis.expenses'), a.expenses],
-          [t('monthlyAnalysis.tentativeOperatingGap'), a.tentativeOperatingGap],
-          [t('monthlyAnalysis.daysWithReports'), a.daysWithReports],
-        ]
-        ws.addRow([branchText, selectedMonth.value])
-        ws.getRow(1).font = { bold: true, size: 13 }
-        ws.addRow([])
-        for (const [label, value] of summaryRows) {
-          const row = ws.addRow([label, value])
-          row.getCell(1).font = { bold: true }
-        }
-        ws.addRow([])
+/** Period label used in headings and filenames: "2026年9月" / "2026年". */
+const periodLabel = computed(() => (
+  viewMode.value === 'month' ? formatMonthKanji(selectedMonth.value) : `${selectedYear.value}年`
+))
 
-        const headerRow = ws.addRow([
-          t('monthlyAnalysis.detailDateColumn'),
-          isAdmin.value ? t('monthlyAnalysis.branch') : null,
-          t('monthlyAnalysis.revenue'),
-          t('monthlyAnalysis.customers'),
-          t('monthlyAnalysis.avgSpend'),
-        ].filter((v) => v !== null))
-        headerRow.font = { bold: true }
-        headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } }
+const reportTypeText = computed(() => (
+  viewMode.value === 'month' ? t('monthlyAnalysis.pdfSuffixMonthly') : t('monthlyAnalysis.pdfSuffixYearly')
+))
 
-        for (const row of a.dailyDetail) {
-          const cells = [row.date, isAdmin.value ? branchName(row.branchId) : null, row.revenue, row.customers, row.avgSpend]
-            .filter((v) => v !== null)
-          ws.addRow(cells)
-        }
-        ws.columns.forEach((col) => { col.width = 16 })
-      },
-    )
-  } else {
-    const a = yearlyAnalysis.value
-    if (!a) return
-    await downloadCustomExcel(
-      `年度经营-${branchText}-${selectedYear.value}`,
-      t('monthlyAnalysis.pageTitle'),
-      (ws) => {
-        const summaryRows: [string, string | number][] = [
-          [t('monthlyAnalysis.revenue'), a.revenue],
-          [t('monthlyAnalysis.customers'), a.customers],
-          [t('monthlyAnalysis.avgSpend'), a.avgSpend],
-          [t('monthlyAnalysis.purchasing'), a.purchasing],
-          [t('monthlyAnalysis.expenses'), a.expenses],
-          [t('monthlyAnalysis.tentativeOperatingGap'), a.tentativeOperatingGap],
-          [t('monthlyAnalysis.daysWithReports'), a.daysWithReports],
-        ]
-        ws.addRow([branchText, selectedYear.value])
-        ws.getRow(1).font = { bold: true, size: 13 }
-        ws.addRow([])
-        for (const [label, value] of summaryRows) {
-          const row = ws.addRow([label, value])
-          row.getCell(1).font = { bold: true }
-        }
-        ws.addRow([])
+/** Shared by the PDF download and the print dialog's "Save as PDF" name, so
+ * both routes produce an identically named file. */
+const reportFileName = computed(() => (
+  `${periodLabel.value}_${currentBranchLabel()}_${reportTypeText.value}`
+))
 
-        const headerRow = ws.addRow([
-          t('monthlyAnalysis.detailMonthColumn'), t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend'),
-        ])
-        headerRow.font = { bold: true }
-        headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } }
-
-        for (const row of a.monthlyDetail) {
-          ws.addRow([row.month, row.revenue, row.customers, row.avgSpend])
-        }
-        ws.columns.forEach((col) => { col.width = 16 })
-      },
-    )
-  }
-}
-
-const pdfDownloading = ref(false)
-
-// Same page-width convention as the daily report's PDF (renderOffscreenToPdf
-// scales this down to fit the printable area, never up).
-const PDF_PAGE_WIDTH_PX = 794
-
-function buildHeroAndGrid(root: HTMLElement, a: MonthlyAnalysis | YearlyAnalysis) {
-  const revenueHero = el('div', { border: '1.5px solid #999', borderRadius: '4px', padding: '10px 14px', marginBottom: '10px' })
-  revenueHero.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.heroLabel.fontSize, fontWeight: REPORT_PDF_TEXT.heroLabel.fontWeight, marginBottom: '4px' }, t('monthlyAnalysis.revenue')))
-  revenueHero.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.heroValue.fontSize, fontWeight: REPORT_PDF_TEXT.heroValue.fontWeight }, formatCurrency(a.revenue)))
-  root.appendChild(revenueHero)
-
-  const summaryGrid = el('div', {
-    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', marginBottom: '16px',
-    border: '1px solid #ddd', padding: '10px 12px',
-  })
-  const summaryItems: [string, string][] = [
-    [t('monthlyAnalysis.customers'), formatNumber(a.customers)],
-    [t('monthlyAnalysis.avgSpend'), formatCurrency(a.avgSpend)],
-    [t('monthlyAnalysis.purchasing'), formatCurrency(a.purchasing)],
-    [t('monthlyAnalysis.expenses'), formatCurrency(a.expenses)],
-    [t('monthlyAnalysis.tentativeOperatingGap'), formatCurrency(a.tentativeOperatingGap)],
-    [t('monthlyAnalysis.daysWithReports'), String(a.daysWithReports)],
-    [t('monthlyAnalysis.dailyAverageRevenue'), formatCurrency(a.dailyAverageRevenue)],
+/** The detail table differs only in its leading column (date vs month) and
+ * in which analysis supplies the rows — everything else about the report is
+ * identical between the two view modes, which is why they share this view. */
+function detailTableSpec() {
+  const amount = { align: 'right' as const }
+  const common = [
+    { label: t('monthlyAnalysis.revenue'), ...amount },
+    { label: t('monthlyAnalysis.customers'), ...amount },
+    { label: t('monthlyAnalysis.avgSpend'), ...amount },
   ]
-  for (const [label, value] of summaryItems) {
-    const cell = el('div', {})
-    cell.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.heroLabel.fontSize, marginBottom: '3px' }, label))
-    cell.appendChild(el('div', { fontSize: '15px', fontWeight: '800' }, value))
-    summaryGrid.appendChild(cell)
-  }
-  root.appendChild(summaryGrid)
-}
-
-/** A titled section's table shell — a `columns` header row only when given
- * (payment methods and supplier ranking are plain unlabeled lists, same as
- * before; the daily/monthly detail table is the one with column labels). */
-function buildSectionShell(sectionTitle: string, columns?: string[]) {
-  const section = el('div', {})
-  section.appendChild(reportSectionTitle(sectionTitle))
-  const table = el('table', {
-    width: '100%', borderCollapse: 'collapse', marginBottom: '10px',
-    ...(columns ? { tableLayout: 'fixed' } : {}),
-  })
-  if (columns) {
-    const thead = document.createElement('thead')
-    const headRow = document.createElement('tr')
-    for (const label of columns) {
-      headRow.appendChild(el('th', {
-        padding: '6px 8px', borderBottom: '1.5px solid #333', textAlign: 'left',
-        fontWeight: '800', fontSize: REPORT_PDF_TEXT.body.fontSize,
-      }, label))
-    }
-    thead.appendChild(headRow)
-    table.appendChild(thead)
-  }
-  const tbody = document.createElement('tbody')
-  table.appendChild(tbody)
-  section.appendChild(table)
-  return { section, tbody }
-}
-
-function buildPaymentRow(row: { name: string; amount: number; pct: number }): HTMLTableRowElement {
-  const tr = document.createElement('tr')
-  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '700' }, row.name))
-  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '800' }, formatCurrency(row.amount)))
-  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', width: '60px', color: '#666', fontSize: '11px' }, `${row.pct.toFixed(1)}%`))
-  return tr
-}
-
-function buildSupplierRow(row: { supplierName: string; amount: number }): HTMLTableRowElement {
-  const tr = document.createElement('tr')
-  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '700' }, row.supplierName))
-  tr.appendChild(el('td', { padding: '5px 6px', borderBottom: '1px solid #ccc', textAlign: 'right', fontSize: REPORT_PDF_TEXT.body.fontSize, fontWeight: '800' }, formatCurrency(row.amount)))
-  return tr
-}
-
-function buildDetailRow(cells: string[], zebra: boolean): HTMLTableRowElement {
-  const tr = document.createElement('tr')
-  if (zebra) tr.style.backgroundColor = '#f7f7f7'
-  for (const cellText of cells) {
-    tr.appendChild(el('td', { padding: '6px 8px', borderBottom: '0.5px solid #ddd', fontSize: REPORT_PDF_TEXT.body.fontSize }, cellText))
-  }
-  return tr
-}
-
-function buildDetailColumnsAndRows(): { title: string; columns: string[]; rows: string[][] } {
   if (viewMode.value === 'month') {
     return {
       title: t('monthlyAnalysis.dailyDetailTitle'),
-      columns: [t('monthlyAnalysis.detailDateColumn'), t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend')],
-      rows: (monthlyAnalysis.value?.dailyDetail ?? []).map((r) => [
-        r.date, formatCurrency(r.revenue), String(r.customers), formatCurrency(r.avgSpend),
+      columns: [{ label: t('monthlyAnalysis.detailDateColumn'), align: 'left' as const }, ...common],
+      rows: (monthlyAnalysis.value?.dailyDetail ?? []).map((r): AnalysisReportCell[] => [
+        { kind: 'text', text: r.date },
+        { kind: 'currency', value: r.revenue, bold: true },
+        { kind: 'count', value: r.customers },
+        { kind: 'currency', value: r.avgSpend },
       ]),
     }
   }
   return {
     title: t('monthlyAnalysis.monthlyDetailTitle'),
-    columns: [t('monthlyAnalysis.detailMonthColumn'), t('monthlyAnalysis.revenue'), t('monthlyAnalysis.customers'), t('monthlyAnalysis.avgSpend')],
-    rows: (yearlyAnalysis.value?.monthlyDetail ?? []).map((r) => [
-      r.month, formatCurrency(r.revenue), String(r.customers), formatCurrency(r.avgSpend),
+    columns: [{ label: t('monthlyAnalysis.detailMonthColumn'), align: 'left' as const }, ...common],
+    rows: (yearlyAnalysis.value?.monthlyDetail ?? []).map((r): AnalysisReportCell[] => [
+      { kind: 'text', text: r.month },
+      { kind: 'currency', value: r.revenue, bold: true },
+      { kind: 'count', value: r.customers },
+      { kind: 'currency', value: r.avgSpend },
     ]),
   }
 }
 
-/**
- * Builds the report page by page, flowing content onto whatever page is
- * currently open and only starting a fresh one when something genuinely
- * doesn't fit — never by shrinking a page below its designed font size
- * (estimateUnshrunkHeightPx is the fits-without-shrinking budget every
- * measurement below is checked against).
- *
- * Title/hero/summary-grid is small and fixed-size and always opens page 1.
- * Each of the three row-based sections (payment methods, supplier ranking,
- * daily/monthly detail) is then flowed in order via `appendSection`, which
- * tries three things in turn: (1) append the whole section to the page
- * that's already open — the common case for a short report, where
- * everything ends up sharing one page; (2) if that overflows, undo it and
- * put the whole section on its own fresh page instead, avoiding a lone
- * orphaned row at the bottom of a busy page; (3) if even a fresh page can't
- * hold it all (a very long payment-method list, or a 31-day month), chunk
- * its rows across as many further pages as it actually needs, always on a
- * whole-row boundary. This is what makes "the summary itself is taller than
- * one page" (payment methods + supplier ranking alone already fill page 1)
- * resolve correctly: each section still gets a fair shot at fitting where
- * it naturally falls, instead of forcing a fixed page-per-section layout.
- */
+function buildReportDocument(a: MonthlyAnalysis | YearlyAnalysis): AnalysisReportDocument {
+  const detail = detailTableSpec()
+  return {
+    titleText: `${currentBranchLabel()}　${periodLabel.value}`,
+    reportTypeText: reportTypeText.value,
+    hero: { label: t('monthlyAnalysis.revenue'), value: a.revenue },
+    summary: [
+      { label: t('monthlyAnalysis.customers'), cell: { kind: 'count', value: a.customers } },
+      { label: t('monthlyAnalysis.avgSpend'), cell: { kind: 'currency', value: a.avgSpend } },
+      { label: t('monthlyAnalysis.purchasing'), cell: { kind: 'currency', value: a.purchasing } },
+      { label: t('monthlyAnalysis.expenses'), cell: { kind: 'currency', value: a.expenses } },
+      { label: t('monthlyAnalysis.tentativeOperatingGap'), cell: { kind: 'currency', value: a.tentativeOperatingGap } },
+      { label: t('monthlyAnalysis.daysWithReports'), cell: { kind: 'count', value: a.daysWithReports } },
+      { label: t('monthlyAnalysis.dailyAverageRevenue'), cell: { kind: 'currency', value: a.dailyAverageRevenue } },
+    ],
+    sections: [
+      {
+        kind: 'list',
+        title: t('monthlyAnalysis.paymentMethodChart'),
+        rows: paymentMethodRows.value.map((r): AnalysisReportCell[] => [
+          { kind: 'text', text: r.name, bold: true },
+          { kind: 'currency', value: r.amount, bold: true },
+          { kind: 'ratio', text: `${r.pct.toFixed(1)}%` },
+        ]),
+      },
+      {
+        kind: 'list',
+        title: t('monthlyAnalysis.supplierRankingChart'),
+        rows: a.supplierRanking.slice(0, PDF_SUPPLIER_LIMIT).map((r): AnalysisReportCell[] => [
+          { kind: 'text', text: r.supplierName, bold: true },
+          { kind: 'currency', value: r.amount, bold: true },
+        ]),
+      },
+      { kind: 'table', title: detail.title, columns: detail.columns, rows: detail.rows },
+    ],
+    emptyText: t('monthlyAnalysis.noData'),
+  }
+}
+
+/** The supplier ranking is a "top N" by design, on screen and in every
+ * export — the full list belongs to the purchasing module, not to a
+ * one-page business summary. */
+const PDF_SUPPLIER_LIMIT = 15
+
+// --- Excel ----------------------------------------------------------------
+
+/** Writes one `label | amount` row with the amount as a real number in an
+ * accounting-formatted cell. Never a formatted string: a string column
+ * can't be summed, charted or re-formatted by whoever opens the workbook,
+ * which is the whole reason to export a spreadsheet rather than a PDF. */
+function addExcelAmountRow(ws: ExcelJS.Worksheet, label: string, cell: AnalysisReportCell) {
+  const raw = cell.kind === 'currency' || cell.kind === 'count' ? excelAmount(cell.value) : null
+  const row = ws.addRow([label, raw])
+  row.getCell(1).font = { bold: true }
+  const valueCell = row.getCell(2)
+  valueCell.numFmt = cell.kind === 'count' ? EXCEL_COUNT_FORMAT : EXCEL_CURRENCY_FORMAT
+  valueCell.alignment = { horizontal: 'right' }
+}
+
+function addExcelHeaderRow(ws: ExcelJS.Worksheet, columns: { label: string; align: 'left' | 'right' }[]) {
+  const row = ws.addRow(columns.map((c) => c.label))
+  row.font = { bold: true }
+  row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } }
+  columns.forEach((c, i) => { row.getCell(i + 1).alignment = { horizontal: c.align } })
+}
+
+// Building a 31-day workbook with three sheets takes long enough on a phone
+// to look like a dead button, so Excel gets the same in-progress state the
+// PDF download already had.
+const excelDownloading = ref(false)
+
+async function handleDownload() {
+  const a = analysis.value
+  if (!a) return
+  excelDownloading.value = true
+  try {
+    await writeExcelWorkbook(a)
+  } finally {
+    excelDownloading.value = false
+  }
+}
+
+async function writeExcelWorkbook(a: MonthlyAnalysis | YearlyAnalysis) {
+  const doc = buildReportDocument(a)
+  const detail = detailTableSpec()
+  const branchText = currentBranchLabel()
+  const periodKey = viewMode.value === 'month' ? selectedMonth.value : selectedYear.value
+
+  await downloadCustomExcel(
+    `${viewMode.value === 'month' ? '月度经营' : '年度经营'}-${branchText}-${periodKey}`,
+    t('monthlyAnalysis.pageTitle'),
+    (ws) => {
+      // Same heading / hero / summary / detail order as the PDF, so the two
+      // files read as the same report in two formats.
+      ws.addRow([doc.titleText, doc.reportTypeText])
+      ws.getRow(1).font = { bold: true, size: 13 }
+      ws.addRow([])
+      addExcelAmountRow(ws, doc.hero.label, { kind: 'currency', value: doc.hero.value })
+      for (const item of doc.summary) addExcelAmountRow(ws, item.label, item.cell)
+      ws.addRow([])
+
+      // Admin viewing every branch at once needs the branch column to tell
+      // the rows apart; a branch account's rows are all its own.
+      const showBranch = isAdmin.value && viewMode.value === 'month'
+      const detailColumns = showBranch
+        ? [detail.columns[0]!, { label: t('monthlyAnalysis.branch'), align: 'left' as const }, ...detail.columns.slice(1)]
+        : detail.columns
+      addExcelHeaderRow(ws, detailColumns)
+
+      const sourceRows = viewMode.value === 'month'
+        ? (monthlyAnalysis.value?.dailyDetail ?? []).map((r) => ({
+            key: r.date, branchId: r.branchId, revenue: r.revenue, customers: r.customers, avgSpend: r.avgSpend,
+          }))
+        : (yearlyAnalysis.value?.monthlyDetail ?? []).map((r) => ({
+            key: r.month, branchId: '', revenue: r.revenue, customers: r.customers, avgSpend: r.avgSpend,
+          }))
+
+      for (const r of sourceRows) {
+        const row = ws.addRow([
+          r.key,
+          ...(showBranch ? [branchName(r.branchId)] : []),
+          excelAmount(r.revenue), excelAmount(r.customers), excelAmount(r.avgSpend),
+        ])
+        const firstAmountColumn = showBranch ? 3 : 2
+        row.getCell(firstAmountColumn).numFmt = EXCEL_CURRENCY_FORMAT
+        row.getCell(firstAmountColumn + 1).numFmt = EXCEL_COUNT_FORMAT
+        row.getCell(firstAmountColumn + 2).numFmt = EXCEL_CURRENCY_FORMAT
+        for (let i = firstAmountColumn; i <= firstAmountColumn + 2; i += 1) {
+          row.getCell(i).alignment = { horizontal: 'right' }
+        }
+      }
+
+      // Payment-method and supplier breakdowns get their own sheets rather
+      // than being appended under the detail table — on one sheet their
+      // columns would have to share the detail table's widths and header,
+      // and a reader could no longer sort or total either list on its own.
+      const paymentSheet = ws.workbook.addWorksheet(t('monthlyAnalysis.paymentMethodChart'))
+      addExcelHeaderRow(paymentSheet, [
+        { label: t('monthlyAnalysis.paymentMethodChart'), align: 'left' },
+        { label: t('monthlyAnalysis.revenue'), align: 'right' },
+        { label: t('monthlyAnalysis.paymentMethodShare'), align: 'right' },
+      ])
+      for (const r of paymentMethodRows.value) {
+        const row = paymentSheet.addRow([r.name, excelAmount(r.amount), r.pct / 100])
+        row.getCell(2).numFmt = EXCEL_CURRENCY_FORMAT
+        row.getCell(3).numFmt = '0.0%'
+        row.getCell(2).alignment = { horizontal: 'right' }
+        row.getCell(3).alignment = { horizontal: 'right' }
+      }
+      paymentSheet.columns.forEach((col) => { col.width = 22 })
+      applyA4PageSetup(paymentSheet)
+
+      const supplierSheet = ws.workbook.addWorksheet(t('monthlyAnalysis.supplierRankingChart'))
+      addExcelHeaderRow(supplierSheet, [
+        { label: t('monthlyAnalysis.supplierRankingChart'), align: 'left' },
+        { label: t('monthlyAnalysis.purchasing'), align: 'right' },
+      ])
+      for (const r of a.supplierRanking.slice(0, PDF_SUPPLIER_LIMIT)) {
+        const row = supplierSheet.addRow([r.supplierName, excelAmount(r.amount)])
+        row.getCell(2).numFmt = EXCEL_CURRENCY_FORMAT
+        row.getCell(2).alignment = { horizontal: 'right' }
+      }
+      supplierSheet.columns.forEach((col) => { col.width = 26 })
+      applyA4PageSetup(supplierSheet)
+
+      // Wide enough for a long branch/supplier name and a 9-digit amount,
+      // so a cell shows its value rather than Excel's ### overflow marker.
+      ws.columns.forEach((col) => { col.width = 20 })
+    },
+  )
+}
+
+// --- PDF and print --------------------------------------------------------
+
+const pdfDownloading = ref(false)
+const { printing, printPagedDocument } = usePagedDocumentPrint(ANALYSIS_REPORT_PAGE_WIDTH_PX)
+
 async function handleDownloadPdf() {
   const a = analysis.value
   if (!a) return
   pdfDownloading.value = true
   try {
-    const branchText = currentBranchLabel()
-    const periodLabel = viewMode.value === 'month' ? formatMonthKanji(selectedMonth.value) : `${selectedYear.value}年`
-    const reportTypeText = viewMode.value === 'month' ? t('monthlyAnalysis.pdfSuffixMonthly') : t('monthlyAnalysis.pdfSuffixYearly')
-    const filename = `${periodLabel}_${branchText}_${reportTypeText}`
-    const titleText = `${branchText}　${periodLabel}`
-    const threshold = estimateUnshrunkHeightPx(PDF_PAGE_WIDTH_PX)
-
-    await renderOffscreenPagesToPdf(filename, PDF_PAGE_WIDTH_PX, (addPage) => {
-      let page = addPage()
-      page.appendChild(buildReportHeader(titleText, reportTypeText))
-      buildHeroAndGrid(page, a)
-
-      // Filled in as continuation pages are created; their page-number
-      // label ("月报 2/3") can't be written until the total is known, so
-      // each one's right-hand header element is patched at the very end.
-      const continuationLabels: HTMLElement[] = []
-      let pageCount = 1
-      function startContinuationPage(): HTMLDivElement {
-        page = addPage()
-        pageCount += 1
-        const header = buildReportContinuationHeader(titleText, reportTypeText)
-        continuationLabels.push(header.children[1] as HTMLElement)
-        page.appendChild(header)
-        return page
-      }
-
-      function fits(): boolean {
-        return page.scrollHeight <= threshold
-      }
-
-      function appendSection<T>(sectionTitle: string, rows: T[], buildRow: (row: T) => HTMLTableRowElement, columns?: string[]) {
-        if (rows.length === 0) {
-          const empty = el('div', {})
-          empty.appendChild(reportSectionTitle(sectionTitle))
-          empty.appendChild(el('div', { fontSize: REPORT_PDF_TEXT.body.fontSize, color: '#888', marginBottom: '10px' }, t('monthlyAnalysis.noData')))
-          page.appendChild(empty)
-          return
-        }
-
-        // Attempt 1: the whole section fits onto whatever's already here.
-        let { section, tbody } = buildSectionShell(sectionTitle, columns)
-        for (const row of rows) tbody.appendChild(buildRow(row))
-        page.appendChild(section)
-        if (fits()) return
-        page.removeChild(section)
-
-        // Attempt 2: it fits fine on a fresh page of its own.
-        startContinuationPage()
-        ;({ section, tbody } = buildSectionShell(sectionTitle, columns))
-        for (const row of rows) tbody.appendChild(buildRow(row))
-        page.appendChild(section)
-        if (fits()) return
-        page.removeChild(section)
-
-        // Attempt 3: even a fresh page can't hold it all — chunk by row,
-        // moving a row wholesale onto the next page rather than splitting it.
-        ;({ section, tbody } = buildSectionShell(sectionTitle, columns))
-        page.appendChild(section)
-        for (const row of rows) {
-          const tr = buildRow(row)
-          tbody.appendChild(tr)
-          if (!fits()) {
-            tbody.removeChild(tr)
-            startContinuationPage()
-            ;({ section, tbody } = buildSectionShell(sectionTitle, columns))
-            page.appendChild(section)
-            tbody.appendChild(tr)
-          }
-        }
-      }
-
-      appendSection(t('monthlyAnalysis.paymentMethodChart'), paymentMethodRows.value, buildPaymentRow)
-      appendSection(t('monthlyAnalysis.supplierRankingChart'), a.supplierRanking.slice(0, 15), buildSupplierRow)
-
-      const { title: detailTitle, columns: detailColumns, rows: detailRows } = buildDetailColumnsAndRows()
-      appendSection(
-        detailTitle,
-        detailRows.map((cells, i) => ({ cells, zebra: i % 2 === 1 })),
-        (row) => buildDetailRow(row.cells, row.zebra),
-        detailColumns,
-      )
-
-      continuationLabels.forEach((label, i) => {
-        label.textContent = `${reportTypeText}　${i + 2}/${pageCount}`
-      })
-    })
+    await renderOffscreenPagesToPdf(
+      reportFileName.value,
+      ANALYSIS_REPORT_PAGE_WIDTH_PX,
+      (addPage) => buildAnalysisReportPages(addPage, buildReportDocument(a)),
+    )
   } finally {
     pdfDownloading.value = false
   }
 }
+
+/** Prints the exact document handleDownloadPdf writes — same builder, same
+ * pagination, same amount formatting — never the live page, which would
+ * otherwise print the filter bar, the charts and the editable controls. */
+async function handlePrint() {
+  const a = analysis.value
+  if (!a) return
+  await printPagedDocument(
+    reportFileName.value,
+    (addPage) => buildAnalysisReportPages(addPage, buildReportDocument(a)),
+  )
+}
+
 </script>
 
 <template>
@@ -535,9 +497,22 @@ async function handleDownloadPdf() {
         </el-select>
         <span v-else class="branch-badge">{{ branchName(auth.branchId ?? '') }}</span>
       </div>
-      <div class="filter-actions">
-        <el-button :icon="Download" @click="handleDownload">{{ t('common.downloadExcel') }}</el-button>
-        <el-button :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf">{{ t('common.downloadPdf') }}</el-button>
+      <!-- Print / Excel / PDF are one group of equal-weight export actions,
+           in the same order and with the same icons and labels as the daily
+           report's, so the two pages' export bars read identically. On a
+           phone they become a three-up grid of full-height buttons: each
+           keeps a 44px tap target and its own label never has to share a
+           line with a neighbour, which is what used to squash them. -->
+      <div class="filter-actions no-print" :class="{ 'is-mobile': isMobile }">
+        <el-button :icon="Printer" :loading="printing" @click="handlePrint">
+          {{ t(isMobile ? 'common.printShort' : 'common.print') }}
+        </el-button>
+        <el-button :icon="Download" :loading="excelDownloading" @click="handleDownload">
+          {{ t(isMobile ? 'common.downloadExcelShort' : 'common.downloadExcel') }}
+        </el-button>
+        <el-button :icon="Download" :loading="pdfDownloading" @click="handleDownloadPdf">
+          {{ t(isMobile ? 'common.downloadPdfShort' : 'common.downloadPdf') }}
+        </el-button>
       </div>
     </div>
 
@@ -694,6 +669,37 @@ async function handleDownloadPdf() {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+/* Phone: the three export actions share the full width as equal columns
+   rather than wrapping unpredictably (two on one line, one orphaned on the
+   next, which is what a long Japanese label used to cause). Each button
+   keeps a 44px tap target, and `min-width: 0` on the grid children is what
+   actually lets them shrink inside the grid instead of overflowing it —
+   Element Plus buttons have their own min-width. */
+.filter-actions.is-mobile {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+
+.filter-actions.is-mobile :deep(.el-button) {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  margin-left: 0;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+/* A label that can't fit beside its icon wraps onto a second line inside
+   the button instead of being clipped — the button grows, the text stays
+   readable. */
+.filter-actions.is-mobile :deep(.el-button > span) {
+  white-space: normal;
+  line-height: 1.15;
+  text-align: center;
 }
 
 .branch-badge {

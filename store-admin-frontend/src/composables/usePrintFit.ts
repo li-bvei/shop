@@ -30,6 +30,23 @@ export interface PrintFitOptions {
    * content actually is.
    */
   minScale: number
+  /**
+   * Which dimensions the content is fitted to.
+   *
+   * `'page'` (the default) fits both width and height, i.e. "make this fit
+   * on one page" — correct for a single-page document like the daily
+   * report, and for a live on-screen layout printed as-is.
+   *
+   * `'width'` fits width only and ignores height entirely — for a document
+   * its builder has *already paginated* into N page-sized nodes (the
+   * monthly/yearly report; see pdfExport's buildPagesInHost). Such a
+   * document is legitimately taller than one page, and measuring its full
+   * height here would shrink all N pages down to fit inside one, producing
+   * exactly the unreadable micro-print the builder paginated to avoid. Its
+   * height is already correct by construction; all that's left is mapping
+   * the builder's CSS-px page width onto the real printable width.
+   */
+  fit?: 'page' | 'width'
 }
 
 function nextFrame(): Promise<void> {
@@ -72,6 +89,7 @@ export function usePrintFit(rootRef: Ref<HTMLElement | null | undefined>, option
   const pageHeightMm = options.pageHeightMm ?? 297
   const marginMm = options.marginMm ?? 10
   const minScale = clampMinScale(options.minScale)
+  const fit = options.fit ?? 'page'
 
   function waitForPrint(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -110,7 +128,14 @@ export function usePrintFit(rootRef: Ref<HTMLElement | null | undefined>, option
     const naturalHeight = el.scrollHeight
     const naturalWidth = el.scrollWidth
 
-    const availableHeightPx = (pageHeightMm - marginMm * 2) * PX_PER_MM * PRINT_SAFETY_MARGIN
+    // An unbounded height budget is how `fit: 'width'` is expressed: it
+    // makes every height comparison below (both the initial scale choice
+    // and the post-zoom overflow correction) a no-op, leaving width as the
+    // only constraint, without either branch needing its own copy of the
+    // measure/zoom/re-measure logic.
+    const availableHeightPx = fit === 'width'
+      ? Number.POSITIVE_INFINITY
+      : (pageHeightMm - marginMm * 2) * PX_PER_MM * PRINT_SAFETY_MARGIN
     const availableWidthPx = (pageWidthMm - marginMm * 2) * PX_PER_MM * PRINT_SAFETY_MARGIN
 
     let scale = calculatePrintScale(naturalWidth, naturalHeight, availableWidthPx, availableHeightPx, minScale)

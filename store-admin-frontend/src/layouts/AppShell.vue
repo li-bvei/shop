@@ -6,9 +6,11 @@ import AppSidebar from '@/components/AppSidebar.vue'
 import AppTopbar from '@/components/AppTopbar.vue'
 import MobileBottomNav from '@/components/mobile/MobileBottomNav.vue'
 import { useIsMobile } from '@/composables/useIsMobile'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const { t } = useI18n()
+const auth = useAuthStore()
 
 const routeTitleKeys: Record<string, string> = {
   lottery: 'lottery.pageTitle',
@@ -55,6 +57,15 @@ watch(() => route.fullPath, () => { sidebarOpen.value = false })
     <div v-if="sidebarOpen" class="sidebar-backdrop no-print" @click="sidebarOpen = false" />
     <div class="app-main">
       <AppTopbar class="no-print" :title="pageTitle" @toggle-sidebar="sidebarOpen = !sidebarOpen" />
+      <!-- Standing banner for the sales-demo tenant. Deliberately not
+           dismissible and present on EVERY screen: the one thing that must
+           never happen is somebody taking a figure out of a demo session
+           and believing it is their own. `no-print` so it doesn't follow
+           the data into an exported report. -->
+      <div v-if="auth.isDemo" class="demo-banner no-print">
+        <span class="demo-badge">{{ t('demo.badge') }}</span>
+        <span class="demo-text">{{ t('demo.bannerText') }}</span>
+      </div>
       <div class="app-main-body">
         <router-view v-slot="{ Component }">
           <transition name="page-fade" mode="out-in">
@@ -68,6 +79,45 @@ watch(() => route.fullPath, () => { sidebarOpen.value = false })
 </template>
 
 <style scoped>
+/* Sticky so the banner stays visible while scrolling a long report — a
+   warning that scrolls away stops being a warning. */
+.demo-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 20px;
+  background: #fff7e6;
+  border-bottom: 1px solid #f0c78a;
+  color: #8a5a00;
+  font-size: 12.5px;
+}
+
+.demo-badge {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: #f0a020;
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+
+/* The explanatory half wraps instead of being clipped on a phone — the
+   badge alone doesn't say what it means. */
+.demo-text {
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .demo-banner {
+    padding: 8px 14px;
+  }
+}
+
 .app-shell {
   --mobile-nav-h: calc(60px + env(safe-area-inset-bottom, 0px));
   display: grid;

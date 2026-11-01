@@ -16,6 +16,7 @@ interface MeResponse {
   staffMemberId: string | null
   isSuperuser: boolean
   enabledFeatures: string[]
+  isDemo: boolean
 }
 
 export const useAuthStore = defineStore('auth', {
@@ -31,6 +32,10 @@ export const useAuthStore = defineStore('auth', {
     branchNameJa: null as string | null,
     staffMemberId: null as string | null,
     isSuperuser: false,
+    // True only inside the sales-demo tenant. Drives the standing
+    // "sample data" banner, so a demo session can never be mistaken for
+    // the viewer's own books.
+    isDemo: false,
     // Module keys this account's Organization is entitled to. Empty until
     // loadMe() runs; the router gate and sidebar read it.
     enabledFeatures: [] as string[],
@@ -73,6 +78,7 @@ export const useAuthStore = defineStore('auth', {
       this.branchNameJa = me.branchNameJa
       this.staffMemberId = me.staffMemberId
       this.isSuperuser = me.isSuperuser ?? false
+      this.isDemo = me.isDemo ?? false
       this.enabledFeatures = me.enabledFeatures ?? []
     },
     /** Called once at app boot — restores the session from a stored token
@@ -98,6 +104,7 @@ export const useAuthStore = defineStore('auth', {
       this.branchNameJa = null
       this.staffMemberId = null
       this.isSuperuser = false
+      this.isDemo = false
       this.enabledFeatures = []
     },
   },

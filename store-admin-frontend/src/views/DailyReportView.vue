@@ -35,10 +35,14 @@ import DailyReportForm, {
   type DailyReportFormData,
   type PreviousCashDay,
 } from '@/components/DailyReportForm.vue'
-import { formatCurrency, formatNumber, formatSignedCurrency, branchDisplayName, todayJst, formatDateKanji } from '@/utils/format'
+import {
+  formatCurrency, formatSignedCurrency, branchDisplayName, todayJst, formatDateKanji,
+  formatAccountingCurrency, formatAccountingNumber, excelAmount, EXCEL_CURRENCY_FORMAT, EXCEL_COUNT_FORMAT,
+} from '@/utils/format'
+import type ExcelJS from 'exceljs'
 import { downloadCustomExcel } from '@/utils/excelExport'
 import {
-  renderOffscreenToPdf, el, styleReportRoot, buildReportHeader, reportSectionTitle, REPORT_PDF_TEXT,
+  renderOffscreenToPdf, el, styleReportRoot, buildReportHeader, reportSectionTitle, reportAmountCell, REPORT_PDF_TEXT,
 } from '@/utils/pdfExport'
 import {
   saveDraft, getDraft, clearDraft, listDrafts, isNetworkFailure, type DailyReportDraft,
@@ -209,14 +213,14 @@ function buildCashRegisterRow(
   const breakdown = cashRegisterDenominationBreakdown(denomination, counts, cashRegisterFloat)
   const tr = document.createElement('tr')
   const cellStyle = { padding: '3px 5px', borderBottom: '1px solid #ccc' }
-  tr.appendChild(el('td', { ...cellStyle, fontWeight: '700' }, formatCurrency(denomination)))
+  tr.appendChild(el('td', { ...cellStyle, fontWeight: '700' }, formatAccountingCurrency(denomination)))
   const qtyCell = el('td', { ...cellStyle, textAlign: 'center' })
-  qtyCell.appendChild(el('div', { fontWeight: '700' }, formatNumber(breakdown.totalQuantity)))
+  qtyCell.appendChild(el('div', { fontWeight: '700' }, formatAccountingNumber(breakdown.totalQuantity)))
   if (breakdown.floatQuantity) {
     qtyCell.appendChild(el('div', { fontSize: '10px', color: '#444', fontWeight: '400' }, `(${breakdown.rawQuantity}+${breakdown.floatQuantity})`))
   }
   tr.appendChild(qtyCell)
-  tr.appendChild(el('td', { ...cellStyle, textAlign: 'right', fontWeight: '700' }, formatCurrency(breakdown.subtotal)))
+  tr.appendChild(el('td', { ...cellStyle, textAlign: 'right', fontWeight: '700', fontVariantNumeric: 'tabular-nums' }, formatAccountingCurrency(breakdown.subtotal)))
   return tr
 }
 
@@ -274,9 +278,9 @@ function buildDailyReportPdf(
   // this report — largest, boldest numbers on the page. -------------------
   const heroRow = el('div', { display: 'flex', gap: '10px', marginBottom: '14px' })
   const heroItems: [string, string][] = [
-    [t('dailyReport.totalRevenue'), formatCurrency(reportForm.totalRevenue ?? 0)],
-    [t('dailyReport.totalCustomers'), formatNumber(reportForm.totalCustomers ?? 0)],
-    [t('dailyReport.groupCount'), formatNumber(reportForm.groupCount ?? 0)],
+    [t('dailyReport.totalRevenue'), formatAccountingCurrency(reportForm.totalRevenue ?? 0)],
+    [t('dailyReport.totalCustomers'), formatAccountingNumber(reportForm.totalCustomers ?? 0)],
+    [t('dailyReport.groupCount'), formatAccountingNumber(reportForm.groupCount ?? 0)],
   ]
   for (const [label, value] of heroItems) {
     const box = el('div', { flex: '1', border: '1.5px solid #999', borderRadius: '4px', padding: '10px 12px' })
@@ -290,12 +294,12 @@ function buildDailyReportPdf(
   // function the on-screen form and Excel export both already use. ------
   const splitGrid = el('div', { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '16px' })
   const splitItems: [string, string][] = [
-    [t('dailyReport.morningRevenue'), formatCurrency(reportForm.morningRevenue ?? 0)],
-    [t('dailyReport.morningCustomers'), formatNumber(reportForm.morningCustomers ?? 0)],
-    [t('dailyReport.morningGroupCount'), formatNumber(reportForm.morningGroupCount ?? 0)],
-    [t('dailyReport.afternoonRevenueAuto'), formatCurrency(derived.afternoonRevenue)],
-    [t('dailyReport.afternoonCustomersAuto'), formatNumber(derived.afternoonCustomers)],
-    [t('dailyReport.afternoonGroupCountAuto'), formatNumber(derived.afternoonGroupCount)],
+    [t('dailyReport.morningRevenue'), formatAccountingCurrency(reportForm.morningRevenue ?? 0)],
+    [t('dailyReport.morningCustomers'), formatAccountingNumber(reportForm.morningCustomers ?? 0)],
+    [t('dailyReport.morningGroupCount'), formatAccountingNumber(reportForm.morningGroupCount ?? 0)],
+    [t('dailyReport.afternoonRevenueAuto'), formatAccountingCurrency(derived.afternoonRevenue)],
+    [t('dailyReport.afternoonCustomersAuto'), formatAccountingNumber(derived.afternoonCustomers)],
+    [t('dailyReport.afternoonGroupCountAuto'), formatAccountingNumber(derived.afternoonGroupCount)],
   ]
   for (const [label, value] of splitItems) {
     const box = el('div', { border: '1px solid #bbb', borderRadius: '4px', padding: '6px 8px' })
@@ -319,7 +323,7 @@ function buildDailyReportPdf(
     if (!method.protected && !amount) continue
     const row = document.createElement('tr')
     row.appendChild(el('td', { padding: '5px 4px', borderBottom: '1px solid #ccc', fontWeight: '700' }, paymentMethodLabel(method)))
-    row.appendChild(el('td', { padding: '5px 4px', borderBottom: '1px solid #ccc', textAlign: 'right', fontWeight: '800' }, formatCurrency(amount)))
+    row.appendChild(reportAmountCell(formatAccountingCurrency(amount), { bold: true }))
     pmTable.appendChild(row)
   }
   pmSection.appendChild(pmTable)
@@ -354,8 +358,8 @@ function buildDailyReportPdf(
       : t('dailyReport.cashRegisterShort', { amount: formatCurrency(Math.abs(diff)) })
 
   const crSummary = el('div', { display: 'flex', justifyContent: 'space-between', fontSize: '13px', fontWeight: '700' })
-  crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterExpected')}：${formatCurrency(expectedTotal)}`))
-  crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterActual')}：${formatCurrency(actualTotal)}`))
+  crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterExpected')}：${formatAccountingCurrency(expectedTotal)}`))
+  crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterActual')}：${formatAccountingCurrency(actualTotal)}`))
   crSummary.appendChild(el('div', {}, `${t('dailyReport.cashRegisterDifference')}：${diffText}`))
   crSection.appendChild(crSummary)
 
@@ -411,7 +415,7 @@ function buildDailyReportPdf(
       const row = document.createElement('tr')
       const wrapStyle = { padding: '5px 4px', borderBottom: '1px solid #ccc', wordBreak: 'break-word', overflowWrap: 'break-word' } as const
       row.appendChild(el('td', { ...wrapStyle, fontWeight: '700' }, expense.itemName))
-      row.appendChild(el('td', { ...wrapStyle, textAlign: 'right', fontWeight: '700', whiteSpace: 'nowrap' }, formatCurrency(expense.amount ?? 0)))
+      row.appendChild(el('td', { ...wrapStyle, textAlign: 'right', fontWeight: '700', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }, formatAccountingCurrency(expense.amount ?? 0)))
       row.appendChild(el('td', { ...wrapStyle, fontWeight: '400' }, expense.purpose))
       expTable.appendChild(row)
     }
@@ -425,7 +429,7 @@ function buildDailyReportPdf(
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
   })
   remainingBox.appendChild(el('div', { fontSize: '15px', fontWeight: '800' }, t('dailyReport.cashRemaining')))
-  remainingBox.appendChild(el('div', { fontSize: '24px', fontWeight: '800' }, formatCurrency(derived.cashRemaining)))
+  remainingBox.appendChild(el('div', { fontSize: '24px', fontWeight: '800', fontVariantNumeric: 'tabular-nums' }, formatAccountingCurrency(derived.cashRemaining)))
   root.appendChild(remainingBox)
 }
 
@@ -920,6 +924,23 @@ function paymentMethodAmount(method: PaymentMethodDef, derived: ReturnType<typeo
   return method.protected ? derived.cashAmount : (reportForm.paymentAmounts[String(method.id)] ?? 0)
 }
 
+/**
+ * Applies the shared accounting display format to the numeric cells of a row
+ * the caller has just added, leaving the values themselves untouched.
+ * `kinds` lines up with the row's columns: 'money', 'count', or null for a
+ * text column. Without this the workbook's amounts came out as bare digit
+ * runs ("9847231") — a real number, so summable, but reading nothing like
+ * the same amount in the PDF, on screen, or in the monthly workbook.
+ */
+function formatExcelRow(row: ExcelJS.Row, kinds: ('money' | 'count' | null)[]) {
+  kinds.forEach((kind, index) => {
+    if (!kind) return
+    const cell = row.getCell(index + 1)
+    cell.numFmt = kind === 'money' ? EXCEL_CURRENCY_FORMAT : EXCEL_COUNT_FORMAT
+    cell.alignment = { horizontal: 'right' }
+  })
+}
+
 async function handleDownload() {
   const derived = computeDerived(reportForm, paymentMethods.value)
   await downloadCustomExcel(exportFileName.value, t('dailyReport.pageTitle'), (ws) => {
@@ -927,27 +948,44 @@ async function handleDownload() {
     ws.getRow(1).font = { bold: true }
     ws.addRow([])
 
+    const statKinds: ('money' | 'count' | null)[] = ['money', 'count', 'count']
     ws.addRow([t('dailyReport.totalRevenue'), t('dailyReport.totalCustomers'), t('dailyReport.groupCount')]).font = { bold: true }
-    ws.addRow([reportForm.totalRevenue, reportForm.totalCustomers, reportForm.groupCount])
+    formatExcelRow(
+      ws.addRow([excelAmount(reportForm.totalRevenue), excelAmount(reportForm.totalCustomers), excelAmount(reportForm.groupCount)]),
+      statKinds,
+    )
     ws.addRow([t('dailyReport.morningRevenue'), t('dailyReport.morningCustomers'), t('dailyReport.morningGroupCount')]).font = { bold: true }
-    ws.addRow([reportForm.morningRevenue, reportForm.morningCustomers, reportForm.morningGroupCount])
+    formatExcelRow(
+      ws.addRow([excelAmount(reportForm.morningRevenue), excelAmount(reportForm.morningCustomers), excelAmount(reportForm.morningGroupCount)]),
+      statKinds,
+    )
     ws.addRow([t('dailyReport.afternoonRevenueAuto'), t('dailyReport.afternoonCustomersAuto'), t('dailyReport.afternoonGroupCountAuto')]).font = { bold: true }
-    ws.addRow([derived.afternoonRevenue, derived.afternoonCustomers, derived.afternoonGroupCount])
+    formatExcelRow(
+      ws.addRow([excelAmount(derived.afternoonRevenue), excelAmount(derived.afternoonCustomers), excelAmount(derived.afternoonGroupCount)]),
+      statKinds,
+    )
     ws.addRow([])
 
     ws.addRow([t('dailyReport.paymentMethodsTitle')]).font = { bold: true }
     for (const method of paymentMethods.value) {
-      ws.addRow([paymentMethodLabel(method), paymentMethodAmount(method, derived)])
+      formatExcelRow(ws.addRow([paymentMethodLabel(method), excelAmount(paymentMethodAmount(method, derived))]), [null, 'money'])
     }
     ws.addRow([])
 
-    ws.addRow([t('dailyReport.expenseTitle'), null, null, `${t('dailyReport.expenseTotal')} ${derived.expenseTotal}`]).font = { bold: true }
+    // The expense total gets its own numeric cell rather than being
+    // interpolated into the heading's text, where it was neither summable
+    // nor formatted like every other amount in the sheet.
+    const expenseHeadingRow = ws.addRow([t('dailyReport.expenseTitle'), null, null, t('dailyReport.expenseTotal'), excelAmount(derived.expenseTotal)])
+    expenseHeadingRow.font = { bold: true }
+    formatExcelRow(expenseHeadingRow, [null, null, null, null, 'money'])
     for (const expense of reportForm.expenses) {
-      ws.addRow([expense.itemName, expense.amount, expense.purpose])
+      formatExcelRow(ws.addRow([expense.itemName, excelAmount(expense.amount), expense.purpose]), [null, 'money', null])
     }
     ws.addRow([])
 
-    ws.addRow([t('dailyReport.cashRemaining'), derived.cashRemaining]).font = { bold: true }
+    const remainingRow = ws.addRow([t('dailyReport.cashRemaining'), excelAmount(derived.cashRemaining)])
+    remainingRow.font = { bold: true }
+    formatExcelRow(remainingRow, [null, 'money'])
     ws.addRow([])
     ws.addRow([t('dailyReport.cashRegisterTitle')]).font = { bold: true }
     ws.addRow([
@@ -959,12 +997,12 @@ async function handleDownload() {
       const { rawQuantity, subtotal } = cashRegisterDenominationBreakdown(
         denomination, reportForm.cashRegisterCounts, reportForm.cashRegisterFloat,
       )
-      ws.addRow([denomination, rawQuantity, subtotal])
+      formatExcelRow(ws.addRow([denomination, rawQuantity, subtotal]), ['money', 'count', 'money'])
     }
     const cashRegisterTotal = computeCashRegisterTotal(reportForm.cashRegisterCounts, reportForm.cashRegisterFloat)
-    ws.addRow([t('dailyReport.cashRegisterExpected'), cashRegisterExpectedTotal.value])
-    ws.addRow([t('dailyReport.cashRegisterActual'), cashRegisterTotal])
-    ws.addRow([t('dailyReport.cashRegisterDifference'), cashRegisterTotal - cashRegisterExpectedTotal.value])
+    formatExcelRow(ws.addRow([t('dailyReport.cashRegisterExpected'), cashRegisterExpectedTotal.value]), [null, 'money'])
+    formatExcelRow(ws.addRow([t('dailyReport.cashRegisterActual'), cashRegisterTotal]), [null, 'money'])
+    formatExcelRow(ws.addRow([t('dailyReport.cashRegisterDifference'), cashRegisterTotal - cashRegisterExpectedTotal.value]), [null, 'money'])
     ws.columns.forEach((col) => { col.width = 18 })
   })
 }

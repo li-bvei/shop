@@ -11,6 +11,7 @@
     "type-check": "vue-tsc --build",
     "test:schedule-save": "node --experimental-strip-types --test tests/scheduleSaveResults.test.ts",
     "test:print-scale": "node --experimental-strip-types --test tests/printScale.test.ts",
+    "test:money": "node --experimental-strip-types --test tests/money.test.ts",
     "lint": "run-s \"lint:*\"",
     "lint:oxlint": "oxlint . --fix",
     "lint:eslint": "eslint . --fix --cache",

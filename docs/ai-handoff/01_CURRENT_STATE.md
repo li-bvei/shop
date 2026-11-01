@@ -10,6 +10,142 @@
 - `docs/ai-handoff/05_TESTS_AND_RISKS.md` 是 2026-09-14 一次独立审计留下的记录，审计范围覆盖到 `960bbac`；其中 P1-01（批量替换空字符串/日期校验）和 P1-08（reconcile 命令事务边界）已在 `1fc5fa1` 修复，其余条目仍待处理，见该文件本身。
 - **本文档撰写之后（2026-09-19 ～ 09-22）还有几轮未在本文件其余章节回填的改动**（手机端响应式布局、供应商聚合加载改用后端已有字段、支付方式改成软删除、月度经营新增年度切换与 PDF、日报 PDF 重做）——这些改动现已进入 Git 版本管理；下面单独列一节说明日报 PDF，其余批次尚未完整回填，接手前建议同时查看 `git log`，不要只依赖本文档。
 
+## 2026-11-02 上一轮独立核查发现问题的修复（已实现，未提交/未部署；migration 由 2 个增至 3 个）
+
+承 2026-11-01 批次。一次独立核查指出六处问题，逐项修复如下。**工资计算逻辑未改动**；
+工作区里用户自己的扫码相关改动（`QrScanner.vue` / `GuestCardView.vue` / `PromoVerifyView.vue` /
+`PromoRedeemView.vue` 及其中日文案）未被触碰。本次**没有前端改动**。
+
+1. **演示员工账号没有关联员工记录** —— `demo-staff` 创建后 `staff_member` 为空，
+   而 `AttendanceScopedMixin` 按 `user.staff_member_id` 作用域、`resolve_employee` 直接拒绝未关联账号，
+   所以员工端出勤页在演示时是空的、不可用。新增 `Command.link_staff_account()`，
+   在 `seed_staff` 之后把该账号指向首个分店的第一名员工（也正是下面出勤与补卡数据所用的那名员工）。
+   `staff_member` 是 OneToOne，重复执行只是重新指向同一个人，幂等。
+   测试 `DemoSeedStaffAccountTests`（6 例），其中一例走真实 JWT 登录 + `/api/actual-work-records/`
+   + `/api/attendance-punches/today/`，验证的是员工出勤 API 真正做的那道账号检查。
+
+2. **`--months` 起始月算错** —— 原来用 `today - 31 * (months - 1)` 天再 `replace(day=1)`，
+   遇到短月会落到上一个月：在 3 月 1 日执行 `--months=3` 得到的是 2025-12 而不是 2026-01，少一个月。
+   改为按自然月计算（新增模块级 `months_before(first_of_month, months)`，按 `year*12 + month` 索引做减法）。
+   测试 `DemoSeedMonthRangeTests`（5 例，含跨年、2 月、逐月遍历全年）+ `DemoSeedMonthCoverageTests`（2 例，
+   校验种子实际生成的最早日期与月份数）。
+
+3. **历史出勤的异常分钟数全是 0** —— 0007 给 `late_minutes` / `early_leave_minutes` 的默认值 0 对新行是对的，
+   对历史是错的；`ActualWorkRecordFilter.filter_exception` 直接查这两列，
+   所以店长用默认的「只看异常」看过去几个月，一条迟到/早退都看不到 —— 不是少了细节，是答案错了。
+   新增迁移 `scheduling/0009_backfill_attendance_exception_minutes`，用已有数据按
+   `attendance.exception_minutes` 同一规则重算（分店容差、`crosses_midnight` 偏移、下限 0；
+   无班次/无时间/缺勤的行留 0）。迁移内只用 `apps.get_model` 的 historical models，
+   逻辑刻意复制而非 import 运行时模块 —— 迁移必须保持它运行当时的行为。可逆（反向清零）。
+   测试 `HistoricalExceptionMinuteBackfillTests`（13 例），包含「回填后既有筛选确实能找到这一天」
+   和「工资引擎读取的字段一个都没动」。
+
+4. **排班生成实际记录时没有审计** —— `SchedulePeriodViewSet.generate_actual_records` 会把一天直接写成
+   `manager_confirmed`（即直接进入工资链路），却是唯一不写 `AttendanceChangeLog` 的写入路径。
+   现在每条新建记录在**同一事务内**调用既有的 `attendance.log_change(..., source=GENERATED)`；
+   已存在的记录被跳过，也不产生日志条目。测试 `GeneratedRecordAuditTests`（3 例）。
+   同时修正了文档与 `attendance.py` 顶部注释里提到的 `_write_record` —— 代码里没有这个函数，
+   审计是在每个写入路径上显式调用 `log_change()`；改为列出全部真实调用点，**没有**为了迁就文档新增抽象层。
+
+5. **`0008` 的措辞过头** —— `shift` 外键在店长改过记录之后依然保留，所以它只能证明「这一天有排班」，
+   不能证明时间仍然来自排班；原文称其为「精确恢复」是不成立的。
+   现在：`adjustment_reason` 非空的行保持 `manual`（序列化器在时间与班次不一致时强制填写该字段，
+   unlock 也会追加，本版本前没有别的写入方，所以非空是「人动过」的正向证据）；
+   其余有排班的行标 `plan`，并在迁移 docstring 和 `08_ATTENDANCE.md` 第 5 节明确写出它是
+   **尽力而为的标签、不是还原**，以及它可能误标哪一类日期。该字段只是来源说明，`wages` 不读。
+
+6. **文档一致性** —— `08_ATTENDANCE.md` 更新迁移表（补 0009、改正 0008）、审计调用点、API 表、
+   测试表（71 → 87 例）与已知限制；本节即 `01_CURRENT_STATE.md` 的回填；`00_INDEX.md` 更新整理日期。
+   **部署文案已统一**：原先 `08_ATTENDANCE.md` 写「部署命令照常：`bash deploy.sh`」，
+   与本文件既有条目（「不要用 `bash deploy.sh`，其内部含 `git reset --hard`」）和
+   `05_TESTS_AND_RISKS.md` 的 P1-04 冲突；现改为指向 `04_DEPLOYMENT_RUNBOOK.md` 的
+   `git pull --ff-only origin main` → build → `migrate` → `up -d`，并写明为什么不要用那个脚本。
+   **`deploy.sh` 本身未改动**（它是否要重写是 P1-04 的事，不在本次范围内）。
+
+### 验证（实际执行）
+
+```
+venv/bin/python manage.py test scheduling organizations wages accounts
+Ran 298 tests in 234.393s   OK
+
+venv/bin/python manage.py test scheduling          → Ran 140 tests, OK
+venv/bin/python manage.py test organizations.tests_demo_seed → Ran 35 tests, OK
+venv/bin/python manage.py makemigrations --check --dry-run   → No changes detected
+venv/bin/python manage.py check                              → no issues
+venv/bin/python manage.py showmigrations scheduling          → 0007/0008/0009 均显示未应用
+```
+
+未验证项：**没有**在带历史数据的数据库上真正跑过一次 `migrate` 再回滚
+（0007/0008/0009 的正向应用由每次建测试库覆盖，两个 `RunPython` 的正反函数由测试直接调用覆盖）。
+本次无前端改动，故未重跑前端 type-check / build。
+
+---
+
+## 2026-11-01 六项批次：会计金额格式 + 月/年报打印 + 出勤打卡重构 + 演示租户 + 操作指南 + 手机端扫查（已实现，未提交/未部署，含 3 个新 migration）
+
+本批次基线 `f171cfb`，工作区另有用户自己未提交的扫码组件改动（`QrScanner.vue` / `GuestCardView.vue` / `PromoVerifyView.vue` / `PromoRedeemView.vue` 及其中日文案），**未被本批次改动或回退**；两者在 `i18n/locales/*.ts` 中各加各的键，互不冲突。
+
+### 1. 金额会计格式（屏幕 / PDF / 打印 / Excel 同源）
+
+- `utils/format.ts` 新增 `formatAccountingCurrency` / `formatAccountingNumber` / `excelAmount` / `EXCEL_CURRENCY_FORMAT` / `EXCEL_COUNT_FORMAT`。统一规则：千分位、金额列右对齐（tabular-nums）、**负数用括号**（`(¥1,234)`）、**零为 `¥0`**、**缺失为 `—`**。零与缺失刻意区分，避免把"没有日报的一天"读成"营业额为 0 的一天"。
+- 屏幕上的 `formatCurrency` / `formatSignedCurrency` 未改动：前者是界面风格，后者用于差额字段（符号本身就是信息）。会计格式只用于**生成出来的报表**（PDF / 打印 / Excel），这是惯例差异，不是不一致。
+- Excel 侧写入的是**原始数值 + numFmt**，不是格式化字符串，所以单元格仍可求和。日报 Excel 原先完全没有数字格式（金额显示为 `9847231`），现已统一；日报的"経費合計金額"原先被拼进标题字符串里，现改为独立数值单元格。
+- `tests/money.test.ts`（10 例，新增）+ `package.json` 的 `test:money`。
+
+### 2. 月报 / 年报：打印按钮 + 与 PDF 真正同源
+
+- 新增 `utils/reports/analysisReport.ts`：把月报/年报文档的结构、分页和金额呈现抽成一个纯模块（不含 i18n / store / API / Vue），PDF 下载和打印**用同一个 builder、同一套 `buildPagesInHost`**，所以内容、分页、续页表头、金额格式不可能再分叉。
+- `utils/pdfExport.ts` 新增 `buildPagesInHost` / `REPORT_PAGE_CLASS` / `reportAmountCell` / `reportTextCell` / `reportHeaderCell` / `createPageFlow`。
+- `composables/usePagedDocumentPrint.ts`（新增）：多页文档的打印侧，复用 `.print-only-document`（新增 `.is-paged` 变体）。`global.css` 新增对应的 `@media print` 规则——容器允许断页、每个 `.report-page` 内部不断页且页后强制分页、最后一页不分页（避免尾部空白页）。
+- `usePrintFit` 新增 `fit: 'width'`：已自行分页的文档只按宽度缩放、**完全不测高度**，否则 N 页会被压成一页微缩字。`tests/printScale.test.ts` 新增 3 例。
+- 手机端导出条改为三等分网格（打印 / Excel / PDF），44px 触控高度，窄屏用短文案（新增 `common.printShort` / `downloadExcelShort` / `downloadPdfShort`）。
+- 月/年报 Excel 改为三个工作表（汇总+明细 / 支付方式构成 / 供应商排行），各自独立 A4 页面设置。
+
+### 3. 员工出勤：新增打卡层（详见 `08_ATTENDANCE.md`）
+
+- 新增 `AttendancePunch`（append-only 打卡事件）、`AttendanceCorrectionRequest`（补卡申请）、`AttendanceChangeLog`（append-only 审计）；`ActualWorkRecord` 增 `source` / `late_minutes` / `early_leave_minutes`；`BranchScheduleSetting` 增 `late_grace_minutes` / `early_leave_grace_minutes` / `attendance_day_cutover_hour` / `self_punch_enabled`。
+- **核心不变量：打卡是证据，店长确认是权限。** 打卡与补卡产生的记录一律 `pending`，工资引擎只读 `manager_confirmed` / `admin_locked`，所以**工资链路的输入契约与改动前完全一致**，员工无法通过打卡改变自己的工资。
+- GitHub 选型（实际访问并核实许可证/维护状态/数据模型）：Horilla（Django，**LGPL-2.1**，最近提交 2026-10-30）与 Frappe HR（**GPL-3.0**，9.0k star）。两者均为 copyleft，**未复制任何代码、未引入任何依赖**，只借鉴设计。理由逐条记在 `08_ATTENDANCE.md`。
+- 迁移 `scheduling/0007`（全部新增，不改既有数据）+ `0008`（`source` 标签）+ `0009`（回填历史迟到/早退分钟）。后两个都不触碰工资引擎读取的任何字段，**不可能影响已结算工资**，均可逆；`0008` 的 `plan` 标签只是尽力而为、不是精确还原，限制写在 `08_ATTENDANCE.md` 第 5 节。
+- 前端：`views/staff/MyAttendanceView.vue`（员工打卡，手机优先，四个按钮常驻按需禁用）、`views/AttendanceView.vue`（店长/总部，默认只看异常、待审批队列置顶、批量确认、锁定/解锁、变更历史、Excel 导出）。
+- 测试 `scheduling/tests_attendance.py` 71 例。
+
+### 4. 演示租户 + 演示导览页
+
+- `manage.py seed_customer_demo`（新增）：**独立 Organization**（`organizations/demo.py` 的 `demo-showcase`），3 分店 / 6 员工 / 5 供应商 / 商品库存 / 近 N 个月日报与进货 / 当月与上月排班出勤（含迟到、缺勤、跨午夜、未完成打卡、1 条待审批补卡）/ 工资草稿。幂等、可 `--purge`、随机种子固定（销售彩排过的数字不会变）、日期相对今天生成。
+- 安全：所有查询都按该 Organization 作用域，`--purge` 只删该租户；`DEBUG=False` 时必须显式 `--confirm`；全部显示名带 `DEMO` 前缀。
+- `MeSerializer` 新增 `isDemo`（由 Organization code 派生，不落库），`AppShell` 据此在**每一个页面**顶部常驻橙色「演示数据」提示条（不可关闭、`no-print`）。
+- `views/DemoView.vue`（新增，`/demo`）：8 步导览脚本，每步写明"看什么 / 为什么重要"并直接打开真实页面；按角色与模块开关过滤；**不含任何部署命令、服务器地址、凭据或内部实现细节**。
+- 测试 `organizations/tests_demo_seed.py` 22 例（隔离 / 幂等 / purge 安全 / DEBUG 守卫 / 内容完整性）。
+
+### 5. 系统内操作指南 + PDF
+
+- `views/GuideView.vue`（新增，`/guide`，admin/branch/staff 皆可）：按角色与模块过滤的 13 章，含目录、全文搜索、每章"操作步骤 / 权限与注意事项"和"打开该页面"。
+- `utils/guide/guideContent.ts` 只定义结构，**文案全部在 locale 文件的 `guide.*`**；`utils/reports/guideDocument.ts` 用同样的 key 渲染 PDF，所以界面与 PDF 不存在两份文案。
+- PDF：首页标题+目录，之后每章独占一页，续页重复文档名并标 `n / 总页数`；实测 13 页、无溢出页、无空白页；日文/中文由系统字体渲染（`"Hiragino Sans", "Microsoft YaHei"`），不需要内嵌字体。
+- 内容来源是**当前界面**，不是 `开发进度.md`（后者是重构与测试记录的开发者变更日志，绝大部分不描述任何用户操作）。已刻意排除部署命令、密钥、服务器地址、生产账号。
+
+### 6. 手机端整体扫查
+
+在 375×812 下逐页审计（横向溢出 / 省略号 / 裁切 / 触控目标），发现并修复的跨页面问题集中在 `element-overrides.css` 的 `@media (max-width: 768px)`：
+
+- `el-button--small` 在手机上只有 **24px** 高（员工、设置、排班、供应商表格里的行内操作按钮）→ 提到 36px，`is-link` 同理。桌面端保持 24px 不变（已验证无回归）。
+- 表格单元格在手机上允许换行（`white-space: normal` + `overflow-wrap: anywhere`），不再把列头截成「店舗名（中国…」。
+- 横向滚动表格右缘加渐隐提示（纯 CSS，无额外 DOM）。
+- 经营页、出勤页、指南页的筛选/导出控件在手机上改为等宽网格，44px 触控高度。
+
+### 验证（实际执行，非声称）
+
+- 后端：`venv/bin/python manage.py test` → **Ran 594 tests in 445s, OK**（改动前基线 501，新增 71 项出勤 + 22 项演示种子 = 594）。注意 `--parallel 4` 会在 `wages.tests.WageV2SimpleTests` 上报 `TransactionManagementError`，这是**改动前就存在**的并行运行器问题，串行全部通过。
+- 前端：`npm run type-check`（vue-tsc）、`npx oxlint src/`、`npm run build` 全绿；`test:money` 10/10、`test:print-scale` 11/11、`test:schedule-save` 1/1。
+- 浏览器实测（Django 本机起不来，用 vite + 打桩 fetch 挂载真实页面，验证完已删除打桩文件）：月报 PDF 2 页（31 行含负数/零/缺失日），续页表头与页码正确，`(¥184,500)` / `¥0` / `—` 三种呈现符合规则；月报 Excel 三个工作表、金额为数值且带 numFmt；出勤两个页面在 375px 下零横向溢出；指南 PDF 13 页无溢出无空白。
+
+### 已知限制
+
+- 日文列头以半角/全角括号结尾时（如「店舗名（中国語）」）仍会在窄屏表头出现省略号——日文禁则处理不允许在闭括号前断行，`overflow-wrap`/`line-break` 均无法覆盖该规则；不带尾括号的列头（「アカウント」「所属店舗」）正常换行。
+- `actual-work-records/bulk_confirm` 读取 `request.data['ids']` 时要求 JSON 请求体；表单编码会把数组压成字符串而 `id__in` 按字符迭代。前端发的是 JSON，生产不受影响；本批次未改动该端点的这一行为。
+- 出勤未做地理位置/设备校验，也未对接硬件打卡机（两个参考方案都有）。
+
 ## 2026-10-27 日报：现金允许为负 + 「昨日不足分」支付方式自动取前一天数据（已实现，未提交/未部署，含 1 个新 migration）
 
 - **根因（保存后刷新没变化）**：后端 `DailyReportSerializer.validate` 规定"非现金支付方式合计不能超过売上"，超过即 400，数据完全没存；前端又把 400 当作"意外错误"弹泛泛提示，看起来像"改了没生效"。
@@ -38,6 +174,15 @@
   docker compose run --rm backend python manage.py migrate
   docker compose up -d
   ```
+
+## 2026-10-07 相机扫码：扫到不符合的二维码时弹提示并继续扫描，不再直接退出（已实现，未提交/未部署）
+
+- **现象**：`QrScanner.vue` 解码到任何二维码（菜单、海报、别人的码都算）就立刻关闭相机，再由页面去查询；查不到只弹 toast（客人端是 `window.alert`），还得重新点"用相机扫码"。
+- **改法**：`QrScanner` 不再 emit `decode`，改为必传 prop `handle(payload) => Promise<string | null>`。页面返回 `null` 才表示码可用（相机关闭并 emit `close`）；返回字符串表示不可用——相机保持开启，顶部弹出白色提示框（带"知道了"）显示原因。查询期间提示文字变为"正在确认…"。同一个被拒的码留在画面里不会被反复查询，移开 1.5 秒以上再扫才算新的一次。
+- **三个入口**：`PromoVerifyView`（柜台打卡，查客人卡：404/403/其他各有提示）、`PromoRedeemView`（核销，查券码或客人卡）、`GuestCardView`（客人到店打卡扫店铺码：`store-token-invalid`、直播码缺失/过期、其他失败各有提示，原来的 `window.alert` 去掉）。手动输入/扫码枪路径不变，仍是 toast。新增文案 `qrScanner.checking/failed/dismiss`、`promoVerify.scanNotCard`、`promoRedeem.scanNotFound`、`guest.checkinNotStoreQr`（中日文）。
+- **顺带修了**：相机授权弹窗还没点就按取消，之后才拿到的摄像头流现在会被释放（以前会一直开着）；组件卸载后不再空转 `requestAnimationFrame`。
+- **验证**：本机 Django 在预览沙箱里起不来（macOS 权限拦了 Python 读项目文件），所以用浏览器预览 + 假相机（canvas 推流、画面里换二维码）+ 假接口驱动真实页面，三个入口都测了：外来二维码/不存在的码 → 提示出现、相机保持、摄像头流未停；同一个错码停留 2.5 秒只查询 1 次；点"知道了"后不重复弹；移开再扫算新的一次；换另一个错码 → 提示更新；正确的码 → 相机关闭、流释放、进入金额页/券列表/打卡成功；403、500 各自提示；取消按钮、查询途中取消都会释放摄像头；375px 宽下提示框不挡取景框；控制台无报错。后端无改动，既有测试已固定 `store-token-invalid`/`live-qr-stale`/404。`vue-tsc`、oxlint、eslint 通过。**没有用真实摄像头和真实 Django 联调**，部署后建议在平板上实扫一次：随便扫一个别的二维码，确认出现提示且相机不退出。
+- **部署**：无后端改动、无 migration，只需重新构建前端。
 
 ## 2026-09-30 日报/月报/年报 PDF 视觉规格统一 + 分页 + 打印真正同源（已实现，未提交/未部署）
 

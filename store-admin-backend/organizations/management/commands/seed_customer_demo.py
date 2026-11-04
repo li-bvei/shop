@@ -49,7 +49,7 @@ from paymentmethods.models import PaymentMethodDef, seed_default_payment_methods
 from purchasing.models import PurchaseRecord, Supplier
 from scheduling.attendance import apply_exception_minutes
 from scheduling.models import (
-    ActualWorkRecord, AttendanceCorrectionRequest, AttendancePunch, SchedulePeriod, Shift,
+    ActualWorkRecord, AttendanceCorrectionRequest, AttendancePunch, SchedulePeriod, Shift, ShiftTemplate,
 )
 from scheduling.services import seed_default_schedule_setting
 from staff.models import StaffMember
@@ -467,12 +467,13 @@ class Command(BaseCommand):
         # about, since they fall on specific days of the month.
         last_month = (this_month - timedelta(days=1)).replace(day=1)
 
-        slots = (
-            (time(10, 30), time(15, 0), 0, False),      # morning
-            (time(17, 0), time(22, 0), 0, False),       # afternoon
-            (time(10, 30), time(22, 0), 120, False),    # full day
-            (time(22, 0), time(2, 0), 30, True),        # overnight
-        )
+        templates = self.seed_shift_templates(branch)
+        # Each employee works a rotation of the branch's templates, plus one
+        # off-template time, so the demo grid shows what a time-based
+        # schedule looks like: a dozen different shapes in one month, not
+        # three fixed slots.
+        rotation = [templates['open'], templates['lunch'], templates['through'],
+                    templates['dinner'], None, templates['late'], 'custom']
 
         for month_start in (last_month, this_month):
             month_end = min(today, (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1))
@@ -488,16 +489,22 @@ class Command(BaseCommand):
             day = month_start
             while day <= month_end:
                 for index, member in enumerate(members):
-                    pattern = (index + day.day) % 5
-                    if pattern == 4:
+                    choice = rotation[(index * 2 + day.day) % len(rotation)]
+                    if choice is None:
                         continue  # day off
-                    start, end, break_minutes, crosses = slots[pattern % len(slots)]
+                    if choice == 'custom':
+                        # A one-off time typed straight into the grid.
+                        start, end, break_minutes, crosses, template = time(12, 0), time(16, 30), 0, False, None
+                    else:
+                        template = choice
+                        start, end = template.start_time, template.end_time
+                        break_minutes, crosses = template.break_minutes, template.crosses_midnight
                     shift, _ = Shift.objects.update_or_create(
                         period=period, employee=member, work_date=day,
                         defaults={
                             'branch': branch, 'planned_start': start, 'planned_end': end,
                             'planned_break_minutes': break_minutes, 'crosses_midnight': crosses,
-                            'position': member.work_area,
+                            'template': template, 'position': member.work_area,
                         },
                     )
                     self._seed_attendance_day(branch, member, shift, day, today, admin)
@@ -510,6 +517,36 @@ class Command(BaseCommand):
                 generate_wage_results(closing)
 
         self._seed_pending_correction(branch, members[0], today)
+
+    def seed_shift_templates(self, branch):
+        """The demo branch's shift palette, keyed for the rotation above.
+
+        Matched on (branch, name), so a re-run updates these rows in place
+        instead of adding a second set. Any other template on the demo
+        branch — the unnamed ones migration 0011 makes from the old fixed
+        slots, or one added while showing the demo — is removed, so a re-run
+        restores the palette the demo script describes. Shifts keep their
+        times either way (Shift.template is SET_NULL)."""
+        specs = {
+            'open': ('オープン', time(9, 0), time(14, 0), 0, ShiftTemplate.Color.TEAL),
+            'lunch': ('ランチ', time(11, 0), time(15, 30), 0, ShiftTemplate.Color.BLUE),
+            'through': ('通し', time(11, 0), time(22, 0), 90, ShiftTemplate.Color.GREEN),
+            'dinner': ('ディナー', time(17, 0), time(22, 30), 0, ShiftTemplate.Color.ORANGE),
+            'late': ('深夜', time(22, 0), time(2, 0), 30, ShiftTemplate.Color.PURPLE),
+        }
+        templates = {}
+        for order, (key, (name, start, end, break_minutes, color)) in enumerate(specs.items(), start=1):
+            templates[key], _ = ShiftTemplate.objects.update_or_create(
+                branch=branch, name=name,
+                defaults={
+                    'start_time': start, 'end_time': end, 'break_minutes': break_minutes,
+                    'color': color, 'sort_order': order, 'active': True,
+                },
+            )
+        ShiftTemplate.objects.filter(branch=branch).exclude(
+            pk__in=[template.pk for template in templates.values()],
+        ).delete()
+        return templates
 
     def _seed_attendance_day(self, branch, member, shift, day, today, admin):
         # Deterministic "exceptions" so the demo always has the same story
@@ -538,6 +575,11 @@ class Command(BaseCommand):
             actual_start = time((shift.planned_start.hour + (1 if shift.planned_start.minute >= 40 else 0)) % 24,
                                  (shift.planned_start.minute + 20) % 60)
 
+        # A late day came from the employee's punches (and was then
+        # confirmed); only an on-time day is the plan's own copy. Labelling a
+        # late day 'plan' would be untrue — and would be put back to the
+        # planned times by the next schedule save (attendance.sync_plan_record).
+        from_punches = is_today or is_late
         record, _ = ActualWorkRecord.objects.update_or_create(
             employee=member, work_date=day,
             defaults={
@@ -548,7 +590,7 @@ class Command(BaseCommand):
                 'actual_end': None if is_today else shift.planned_end,
                 'crosses_midnight': shift.crosses_midnight and not is_today,
                 'actual_break_minutes': shift.planned_break_minutes,
-                'source': ActualWorkRecord.Source.PUNCH if is_today else ActualWorkRecord.Source.PLAN,
+                'source': ActualWorkRecord.Source.PUNCH if from_punches else ActualWorkRecord.Source.PLAN,
                 'status': (
                     ActualWorkRecord.Status.PENDING if is_today
                     else ActualWorkRecord.Status.MANAGER_CONFIRMED
@@ -581,9 +623,9 @@ class Command(BaseCommand):
             status=AttendanceCorrectionRequest.Status.PENDING,
             defaults={
                 'branch': branch,
-                'requested_start': time(10, 30),
+                'requested_start': time(11, 0),
                 'requested_end': time(22, 0),
-                'requested_break_minutes': 120,
+                'requested_break_minutes': 90,
                 'reason': '退勤打刻を忘れました。実際は22:00に退店しています。',
             },
         )

@@ -1,6 +1,6 @@
 # 员工出勤（打卡）模块
 
-最后整理：2026-11-02
+最后整理：2026-11-03
 
 本文件描述「上下班打卡 + 补卡申请 + 变更审计」这一层的设计、选型依据、迁移方式和边界。
 源码和 Git 为准；本文件描述的是 `scheduling` app 新增的三个模型与其 API。
@@ -33,7 +33,7 @@
 | 规则 | 原因 |
 |---|---|
 | `admin_locked` 的日期永不被自动重写 | 该日可能属于已结算的工资月；迟到的打卡仍会被存下来（它是证据），但不改写记录 |
-| `manager_confirmed` 的日期也不被自动重写 | 否则后到的打卡会覆盖人的判断 |
+| `manager_confirmed` 的日期也不被自动重写 | 否则后到的打卡会覆盖人的判断。**例外**（2026-11-03）：按排班自动生成、还没有人动过的记录（`source='plan'` 且 `adjustment_reason` 为空）只是排班的副本，不是人的判断，员工打卡会替换它并回到 `pending`，见 [09_SCHEDULING.md](09_SCHEDULING.md) 第 4 节 |
 | 每一次写入都与 `attendance.log_change()` 成对出现，且在同一事务内 | 出勤是工资输入，「谁、何时、从什么改成什么、为什么」必须比这次修改活得更久 |
 
 对应测试：`scheduling/tests_attendance.py::PayrollSafetyTests`（7 个用例）。
@@ -43,7 +43,9 @@
 > `attendance.rebuild_from_punches`（打卡）、`attendance.apply_correction`（补卡生效）、
 > `ActualWorkRecordViewSet` 的 `perform_create` / `perform_update` / `perform_destroy` /
 > `bulk_confirm` / `lock` / `unlock`（店长录入与状态变更）、
-> `SchedulePeriodViewSet.generate_actual_records`（排班生成，`source=generated`）。
+> `SchedulePeriodViewSet.generate_actual_records`（排班生成，`source=generated`）、
+> `ShiftViewSet` 的 `perform_update` / `perform_destroy` 经 `attendance.sync_plan_record` /
+> `attendance.discard_plan_record`（排班改时间或删除时同步自动生成的记录，`source=generated`，2026-11-03 新增）。
 > 已核对：这是当前代码里全部会创建或修改 `ActualWorkRecord` 的路径。
 
 ---
@@ -75,7 +77,7 @@
   - `Attendance`：`status` 枚举（Present/Absent/On Leave/Half Day/Work From Home）、`working_hours` Float、`late_entry`/`early_exit` **布尔值**、`in_time`/`out_time`
   - `Shift Type`：策略集中于此 —— `late_entry_grace_period`、`early_exit_grace_period`、`begin_check_in_before_shift_start_time`、`allow_check_out_after_shift_end_time`、`determine_check_in_and_check_out`、`working_hours_threshold_for_absent`/`_half_day`
   - `Attendance Request`：**独立 doctype**，走 Frappe 的 submit/cancel/amend
-  - **跨午夜：Shift Type 的 `start_time`/`end_time` 是纯 Time 字段，没有任何跨日标志** —— 这是该方案的空缺
+  - **跨午夜：Shift Type 没有单独的跨日字段，按 `end_time` 早于 `start_time` 推断为夜班**（2026-11-03 重读 [shift-type 文档](https://docs.frappe.io/hr/shift-type.md) 更正；此前这里误写为「没有跨日概念」）
 
 ### 结论与采纳方式
 
@@ -88,7 +90,7 @@
 | **一次打卡一行、带 `kind`**（采纳 Frappe 形状） | Horilla 的「一行存一对」会让「忘记下班打卡」变成 UPDATE 既有行，其 `duration()` 甚至在**读取时**把 `clock_out` 回填为 `now`。作为工资输入，这个形状不可接受。append-only 才能审计与重放 |
 | **迟到/早退存分钟数**（优于两者） | Frappe 只有布尔 `late_entry`/`early_exit`，Horilla 的单独行连时长都没有。但「迟到 3 分钟」和「迟到 90 分钟」是两回事，布尔值无法区分 |
 | **补卡申请独立建模**（采纳 Frappe 形状） | Horilla 把请求状态糊在出勤行上，导致同一天只能有一个在途申请、且没有历史；独立模型可留全量「谁申请了什么、谁批的」 |
-| **显式休息打卡 + 营业日切换时刻** | Horilla 完全没有休息概念，Frappe 靠打卡交替推断。但本项目的工资引擎**已经**扣减 `actual_break_minutes`，分店班次模板**已经**定义了休息窗口，推断会与既有数据矛盾。跨午夜则采纳 Horilla 的「日期与营业日分离」，因为 Frappe 在这里是空缺 |
+| **显式休息打卡 + 营业日切换时刻** | Horilla 完全没有休息概念，Frappe 靠打卡交替推断。但本项目的工资引擎**已经**扣减 `actual_break_minutes`，排班**已经**带休息分钟，推断会与既有数据矛盾。打卡归属哪一天则采纳 Horilla 的「日期与营业日分离」：Frappe 只在班次定义上按时间推断夜班，打卡的归属靠班次前后的打卡窗口，本项目没有采用打卡窗口 |
 
 ---
 
@@ -124,6 +126,9 @@
 - `late_grace_minutes` / `early_leave_grace_minutes`：默认 0（诚实的默认值 —— 想要宽限的分店主动开启）
 - `attendance_day_cutover_hour`：默认 5。**早于此时刻的打卡归属前一个营业日** —— 22:00 上班、01:30 下班会落在同一天，月末也不会被切到错误的工资月
 - `self_punch_enabled`：默认 True。关闭后该分店完全回到改动前的「店长录入」模式
+
+以上四项自 2026-11-03 起可在「排班管理 → 班次模板与考勤规则」中由总部管理员修改（店长只读）；此前没有界面入口，只能保持默认值。
+原有的上午 / 下午 / 全日三组固定时间已迁移为班次模板并从该模型删除，见 [09_SCHEDULING.md](09_SCHEDULING.md)。
 
 ---
 

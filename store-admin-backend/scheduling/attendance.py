@@ -21,7 +21,11 @@ left to call sites:
   * A day a manager has already confirmed is not silently re-derived
     either, for the same reason: a later punch would otherwise overwrite a
     human decision. Punches after confirmation are recorded and surfaced,
-    not applied.
+    not applied. A day that is only confirmed because it was generated from
+    the published schedule (source=PLAN) is NOT such a decision — nobody
+    has looked at it — so the employee's real punches replace it and put it
+    back to PENDING. Otherwise attendance on every scheduled day would be
+    the plan's times forever, whatever the employee actually clocked.
   * Every write of an attendance record pairs it with log_change(), which
     appends an AttendanceChangeLog entry inside the same transaction — here
     for punches and corrections, and in scheduling/views.py for manager
@@ -249,14 +253,95 @@ def log_change(record, *, source, before, actor, reason='', correction_request=N
 def is_frozen(record):
     """True when a record must not be re-derived automatically.
 
-    A manager has either confirmed this day or an admin has locked it, and
-    in both cases a later automatic rewrite would overwrite a human
-    decision — and, for a locked day, a wage month that may already be
-    closed. The punch itself is still stored; it just doesn't apply.
+    An admin has locked this day, or a manager has confirmed it; in both
+    cases a later automatic rewrite would overwrite a human decision — and,
+    for a locked day, a wage month that may already be closed. The punch
+    itself is still stored; it just doesn't apply.
+
+    A record still exactly as generate_actual_records wrote it
+    (source=PLAN) is confirmed only by having been scheduled. That is the
+    plan, not a manager's verdict on what happened, so it is not frozen:
+    the day's punches are the better evidence and replace it.
     """
-    return record is not None and record.status in (
-        ActualWorkRecord.Status.MANAGER_CONFIRMED, ActualWorkRecord.Status.ADMIN_LOCKED,
-    )
+    if record is None:
+        return False
+    if record.status == ActualWorkRecord.Status.ADMIN_LOCKED:
+        return True
+    untouched_plan = record.source == ActualWorkRecord.Source.PLAN and not record.adjustment_reason
+    return record.status == ActualWorkRecord.Status.MANAGER_CONFIRMED and not untouched_plan
+
+
+def _plan_times(shift):
+    return {
+        'actual_start': shift.planned_start, 'actual_end': shift.planned_end,
+        'crosses_midnight': shift.crosses_midnight, 'actual_break_minutes': shift.planned_break_minutes,
+    }
+
+
+def _plan_record(shift):
+    """The day's record if it is still the untouched copy of `shift`.
+
+    A non-empty adjustment_reason disqualifies it too: the serializer
+    demands one whenever a person moves a day off its plan, so it is a
+    positive sign of a hand edit — the same rule migration 0008 used to
+    label history.
+    """
+    record = ActualWorkRecord.objects.filter(
+        employee_id=shift.employee_id, work_date=shift.work_date, shift_id=shift.id,
+    ).first()
+    if (record is None or record.source != ActualWorkRecord.Source.PLAN or record.adjustment_reason
+            or record.status == ActualWorkRecord.Status.ADMIN_LOCKED):
+        return None
+    return record
+
+
+@transaction.atomic
+def sync_plan_record(shift, actor):
+    """Bring a generated record back in line with its shift after the shift
+    was retimed. Returns True if the record changed.
+
+    Only a record that is still the plan's own copy is touched. Once a
+    punch, a correction or a manager has written the day, its times are
+    what happened and a later schedule edit must not overwrite them; a
+    locked day is never touched at all. Without this, moving a shift from
+    10:00-15:00 to 12:00-18:00 after the record was generated would leave
+    the day confirmed — and paid — at the old times.
+    """
+    record = _plan_record(shift)
+    if record is None:
+        return False
+    times = _plan_times(shift)
+    if all(getattr(record, field) == value for field, value in times.items()):
+        return False
+    before = snapshot_for_log(record)
+    for field, value in times.items():
+        setattr(record, field, value)
+    apply_exception_minutes(record)
+    record.updated_by = actor if (actor is not None and getattr(actor, 'is_authenticated', False)) else None
+    record.save()
+    log_change(record, source=AttendanceChangeLog.Source.GENERATED, before=before, actor=actor,
+               reason='shift_retimed')
+    return True
+
+
+@transaction.atomic
+def discard_plan_record(shift, actor):
+    """Remove the generated record of a shift that is being deleted.
+
+    A generated record is pre-confirmed, so leaving it behind would keep
+    paying a day that is no longer scheduled. Records a punch, correction or
+    manager has written are kept (the day may really have been worked) and
+    simply lose their shift link, as before; locked days are never touched.
+    """
+    record = _plan_record(shift)
+    if record is None:
+        return False
+    before = snapshot_for_log(record)
+    employee, branch, work_date = record.employee, record.branch, record.work_date
+    record.delete()
+    log_change(None, source=AttendanceChangeLog.Source.GENERATED, before=before, actor=actor,
+               reason='shift_deleted', employee=employee, branch=branch, work_date=work_date)
+    return True
 
 
 @transaction.atomic

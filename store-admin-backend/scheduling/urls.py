@@ -3,11 +3,12 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     ActualWorkRecordViewSet, AttendanceChangeLogViewSet, AttendanceCorrectionRequestViewSet,
     AttendancePunchViewSet, AvailabilityRequestViewSet, BranchScheduleSettingViewSet,
-    SchedulePeriodViewSet, ShiftViewSet,
+    SchedulePeriodViewSet, ShiftTemplateViewSet, ShiftViewSet,
 )
 
 router = DefaultRouter()
 router.register('branch-schedule-settings', BranchScheduleSettingViewSet, basename='branch-schedule-setting')
+router.register('shift-templates', ShiftTemplateViewSet, basename='shift-template')
 router.register('schedule-periods', SchedulePeriodViewSet, basename='schedule-period')
 router.register('availability-requests', AvailabilityRequestViewSet, basename='availability-request')
 router.register('shifts', ShiftViewSet, basename='shift')

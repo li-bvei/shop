@@ -4,9 +4,12 @@ from .models import AvailabilityRequest, BranchScheduleSetting, Shift
 
 
 def seed_default_schedule_setting(branch):
-    """Called once from BranchViewSet.perform_create — every branch gets a
-    schedule-time template using the model's own field defaults, editable
-    afterwards per branch."""
+    """Called once from BranchViewSet.perform_create — every branch gets its
+    attendance-rule row at the model's defaults, editable afterwards.
+
+    No shift templates are created: a branch's shift times are its own
+    business, and the grid can place any time without a template. The
+    branch adds templates for the times it actually uses."""
     BranchScheduleSetting.objects.get_or_create(branch=branch)
 
 

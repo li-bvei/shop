@@ -5,8 +5,9 @@ export interface ScheduleSaveOutcome {
   reason?: string
 }
 
+/** Only the bookkeeping this helper touches; whatever else a grid cell
+ * carries (its shift times) is copied through untouched. */
 export interface ScheduleSaveCellState {
-  state: string
   shiftId: string | null
   dirty: boolean
 }

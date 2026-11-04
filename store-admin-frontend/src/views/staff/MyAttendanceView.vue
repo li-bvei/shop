@@ -29,6 +29,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useDelayedLoading } from '@/composables/useDelayedLoading'
 import { currentMonthJst, todayJst } from '@/utils/format'
+import { formatHours } from '@/utils/shiftTime'
 
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -254,6 +255,9 @@ function recordStatusTagType(status: string) {
         <el-table-column :label="t('attendance.breakMinutes')" width="100">
           <template #default="{ row }">{{ row.actualBreakMinutes }}{{ t('common.minutes') }}</template>
         </el-table-column>
+        <el-table-column :label="t('scheduling.workedHours')" width="100">
+          <template #default="{ row }">{{ row.actualEnd ? formatHours(row.workedMinutes) : '—' }}</template>
+        </el-table-column>
         <el-table-column :label="t('attendance.deviation')" min-width="150">
           <template #default="{ row }">
             <span v-if="row.absent" class="deviation absent">{{ t('attendance.absent') }}</span>
@@ -305,6 +309,10 @@ function recordStatusTagType(status: string) {
           <div class="record-card-row">
             <span>{{ t('attendance.breakMinutes') }}</span>
             <span>{{ row.actualBreakMinutes }}{{ t('common.minutes') }}</span>
+          </div>
+          <div v-if="row.actualEnd" class="record-card-row">
+            <span>{{ t('scheduling.workedHours') }}</span>
+            <span>{{ formatHours(row.workedMinutes) }}</span>
           </div>
           <div v-if="row.absent || row.lateMinutes || row.earlyLeaveMinutes" class="record-card-row">
             <span>{{ t('attendance.deviation') }}</span>

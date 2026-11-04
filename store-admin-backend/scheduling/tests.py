@@ -190,21 +190,19 @@ class ShiftConsistencyValidationTests(ApiTestCase):
 
 
 class BranchScheduleSettingTests(ApiTestCase):
-    """Every branch is auto-seeded with the standard 上午/下午/全日 template
-    on creation; only admin can change it, branch can only read its own."""
+    """Every branch is auto-seeded with its attendance-rule row on creation;
+    only admin can change it, branch can only read its own. Shift times are
+    no longer part of this setting (see ShiftTemplateTests)."""
 
     def test_seeded_defaults_match_spec(self):
         self.login_as(self.admin)
         resp = self.client.get(f'/api/branch-schedule-settings/{self.branch_a.id}/')
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.data['morning_start'], '10:30:00')
-        self.assertEqual(resp.data['morning_end'], '15:00:00')
-        self.assertEqual(resp.data['afternoon_start'], '17:00:00')
-        self.assertEqual(resp.data['afternoon_end'], '22:00:00')
-        self.assertEqual(resp.data['full_day_start'], '10:30:00')
-        self.assertEqual(resp.data['full_day_end'], '22:00:00')
-        self.assertEqual(resp.data['full_day_break_start'], '15:00:00')
-        self.assertEqual(resp.data['full_day_break_end'], '17:00:00')
+        self.assertEqual(resp.data['late_grace_minutes'], 0)
+        self.assertEqual(resp.data['early_leave_grace_minutes'], 0)
+        self.assertEqual(resp.data['attendance_day_cutover_hour'], 5)
+        self.assertTrue(resp.data['self_punch_enabled'])
+        self.assertNotIn('morning_start', resp.data)
 
     def test_branch_account_can_read_its_own_setting(self):
         self.login_as(self.branch_a_user)
@@ -219,17 +217,25 @@ class BranchScheduleSettingTests(ApiTestCase):
     def test_branch_account_cannot_change_its_own_setting(self):
         self.login_as(self.branch_a_user)
         resp = self.client.patch(f'/api/branch-schedule-settings/{self.branch_a.id}/', {
-            'morning_start': '09:00',
+            'late_grace_minutes': 10,
         }, format='json')
         self.assertEqual(resp.status_code, 403)
 
     def test_admin_can_change_branch_setting(self):
         self.login_as(self.admin)
         resp = self.client.patch(f'/api/branch-schedule-settings/{self.branch_a.id}/', {
-            'morning_start': '09:30',
+            'late_grace_minutes': 10, 'self_punch_enabled': False,
         }, format='json')
         self.assertEqual(resp.status_code, 200, resp.content)
-        self.assertEqual(resp.data['morning_start'], '09:30:00')
+        self.assertEqual(resp.data['late_grace_minutes'], 10)
+        self.assertFalse(resp.data['self_punch_enabled'])
+
+    def test_cutover_hour_must_be_an_hour_of_the_day(self):
+        self.login_as(self.admin)
+        resp = self.client.patch(f'/api/branch-schedule-settings/{self.branch_a.id}/', {
+            'attendance_day_cutover_hour': 24,
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
 
     def test_staff_account_blocked_entirely(self):
         self.login_as(self.staff_user)

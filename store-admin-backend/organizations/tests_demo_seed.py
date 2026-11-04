@@ -25,7 +25,7 @@ from organizations.management.commands.seed_customer_demo import months_before
 from organizations.models import Organization
 from paymentmethods.models import seed_default_payment_methods
 from purchasing.models import PurchaseRecord, Supplier
-from scheduling.models import ActualWorkRecord, AttendanceCorrectionRequest, Shift
+from scheduling.models import ActualWorkRecord, AttendanceCorrectionRequest, Shift, ShiftTemplate
 from scheduling.services import seed_default_schedule_setting
 from staff.models import StaffMember
 
@@ -395,3 +395,47 @@ class DemoSeedMonthCoverageTests(TestCase):
         }
         self.assertEqual(len(months), 3, sorted(months))
         self.assertIn(date.today().replace(day=1), months)
+
+
+@override_settings(DEBUG=True)
+class DemoSeedScheduleTests(TestCase):
+    """The demo schedule has to show a time-based roster, not three slots."""
+
+    @classmethod
+    def setUpTestData(cls):
+        seed(months=2)
+
+    def demo_branch(self):
+        return demo_org().branches.order_by('id').first()
+
+    def test_the_first_branch_gets_its_named_templates(self):
+        names = set(ShiftTemplate.objects.filter(branch=self.demo_branch()).values_list('name', flat=True))
+        self.assertEqual(names, {'オープン', 'ランチ', '通し', 'ディナー', '深夜'})
+
+    def test_the_schedule_uses_many_time_shapes_including_overnight_and_typed_times(self):
+        shifts = Shift.objects.filter(branch=self.demo_branch())
+        shapes = set(shifts.values_list('planned_start', 'planned_end'))
+        self.assertGreater(len(shapes), 3)
+        self.assertTrue(shifts.filter(crosses_midnight=True).exists())
+        self.assertTrue(shifts.filter(template__isnull=True).exists(), 'needs a time typed straight into the grid')
+
+    def test_a_rerun_restores_the_palette_and_keeps_every_shifts_times(self):
+        branch = self.demo_branch()
+        ShiftTemplate.objects.create(branch=branch, name='', start_time='10:30', end_time='15:00')
+        before = sorted(Shift.objects.filter(branch=branch).values_list('id', 'planned_start', 'planned_end'))
+        seed(months=2)
+        self.assertEqual(ShiftTemplate.objects.filter(branch=branch).count(), 5)
+        after = sorted(Shift.objects.filter(branch=branch).values_list('id', 'planned_start', 'planned_end'))
+        self.assertEqual(before, after)
+
+    def test_no_day_labelled_plan_differs_from_its_shift(self):
+        # A 'plan' record is the schedule's own copy; a late day came from
+        # punches. Labelling a late day 'plan' would be untrue, and the next
+        # schedule save would put it back to the planned times.
+        for record in ActualWorkRecord.objects.filter(
+            branch=self.demo_branch(), source=ActualWorkRecord.Source.PLAN,
+        ).select_related('shift'):
+            self.assertEqual(
+                (record.actual_start, record.actual_end, record.actual_break_minutes),
+                (record.shift.planned_start, record.shift.planned_end, record.shift.planned_break_minutes),
+            )

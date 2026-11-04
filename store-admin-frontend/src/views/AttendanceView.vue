@@ -32,6 +32,7 @@ import { useDelayedLoading } from '@/composables/useDelayedLoading'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { branchDisplayName, currentMonthJst, formatMonthKanji } from '@/utils/format'
 import { downloadTableExcel } from '@/utils/excelExport'
+import { formatHours } from '@/utils/shiftTime'
 
 const { t, locale } = useI18n()
 const auth = useAuthStore()
@@ -197,6 +198,8 @@ async function handleExport() {
         // Minutes are real numbers in the cell so the column can be
         // summed and sorted — the same rule the report exports follow.
         { header: t('attendance.breakMinutes'), key: 'breakMinutes', width: 12, numFmt: '#,##0' },
+        { header: t('scheduling.plannedHours'), key: 'plannedHours', width: 12, numFmt: '0.0' },
+        { header: t('scheduling.workedHours'), key: 'workedHours', width: 12, numFmt: '0.0' },
         { header: t('attendance.lateMinutes'), key: 'lateMinutes', width: 12, numFmt: '#,##0' },
         { header: t('attendance.earlyLeaveMinutes'), key: 'earlyMinutes', width: 14, numFmt: '#,##0' },
         { header: t('attendance.absent'), key: 'absent', width: 10 },
@@ -211,6 +214,8 @@ async function handleExport() {
         start: r.actualStart?.slice(0, 5) ?? '',
         end: r.actualEnd?.slice(0, 5) ?? '',
         breakMinutes: r.actualBreakMinutes,
+        plannedHours: r.plannedMinutes === null ? null : r.plannedMinutes / 60,
+        workedHours: r.workedMinutes / 60,
         lateMinutes: r.lateMinutes,
         earlyMinutes: r.earlyLeaveMinutes,
         absent: r.absent ? '✓' : '',
@@ -299,16 +304,18 @@ const periodLabel = computed(() => formatMonthKanji(month.value))
         <el-table-column :label="t('staff.name')" min-width="120">
           <template #default="{ row }">{{ employeeName(row.employeeId) }}</template>
         </el-table-column>
-        <el-table-column :label="t('attendance.planned')" width="130">
+        <el-table-column :label="t('attendance.planned')" width="150">
           <template #default="{ row }">
             <span v-if="row.plannedStart">{{ row.plannedStart.slice(0, 5) }}–{{ row.plannedEnd?.slice(0, 5) }}</span>
             <span v-else class="muted">—</span>
+            <span v-if="row.plannedMinutes !== null" class="hours">{{ formatHours(row.plannedMinutes) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('attendance.actual')" width="130">
+        <el-table-column :label="t('attendance.actual')" width="150">
           <template #default="{ row }">
             <span v-if="row.actualStart">{{ row.actualStart.slice(0, 5) }}–{{ row.actualEnd?.slice(0, 5) ?? '?' }}</span>
             <span v-else class="muted">—</span>
+            <span v-if="row.actualEnd" class="hours">{{ formatHours(row.workedMinutes) }}</span>
           </template>
         </el-table-column>
         <el-table-column :label="t('attendance.deviation')" min-width="150">
@@ -360,11 +367,17 @@ const periodLabel = computed(() => formatMonthKanji(month.value))
           </div>
           <div class="record-card-row">
             <span>{{ t('attendance.planned') }}</span>
-            <span>{{ row.plannedStart ? `${row.plannedStart.slice(0, 5)}–${row.plannedEnd?.slice(0, 5)}` : '—' }}</span>
+            <span>
+              {{ row.plannedStart ? `${row.plannedStart.slice(0, 5)}–${row.plannedEnd?.slice(0, 5)}` : '—' }}
+              <span v-if="row.plannedMinutes !== null" class="hours">{{ formatHours(row.plannedMinutes) }}</span>
+            </span>
           </div>
           <div class="record-card-row">
             <span>{{ t('attendance.actual') }}</span>
-            <span>{{ row.actualStart ? `${row.actualStart.slice(0, 5)}–${row.actualEnd?.slice(0, 5) ?? '?'}` : '—' }}</span>
+            <span>
+              {{ row.actualStart ? `${row.actualStart.slice(0, 5)}–${row.actualEnd?.slice(0, 5) ?? '?'}` : '—' }}
+              <span v-if="row.actualEnd" class="hours">{{ formatHours(row.workedMinutes) }}</span>
+            </span>
           </div>
           <div class="record-card-row">
             <span>{{ t('attendance.deviation') }}</span>
@@ -533,6 +546,12 @@ const periodLabel = computed(() => formatMonthKanji(month.value))
   display: flex;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.hours {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .deviation {

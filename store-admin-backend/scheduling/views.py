@@ -13,22 +13,22 @@ from staff.models import StaffMember
 from . import attendance
 from .models import (
     ActualWorkRecord, AttendanceChangeLog, AttendanceCorrectionRequest, AttendancePunch,
-    AvailabilityRequest, BranchScheduleSetting, SchedulePeriod, Shift,
+    AvailabilityRequest, BranchScheduleSetting, SchedulePeriod, Shift, ShiftTemplate,
 )
 from .serializers import (
     ActualWorkRecordSerializer, AttendanceChangeLogSerializer, AttendanceCorrectionRequestSerializer,
     AttendancePunchSerializer, AvailabilityRequestSerializer, BranchScheduleSettingSerializer,
-    SchedulePeriodSerializer, ShiftSerializer,
+    SchedulePeriodSerializer, ShiftSerializer, ShiftTemplateSerializer,
 )
 
 
 class BranchScheduleSettingViewSet(viewsets.ModelViewSet):
-    """The shift-time template (morning/afternoon/full-day/off) a branch's
-    monthly schedule grid is built from. admin manages every branch in its
-    own Organization; branch can only read its own (this is store-level
-    operating-hours configuration, not something a single branch account
-    should be able to change unilaterally — mirrors BranchViewSet's own
-    admin-only write policy). staff never reaches this endpoint at all."""
+    """A branch's attendance rules (grace minutes, business-day cutover,
+    self-service punching). admin manages every branch in its own
+    Organization; branch can only read its own — these rules decide what
+    counts as late and whether staff may clock in, which is a policy the
+    head office sets, mirroring BranchViewSet's own admin-only write policy.
+    staff never reaches this endpoint at all."""
 
     serializer_class = BranchScheduleSettingSerializer
     lookup_field = 'branch_id'
@@ -45,6 +45,55 @@ class BranchScheduleSettingViewSet(viewsets.ModelViewSet):
         if self.request.user.role != self.request.user.Role.ADMIN:
             raise PermissionDenied('only admin accounts can change a branch\'s schedule settings.')
         serializer.save()
+
+
+class ShiftTemplateViewSet(viewsets.ModelViewSet):
+    """A branch's shift templates — the times its schedule grid offers.
+
+    admin: every branch in its Organization. branch: its own branch only,
+    including writes, because the templates are the store manager's working
+    palette for drafting the schedule rather than head-office policy (the
+    grid lets a manager place any time anyway; a template only saves
+    typing). staff never reaches this endpoint (default permission).
+
+    Deleting a template never changes a planned shift: shifts carry their
+    own copy of the times and only lose the label (SET_NULL)."""
+
+    serializer_class = ShiftTemplateSerializer
+    filterset_fields = ['branch', 'active']
+
+    def get_queryset(self):
+        qs = ShiftTemplate.objects.select_related('branch')
+        user = self.request.user
+        if user.role == user.Role.ADMIN:
+            return qs.filter(branch__organization_id=user.organization_id)
+        return qs.filter(branch_id=user.branch_id)
+
+    def _check_branch(self, branch):
+        user = self.request.user
+        if user.role == user.Role.ADMIN:
+            if branch is None:
+                raise ValidationError({'branch': ['This field is required for admin accounts.']})
+            if branch.organization_id != user.organization_id:
+                raise PermissionDenied('cannot manage shift templates for another Organization\'s branch.')
+        elif branch is not None and branch.id != user.branch_id:
+            raise PermissionDenied('cannot manage shift templates for another branch.')
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        branch = serializer.validated_data.get('branch')
+        self._check_branch(branch)
+        if user.role != user.Role.ADMIN:
+            branch = user.branch
+        serializer.save(branch=branch)
+
+    def perform_update(self, serializer):
+        self._check_branch(serializer.instance.branch)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._check_branch(instance.branch)
+        instance.delete()
 
 
 class SchedulePeriodViewSet(viewsets.ModelViewSet):
@@ -154,11 +203,15 @@ class SchedulePeriodViewSet(viewsets.ModelViewSet):
         Each record created here writes an AttendanceChangeLog entry with
         source=GENERATED, in the same transaction — this path pre-confirms
         a day straight into payroll, which is precisely the kind of write
-        that has to leave a trail. Records that already existed are skipped
-        and produce no entry, since nothing changed."""
+        that has to leave a trail. An existing record is left alone unless
+        it is still the plan's untouched copy of a shift that has since been
+        retimed, in which case it is brought back in line and logged
+        (attendance.sync_plan_record); anything a person or a punch wrote is
+        never overwritten."""
         self._deny_staff_write()
         period = self.get_object()
         created = 0
+        updated = 0
         with transaction.atomic():
             for shift in period.shifts.select_related('employee', 'branch').all():
                 record, was_created = ActualWorkRecord.objects.get_or_create(
@@ -182,7 +235,11 @@ class SchedulePeriodViewSet(viewsets.ModelViewSet):
                         record, source=AttendanceChangeLog.Source.GENERATED, before=None,
                         actor=request.user, reason='generate_actual_records',
                     )
-        return Response({'created': created, 'total_shifts': period.shifts.count()})
+                elif attendance.sync_plan_record(shift, request.user):
+                    # A record still at the plan's own copy whose shift has
+                    # since been retimed (see sync_plan_record).
+                    updated += 1
+        return Response({'created': created, 'updated': updated, 'total_shifts': period.shifts.count()})
 
 
 class AvailabilityRequestViewSet(viewsets.ModelViewSet):
@@ -281,12 +338,25 @@ class ShiftViewSet(viewsets.ModelViewSet):
         if serializer.validated_data.get('override') and not instance.override:
             extra['override_by'] = user
             extra['override_at'] = timezone.now()
-        serializer.save(**extra)
+        # The generated attendance record follows the shift it was copied
+        # from, in the same transaction, so a retimed shift is never paid
+        # at its old times (attendance.sync_plan_record). If the shift moved
+        # to another employee or day, the old day's copy no longer describes
+        # anything and is dropped; the next generate creates the new one.
+        with transaction.atomic():
+            old_identity = (instance.employee_id, instance.work_date)
+            if (serializer.validated_data.get('employee', instance.employee).id,
+                    serializer.validated_data.get('work_date', instance.work_date)) != old_identity:
+                attendance.discard_plan_record(instance, user)
+            shift = serializer.save(**extra)
+            attendance.sync_plan_record(shift, user)
 
     def perform_destroy(self, instance):
         self._deny_staff_write()
         self._check_branch_scope(instance.branch)
-        instance.delete()
+        with transaction.atomic():
+            attendance.discard_plan_record(instance, self.request.user)
+            instance.delete()
 
 
 class ActualWorkRecordFilter(django_filters.FilterSet):

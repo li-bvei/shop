@@ -10,6 +10,63 @@
 - `docs/ai-handoff/05_TESTS_AND_RISKS.md` 是 2026-09-14 一次独立审计留下的记录，审计范围覆盖到 `960bbac`；其中 P1-01（批量替换空字符串/日期校验）和 P1-08（reconcile 命令事务边界）已在 `1fc5fa1` 修复，其余条目仍待处理，见该文件本身。
 - **本文档撰写之后（2026-09-19 ～ 09-22）还有几轮未在本文件其余章节回填的改动**（手机端响应式布局、供应商聚合加载改用后端已有字段、支付方式改成软删除、月度经营新增年度切换与 PDF、日报 PDF 重做）——这些改动现已进入 Git 版本管理；下面单独列一节说明日报 PDF，其余批次尚未完整回填，接手前建议同时查看 `git log`，不要只依赖本文档。
 
+## 2026-11-03 排班改为按时间排班（已实现，未提交/未部署；新增 migration 0010～0012）
+
+承 `acc3d0c`（2026-11-01 与 11-02 两批，已推送到 `origin/main`；用户报告已于 2026-11-03 在服务器部署并执行了
+`seed_customer_demo --confirm`，服务器上的实际 commit 与迁移状态本文未核实）。设计、GitHub 调研与限制见
+[09_SCHEDULING.md](09_SCHEDULING.md)。
+
+起因：用户要求排班参照 GitHub 上成熟的现成方案、按时间计算出勤，而此前的排班表只能放「上午 / 下午 / 全日」三种固定时段
+（与三者都不同的时间显示为「自定义」，排班表里无法新建或修改，也排不出跨夜班）。上一轮出勤重构沿用了这三格，
+演示种子也照搬了这三格。
+
+1. **班次模板**：新增 `ShiftTemplate`（每店任意数量，名称 / 起止时间 / 休息分钟 / 颜色，结束不晚于开始即跨夜），
+   `Shift.template` 可空外键。排入时复制时间，改、删模板不影响已排的班。API `/api/shift-templates/`
+   （admin 全组织、branch 仅本店、staff 403），已纳入 `scheduling` 功能开关。
+2. **迁移**：`0010` 建表加外键；`0011` 把每个分店原有的三组时间转成三个无名称模板，并把时间完全相同的既有排班关联过去
+   （不改任何排班时间）；`0012` 删除 `BranchScheduleSetting` 的 8 个固定时段列。可回滚，但全日休息时段的位置无法还原。
+3. **排班表重做**：选模板或「休」后点格子直接排入；「逐格编辑」可输入任意时间与休息分钟；每天显示人数与工时，
+   表尾显示每人本月工时；批量设置与复制上一月按真实时间处理。
+4. **打卡会替换按排班自动生成的记录**：此前 `is_frozen()` 把自动生成的 `manager_confirmed` 记录也当作人工判断，
+   有排班的日子员工打卡永远不生效。现在未被人动过的排班副本会被打卡替换，回到 `pending` 等店长确认。
+5. **改排班时同步自动记录**：改时间则同步（`sync_plan_record`），删排班则删除其自动记录（`discard_plan_record`），
+   同一事务内写 `generated` 审计；`generate_actual_records` 也会校正过期副本并返回 `updated`。
+   此前改了排班时间会按旧时间计薪，删了排班仍会计薪。
+6. **工时**：出勤记录 API 新增 `planned_minutes` / `worked_minutes`，直接调用工资引擎的 `classify_minutes`；
+   实际工作确认、员工出勤、我的出勤页面和 Excel 导出显示计划 / 实际工时。
+7. **考勤规则界面**：宽限分钟、营业日切换时刻、员工自助打卡此前没有任何界面入口（2026-11-03 之前的说明里称
+   「可在设置中调整」是错误的）；现在在「排班管理 → 班次模板与考勤规则」中由总部管理员修改，店长只读。
+8. **演示种子**：改为 5 个命名模板（オープン / ランチ / 通し / ディナー / 深夜）加一种手工时间轮换；
+   迟到日改为 `source='punch'`（原先标成 `plan` 不属实，且会被第 5 条同步回排班时间）。
+   重跑种子时，演示分店的模板恢复为这 5 个（会删除 0011 迁移生成的无名称模板和演示中临时新增的模板，排班时间不变）。
+   测试 `DemoSeedScheduleTests`（4 例）。
+9. **文档更正**：08 中「Frappe HR 没有跨日概念」的说法有误（Frappe 以结束早于开始推断夜班），已更正；
+   操作指南中关于「早班／晚班／全天」和「在设置中调整班次时间」的条目已改写。
+
+**工资**：`wages/calculation.py` 未改动，输入契约不变；但第 4、5 条会让工资结果按实际情况变化
+（被改时间的班按新时间计、被删的班不再计、打了卡的日子需店长确认后才计），`admin_locked` 的日期不受影响。
+
+**扫码相关的未提交改动**（`QrScanner.vue`、`GuestCardView.vue`、`PromoRedeemView.vue`、`PromoVerifyView.vue`
+及 locale 中 `checkinNotStoreQr` / `qrScanner.checking|failed|dismiss` / `scanNotCard` / `scanNotFound`）未被触碰。
+
+### 验证（实际命令与结果）
+
+- 后端：`venv/bin/python manage.py test scheduling organizations wages accounts branches common --noinput` → **Ran 334 tests in 260.719s, OK**
+- 后端：`venv/bin/python manage.py test scheduling.tests_shift_templates` → 21 项通过（模板权限 / 租户隔离 /
+  排班同步 / 打卡替换 / 工时字段，以及 `FixedSlotMigrationTests` 用真实迁移执行器回退到 0010、写入历史数据、再迁移到 0011 的检查）
+- `makemigrations --check --dry-run` → No changes detected；`manage.py check` → no issues
+- 前端：`npm run type-check` 通过；`npm run lint` 无报错（含 `--fix`，已确认未改动本次以外的文件）；`npm run build-only` 成功；
+  `test:schedule-save` 2 / `test:shift-time` 4 / `test:print-scale` 11 / `test:money` 10 全部通过
+- 浏览器（vite + 拦截 fetch 的假数据，Django 未启动）：排班表模板画笔、逐格编辑、跨夜时间（显示「次日」、7h）、保存时发送的
+  payload（模板 id / `crosses_midnight`）、模板标签页、店长只读的考勤规则、375px 手机宽度、日文、深色模式
+- `git diff --check` 干净
+
+### 未验证项
+
+- 0010～0012 **没有在带真实数据的数据库上执行过**：本地开发库仍停在 0006，本次未对其执行迁移；
+  迁移只在测试库上经由测试执行（含 0012 / 0011 的回退与再前进），回退后的列值未做断言。
+- 浏览器验证用的是假数据，未连接真实后端走一遍保存 → 生成出勤 → 打卡替换的完整链路（该链路由后端测试覆盖）。
+
 ## 2026-11-02 上一轮独立核查发现问题的修复（已实现，未提交/未部署；migration 由 2 个增至 3 个）
 
 承 2026-11-01 批次。一次独立核查指出六处问题，逐项修复如下。**工资计算逻辑未改动**；

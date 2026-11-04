@@ -3,10 +3,11 @@ import calendar
 from rest_framework import serializers
 
 from staff.models import StaffMember
+from wages.calculation import classify_minutes
 
 from .models import (
     ActualWorkRecord, AttendanceChangeLog, AttendanceCorrectionRequest, AttendancePunch,
-    AvailabilityRequest, BranchScheduleSetting, SchedulePeriod, Shift,
+    AvailabilityRequest, BranchScheduleSetting, SchedulePeriod, Shift, ShiftTemplate,
 )
 from .services import check_shift
 
@@ -15,12 +16,51 @@ class BranchScheduleSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = BranchScheduleSetting
         fields = [
-            'id', 'branch', 'morning_start', 'morning_end', 'afternoon_start', 'afternoon_end',
-            'full_day_start', 'full_day_end', 'full_day_break_start', 'full_day_break_end',
-            'late_grace_minutes', 'early_leave_grace_minutes', 'attendance_day_cutover_hour',
-            'self_punch_enabled', 'active', 'updated_at',
+            'id', 'branch', 'late_grace_minutes', 'early_leave_grace_minutes',
+            'attendance_day_cutover_hour', 'self_punch_enabled', 'active', 'updated_at',
         ]
         read_only_fields = ['branch']
+
+    def validate_attendance_day_cutover_hour(self, value):
+        if value > 23:
+            raise serializers.ValidationError('cutover-hour-out-of-range')
+        return value
+
+
+def _span_minutes(start, end, crosses_midnight):
+    """Length of a start..end span in minutes, the same arithmetic wages use."""
+    total, _night = classify_minutes(start, end, crosses_midnight, 0)
+    return total
+
+
+class ShiftTemplateSerializer(serializers.ModelSerializer):
+    # Derived from the times (end not after start = ends next day), never
+    # sent by the client — see ShiftTemplate.crosses_midnight.
+    crosses_midnight = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = ShiftTemplate
+        fields = [
+            'id', 'branch', 'name', 'start_time', 'end_time', 'break_minutes', 'crosses_midnight',
+            'color', 'sort_order', 'active', 'created_at', 'updated_at',
+        ]
+        # A branch account never names a branch (the view uses its own);
+        # an admin must, which the view enforces since only it knows the role.
+        extra_kwargs = {'branch': {'required': False}}
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance and 'branch' in attrs and attrs['branch'] != instance.branch:
+            raise serializers.ValidationError({'branch': ['branch cannot be changed after creation.']})
+        start = attrs.get('start_time', instance.start_time if instance else None)
+        end = attrs.get('end_time', instance.end_time if instance else None)
+        break_minutes = attrs.get('break_minutes', instance.break_minutes if instance else 0)
+        if start is not None and end is not None:
+            if start == end:
+                raise serializers.ValidationError({'end_time': ['shift-invalid-time-range']})
+            if break_minutes >= _span_minutes(start, end, end <= start):
+                raise serializers.ValidationError({'break_minutes': ['shift-break-exceeds-duration']})
+        return attrs
 
 
 class SchedulePeriodSerializer(serializers.ModelSerializer):
@@ -107,7 +147,7 @@ class ShiftSerializer(serializers.ModelSerializer):
         model = Shift
         fields = [
             'id', 'period', 'branch', 'employee', 'work_date', 'planned_start', 'planned_end',
-            'crosses_midnight', 'planned_break_minutes', 'position', 'note',
+            'crosses_midnight', 'planned_break_minutes', 'template', 'position', 'note',
             'override', 'override_reason', 'override_by', 'override_at',
             'created_by', 'updated_by', 'created_at', 'updated_at',
         ]
@@ -126,6 +166,10 @@ class ShiftSerializer(serializers.ModelSerializer):
             'planned_break_minutes', instance.planned_break_minutes if instance else 0,
         )
         override = attrs.get('override', instance.override if instance else False)
+
+        template = attrs.get('template', instance.template if instance else None)
+        if template is not None and branch is not None and template.branch_id != branch.id:
+            raise serializers.ValidationError({'template': ['shift-template-branch-mismatch']})
 
         hard_errors, soft_warnings = check_shift(
             employee, branch, work_date, planned_start, planned_end, crosses_midnight,
@@ -153,6 +197,11 @@ class ActualWorkRecordSerializer(serializers.ModelSerializer):
     planned_end = serializers.TimeField(source='shift.planned_end', read_only=True, default=None)
     planned_break_minutes = serializers.IntegerField(source='shift.planned_break_minutes', read_only=True, default=None)
     planned_crosses_midnight = serializers.BooleanField(source='shift.crosses_midnight', read_only=True, default=None)
+    # Hours as the wage engine counts them (span minus break), so the
+    # attendance screens show exactly the minutes that will be paid rather
+    # than a second, possibly different, calculation.
+    planned_minutes = serializers.SerializerMethodField()
+    worked_minutes = serializers.SerializerMethodField()
 
     class Meta:
         model = ActualWorkRecord
@@ -161,7 +210,7 @@ class ActualWorkRecordSerializer(serializers.ModelSerializer):
             'crosses_midnight', 'actual_break_minutes', 'absent', 'statutory_holiday',
             'adjustment_reason', 'status', 'confirmed_by', 'confirmed_at',
             'planned_start', 'planned_end', 'planned_break_minutes', 'planned_crosses_midnight',
-            'source', 'late_minutes', 'early_leave_minutes',
+            'source', 'late_minutes', 'early_leave_minutes', 'planned_minutes', 'worked_minutes',
             'updated_by', 'updated_at', 'created_at',
         ]
         # `source` and the two deviation minute fields are derived, never
@@ -171,6 +220,23 @@ class ActualWorkRecordSerializer(serializers.ModelSerializer):
             'status', 'confirmed_by', 'confirmed_at', 'updated_by',
             'source', 'late_minutes', 'early_leave_minutes',
         ]
+
+    def get_planned_minutes(self, obj):
+        shift = obj.shift
+        if shift is None:
+            return None
+        total, _night = classify_minutes(
+            shift.planned_start, shift.planned_end, shift.crosses_midnight, shift.planned_break_minutes,
+        )
+        return total
+
+    def get_worked_minutes(self, obj):
+        if obj.absent or not obj.actual_start or not obj.actual_end:
+            return 0
+        total, _night = classify_minutes(
+            obj.actual_start, obj.actual_end, obj.crosses_midnight, obj.actual_break_minutes,
+        )
+        return total
 
     def validate(self, attrs):
         instance = self.instance

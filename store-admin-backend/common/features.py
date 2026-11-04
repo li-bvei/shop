@@ -35,6 +35,7 @@ _PATH_FEATURE_PREFIXES = (
     ('purchases', 'purchasing'),
     ('suppliers', 'suppliers'),
     ('branch-schedule-settings', 'scheduling'),
+    ('shift-templates', 'scheduling'),
     ('schedule-periods', 'scheduling'),
     ('availability-requests', 'scheduling'),
     ('shifts', 'scheduling'),

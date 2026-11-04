@@ -1,44 +1,34 @@
 import { http, ApiError } from './http'
 
-// ---- Branch schedule settings (shift-time template) -------------------
+// ---- Branch attendance rules -------------------------------------------
 
+/** A branch's attendance rules. Shift times are not here: they are the
+ * branch's shift templates (below), of which it may have any number. */
 export interface BranchScheduleSetting {
   branchId: string
-  morningStart: string
-  morningEnd: string
-  afternoonStart: string
-  afternoonEnd: string
-  fullDayStart: string
-  fullDayEnd: string
-  fullDayBreakStart: string
-  fullDayBreakEnd: string
+  lateGraceMinutes: number
+  earlyLeaveGraceMinutes: number
+  attendanceDayCutoverHour: number
+  selfPunchEnabled: boolean
   active: boolean
 }
 
 interface BranchScheduleSettingDto {
   branch: string
-  morning_start: string
-  morning_end: string
-  afternoon_start: string
-  afternoon_end: string
-  full_day_start: string
-  full_day_end: string
-  full_day_break_start: string
-  full_day_break_end: string
+  late_grace_minutes: number
+  early_leave_grace_minutes: number
+  attendance_day_cutover_hour: number
+  self_punch_enabled: boolean
   active: boolean
 }
 
 function fromScheduleSettingDto(dto: BranchScheduleSettingDto): BranchScheduleSetting {
   return {
     branchId: dto.branch,
-    morningStart: dto.morning_start.slice(0, 5),
-    morningEnd: dto.morning_end.slice(0, 5),
-    afternoonStart: dto.afternoon_start.slice(0, 5),
-    afternoonEnd: dto.afternoon_end.slice(0, 5),
-    fullDayStart: dto.full_day_start.slice(0, 5),
-    fullDayEnd: dto.full_day_end.slice(0, 5),
-    fullDayBreakStart: dto.full_day_break_start.slice(0, 5),
-    fullDayBreakEnd: dto.full_day_break_end.slice(0, 5),
+    lateGraceMinutes: dto.late_grace_minutes,
+    earlyLeaveGraceMinutes: dto.early_leave_grace_minutes,
+    attendanceDayCutoverHour: dto.attendance_day_cutover_hour,
+    selfPunchEnabled: dto.self_punch_enabled,
     active: dto.active,
   }
 }
@@ -46,6 +36,103 @@ function fromScheduleSettingDto(dto: BranchScheduleSettingDto): BranchScheduleSe
 export async function fetchBranchScheduleSetting(branchId: string): Promise<BranchScheduleSetting> {
   const dto = await http.get<BranchScheduleSettingDto>(`/branch-schedule-settings/${branchId}/`)
   return fromScheduleSettingDto(dto)
+}
+
+/** Admin only — the server refuses a branch account with 403. */
+export async function updateBranchScheduleSetting(
+  branchId: string,
+  payload: Omit<BranchScheduleSetting, 'branchId' | 'active'>,
+): Promise<BranchScheduleSetting> {
+  const dto = await http.patch<BranchScheduleSettingDto>(`/branch-schedule-settings/${branchId}/`, {
+    late_grace_minutes: payload.lateGraceMinutes,
+    early_leave_grace_minutes: payload.earlyLeaveGraceMinutes,
+    attendance_day_cutover_hour: payload.attendanceDayCutoverHour,
+    self_punch_enabled: payload.selfPunchEnabled,
+  })
+  return fromScheduleSettingDto(dto)
+}
+
+// ---- Shift templates ---------------------------------------------------
+
+export type ShiftTemplateColor = 'blue' | 'green' | 'orange' | 'purple' | 'red' | 'teal' | 'gray'
+export const SHIFT_TEMPLATE_COLORS: ShiftTemplateColor[] = ['blue', 'green', 'orange', 'purple', 'red', 'teal', 'gray']
+
+/** A reusable shift time for the schedule grid. Placing it COPIES its
+ * times onto the shift, so editing a template never changes a schedule
+ * already planned. A template whose end is not after its start runs past
+ * midnight. */
+export interface ShiftTemplate {
+  id: string
+  branchId: string
+  /** May be empty — an unnamed template is shown by its times. */
+  name: string
+  startTime: string
+  endTime: string
+  breakMinutes: number
+  crossesMidnight: boolean
+  color: ShiftTemplateColor
+  sortOrder: number
+  active: boolean
+}
+
+interface ShiftTemplateDto {
+  id: number
+  branch: string
+  name: string
+  start_time: string
+  end_time: string
+  break_minutes: number
+  crosses_midnight: boolean
+  color: ShiftTemplateColor
+  sort_order: number
+  active: boolean
+}
+
+function fromShiftTemplateDto(dto: ShiftTemplateDto): ShiftTemplate {
+  return {
+    id: String(dto.id),
+    branchId: dto.branch,
+    name: dto.name,
+    startTime: dto.start_time.slice(0, 5),
+    endTime: dto.end_time.slice(0, 5),
+    breakMinutes: dto.break_minutes,
+    crossesMidnight: dto.crosses_midnight,
+    color: dto.color,
+    sortOrder: dto.sort_order,
+    active: dto.active,
+  }
+}
+
+export type ShiftTemplateInput = Omit<ShiftTemplate, 'id' | 'crossesMidnight'>
+
+function shiftTemplateToDto(payload: ShiftTemplateInput) {
+  return {
+    branch: payload.branchId,
+    name: payload.name,
+    start_time: payload.startTime,
+    end_time: payload.endTime,
+    break_minutes: payload.breakMinutes,
+    color: payload.color,
+    sort_order: payload.sortOrder,
+    active: payload.active,
+  }
+}
+
+export async function fetchShiftTemplates(branchId: string): Promise<ShiftTemplate[]> {
+  const rows = await http.get<ShiftTemplateDto[]>(`/shift-templates/?branch=${encodeURIComponent(branchId)}`)
+  return rows.map(fromShiftTemplateDto)
+}
+
+export async function createShiftTemplate(payload: ShiftTemplateInput): Promise<ShiftTemplate> {
+  return fromShiftTemplateDto(await http.post<ShiftTemplateDto>('/shift-templates/', shiftTemplateToDto(payload)))
+}
+
+export async function updateShiftTemplate(id: string, payload: ShiftTemplateInput): Promise<ShiftTemplate> {
+  return fromShiftTemplateDto(await http.patch<ShiftTemplateDto>(`/shift-templates/${id}/`, shiftTemplateToDto(payload)))
+}
+
+export async function deleteShiftTemplate(id: string): Promise<void> {
+  await http.delete<void>(`/shift-templates/${id}/`)
 }
 
 // ---- Schedule periods -------------------------------------------------
@@ -123,11 +210,13 @@ export async function publishSchedulePeriod(id: string): Promise<SchedulePeriod>
   return fromPeriodDto(dto)
 }
 
-export async function generateActualRecords(periodId: string): Promise<{ created: number; totalShifts: number }> {
-  const result = await http.post<{ created: number; total_shifts: number }>(
+/** `updated` counts generated records brought back in line with a shift
+ * that was retimed after they were created. */
+export async function generateActualRecords(periodId: string): Promise<{ created: number; updated: number; totalShifts: number }> {
+  const result = await http.post<{ created: number; updated: number; total_shifts: number }>(
     `/schedule-periods/${periodId}/generate_actual_records/`,
   )
-  return { created: result.created, totalShifts: result.total_shifts }
+  return { created: result.created, updated: result.updated, totalShifts: result.total_shifts }
 }
 
 // ---- Availability requests ---------------------------------------------
@@ -229,6 +318,8 @@ export interface ShiftRecord {
   plannedEnd: string
   crossesMidnight: boolean
   plannedBreakMinutes: number
+  /** The template it was placed from, for label and colour only. */
+  templateId: string | null
   position: string
   note: string
   override: boolean
@@ -245,6 +336,7 @@ interface ShiftDto {
   planned_end: string
   crosses_midnight: boolean
   planned_break_minutes: number
+  template: number | null
   position: string
   note: string
   override: boolean
@@ -262,6 +354,7 @@ function fromShiftDto(dto: ShiftDto): ShiftRecord {
     plannedEnd: dto.planned_end,
     crossesMidnight: dto.crosses_midnight,
     plannedBreakMinutes: dto.planned_break_minutes,
+    templateId: dto.template != null ? String(dto.template) : null,
     position: dto.position,
     note: dto.note,
     override: dto.override,
@@ -279,6 +372,7 @@ function shiftToDto(payload: Omit<ShiftRecord, 'id'>) {
     planned_end: payload.plannedEnd,
     crosses_midnight: payload.crossesMidnight,
     planned_break_minutes: payload.plannedBreakMinutes,
+    template: payload.templateId != null ? Number(payload.templateId) : null,
     position: payload.position,
     note: payload.note,
     override: payload.override,
@@ -372,6 +466,11 @@ export interface ActualWorkRecord {
    * absence. */
   lateMinutes: number
   earlyLeaveMinutes: number
+  /** Paid minutes exactly as the wage engine counts them (span minus
+   * break). plannedMinutes is null for an unscheduled day; workedMinutes
+   * is 0 for an absent or unfinished one. */
+  plannedMinutes: number | null
+  workedMinutes: number
 }
 
 interface ActualWorkRecordDto {
@@ -395,6 +494,8 @@ interface ActualWorkRecordDto {
   source: ActualWorkSource
   late_minutes: number
   early_leave_minutes: number
+  planned_minutes: number | null
+  worked_minutes: number
 }
 
 function fromActualWorkDto(dto: ActualWorkRecordDto): ActualWorkRecord {
@@ -419,6 +520,8 @@ function fromActualWorkDto(dto: ActualWorkRecordDto): ActualWorkRecord {
     source: dto.source,
     lateMinutes: dto.late_minutes,
     earlyLeaveMinutes: dto.early_leave_minutes,
+    plannedMinutes: dto.planned_minutes,
+    workedMinutes: dto.worked_minutes,
   }
 }
 

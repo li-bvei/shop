@@ -1,30 +1,18 @@
-from datetime import time
-
 from django.conf import settings
 from django.db import models
 
 
 class BranchScheduleSetting(models.Model):
-    """Per-branch shift-time template for the monthly schedule grid's
-    four cell states (off/morning/afternoon/full-day). Defaults match the
-    Organization's existing three branches (心斋桥/难波/梅田) as of this
-    phase, but are independently editable per branch — a future customer's
-    branch is never forced onto these specific hours, only seeded with
-    them as a reasonable starting point (BranchViewSet.perform_create).
-    Paid hours per cell are always derived from these times minus the
-    break, never stored separately, so there's exactly one source of
-    truth: morning=4.5h, afternoon=5h, full-day=9.5h (11.5h span minus a
-    120-minute break) with the current defaults."""
+    """Per-branch attendance rules: grace minutes, the business-day
+    cutover hour and whether employees may clock themselves in.
+
+    Shift TIMES no longer live here. Until migration 0011 this model held
+    a fixed morning / afternoon / full-day template and the schedule grid
+    could only ever place one of those three slots; they are now ordinary
+    rows of ShiftTemplate, of which a branch may have any number, each
+    with its own start, end and break (see ShiftTemplate)."""
 
     branch = models.OneToOneField('branches.Branch', on_delete=models.CASCADE, related_name='schedule_setting')
-    morning_start = models.TimeField(default=time(10, 30))
-    morning_end = models.TimeField(default=time(15, 0))
-    afternoon_start = models.TimeField(default=time(17, 0))
-    afternoon_end = models.TimeField(default=time(22, 0))
-    full_day_start = models.TimeField(default=time(10, 30))
-    full_day_end = models.TimeField(default=time(22, 0))
-    full_day_break_start = models.TimeField(default=time(15, 0))
-    full_day_break_end = models.TimeField(default=time(17, 0))
     active = models.BooleanField(default=True)
 
     # --- Attendance (clock-in/out) policy --------------------------------
@@ -54,6 +42,61 @@ class BranchScheduleSetting(models.Model):
 
     def __str__(self):
         return f'{self.branch_id} schedule setting'
+
+
+class ShiftTemplate(models.Model):
+    """A named, reusable shift time — the branch's palette for the
+    schedule grid ("早番 09:00-14:00", "ラスト 18:00-23:30", ...).
+
+    Modelled on Frappe HR's Shift Type (start_time, end_time, a roster
+    colour, assigned to employees per date), which is the time-based
+    shape every general-purpose scheduler studied shares — Horilla's
+    EmployeeShiftSchedule and MASTERPLAN's Service are the same idea. As
+    in Frappe, a template whose end is not after its start runs past
+    midnight (a 22:00-02:00 template ends on the next day); there is no
+    separate flag to keep in step with the times.
+
+    Unlike Frappe, which links an assignment to its Shift Type and reads
+    the times live, a Shift COPIES the template's times when it is placed
+    and keeps only a reference for its label and colour. Editing or
+    deleting a template therefore never rewrites a schedule that has
+    already been planned, worked or paid; it only changes what the next
+    click places. See docs/ai-handoff/09_SCHEDULING.md."""
+
+    class Color(models.TextChoices):
+        BLUE = 'blue', 'Blue'
+        GREEN = 'green', 'Green'
+        ORANGE = 'orange', 'Orange'
+        PURPLE = 'purple', 'Purple'
+        RED = 'red', 'Red'
+        TEAL = 'teal', 'Teal'
+        GRAY = 'gray', 'Gray'
+
+    branch = models.ForeignKey('branches.Branch', on_delete=models.CASCADE, related_name='shift_templates')
+    # Optional: an unnamed template is shown by its times, which is also
+    # how the templates migrated from the old three fixed slots appear.
+    name = models.CharField(max_length=40, blank=True)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    break_minutes = models.PositiveIntegerField(default=0)
+    color = models.CharField(max_length=10, choices=Color.choices, default=Color.BLUE)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    # Retired templates stay so the shifts that reference them keep their
+    # label, but are no longer offered in the grid.
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['branch_id', 'sort_order', 'start_time', 'id']
+
+    @property
+    def crosses_midnight(self):
+        return self.end_time <= self.start_time
+
+    def __str__(self):
+        label = self.name or f'{self.start_time:%H:%M}-{self.end_time:%H:%M}'
+        return f'{self.branch_id} {label}'
 
 
 class SchedulePeriod(models.Model):
@@ -138,6 +181,12 @@ class Shift(models.Model):
     planned_end = models.TimeField()
     crosses_midnight = models.BooleanField(default=False)
     planned_break_minutes = models.PositiveIntegerField(default=0)
+    # The template this shift was placed from, if any — for its label and
+    # colour only. The times above are the shift's own copy and are what
+    # attendance and wages are measured against.
+    template = models.ForeignKey(
+        ShiftTemplate, on_delete=models.SET_NULL, null=True, blank=True, related_name='shifts',
+    )
     position = models.CharField(max_length=100, blank=True)
     note = models.CharField(max_length=255, blank=True)
     # A manager can force-save past a soft warning (assigned on the
@@ -292,9 +341,9 @@ class AttendancePunch(models.Model):
     # at punch time, by scheduling.attendance.business_date_for() using the
     # branch's own cutover hour, and stored — so the day a punch counts
     # toward can't silently change later if that setting is retuned.
-    # (Frappe HR has no overnight concept on its Shift Type at all;
-    # Horilla keeps clock_in_date separate from attendance_date, which is
-    # the approach followed here.)
+    # (Frappe HR infers an overnight shift from end_time < start_time on
+    # its Shift Type; Horilla keeps clock_in_date separate from
+    # attendance_date, which is the approach followed here.)
     work_date = models.DateField()
     kind = models.CharField(max_length=12, choices=Kind.choices)
     # Always server time (timezone.now()), never a client-supplied clock —
